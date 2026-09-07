@@ -5,9 +5,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft,
   Camera,
-  Expand,
   Home,
-  RotateCcw,
   RefreshCw,
   Keyboard,
   Clipboard,
@@ -26,6 +24,15 @@ import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
 import { formatShellOutput, runDeviceAction } from "../lib/deviceActions";
+import {
+  canRefreshPreview,
+  emptyPreview,
+  failPreviewRequest,
+  finishPreviewRequest,
+  startPreviewRequest,
+  type PreviewState,
+} from "../lib/devicePreview";
+import { DevicePreview } from "../components/device/DevicePreview";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -1011,9 +1018,7 @@ function Control({
       return fallback;
     }
   });
-  const [preview, setPreview] = useState<string | null>(null);
-  const [shotPath, setShotPath] = useState("");
-  const [previewStamp, setPreviewStamp] = useState("");
+  const [previewState, setPreviewState] = useState<PreviewState>(() => emptyPreview());
   const [previewFlash, setPreviewFlash] = useState(false);
   const [livePreview, setLivePreview] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1026,9 +1031,10 @@ function Control({
   const previewRef = useRef(false);
   const livePreviewRef = useRef(true);
   const refreshTimer = useRef(0);
+  const previewRequesting = useRef(false);
   const chromeTimer = useRef(0);
   const { w: screenW, h: screenH } = parseResolution(resolution);
-  previewRef.current = Boolean(preview);
+  previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
 
   useEffect(() => {
@@ -1097,26 +1103,62 @@ function Control({
     }
   };
 
-  const refreshPreview = () => {
-    if (!previewRef.current || !livePreviewRef.current || disabled) return;
-    window.clearTimeout(refreshTimer.current);
-    refreshTimer.current = window.setTimeout(() => {
-      void DeviceService.screenshot(serial).then((r) => {
-        if (!r.success) return;
-        setPreview(r.base64 ? `data:image/png;base64,${r.base64}` : null);
-        if (r.path) setShotPath(r.path);
-        setPreviewStamp(new Date().toLocaleTimeString());
-        setPreviewFlash(true);
-        window.setTimeout(() => setPreviewFlash(false), 1600);
-      });
-    }, 800);
-  };
-
   const appendDiagnostic = (message: string) => {
     const detail = message.trim();
     if (!detail) return;
     setShellOut((prev) => `${prev}\n[control]\n${detail}`.trim());
   };
+
+  const requestPreview = async (announce: boolean) => {
+    if (!canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })) return;
+    if (previewRequesting.current) return;
+    previewRequesting.current = true;
+    setPreviewState((previous) => startPreviewRequest(previous));
+    if (announce) setStatusText(t("detail.control.shooting"));
+    try {
+      const r = await DeviceService.screenshot(serial);
+      if (r.success) {
+        setPreviewState((previous) => finishPreviewRequest(previous, r, Date.now()));
+        setPreviewFlash(true);
+        window.setTimeout(() => setPreviewFlash(false), 1600);
+        if (announce) setStatusText(t("detail.control.shotSaved", { path: r.path }));
+      } else {
+        const reason = (r.error || t("detail.control.shotFailed")).trim();
+        setPreviewState((previous) => failPreviewRequest(previous, reason));
+        setStatusText(reason);
+        appendDiagnostic(reason);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setPreviewState((previous) => failPreviewRequest(previous, reason));
+      setStatusText(reason || t("detail.control.shotFailed"));
+      appendDiagnostic(reason);
+    } finally {
+      previewRequesting.current = false;
+    }
+  };
+
+  const refreshPreview = () => {
+    if (
+      !previewRef.current ||
+      !livePreviewRef.current ||
+      !canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })
+    ) return;
+    window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = window.setTimeout(() => void requestPreview(false), 800);
+  };
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") {
+        window.clearTimeout(refreshTimer.current);
+        return;
+      }
+      if (previewRef.current && livePreviewRef.current) refreshPreview();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [disabled, livePreview]);
 
   const act = async (label: string, fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>) => {
     if (disabled) {
@@ -1144,7 +1186,7 @@ function Control({
     }
   };
 
-  const toDevicePoint = (e: React.MouseEvent) => {
+  const toDevicePoint = (e: { clientX: number; clientY: number }) => {
     const el = frameRef.current ?? screenRef.current;
     if (!el) return { x: 0, y: 0 };
     const rect = el.getBoundingClientRect();
@@ -1221,21 +1263,8 @@ function Control({
     }
   };
 
-  const takeShot = async () => {
-    setStatusText(t("detail.control.shooting"));
-    const r = await DeviceService.screenshot(serial);
-    if (r.success) {
-      setPreview(r.base64 ? `data:image/png;base64,${r.base64}` : null);
-      setShotPath(r.path);
-      setPreviewStamp(new Date().toLocaleTimeString());
-      setPreviewFlash(true);
-      window.setTimeout(() => setPreviewFlash(false), 1600);
-      setStatusText(t("detail.control.shotSaved", { path: r.path }));
-    } else {
-      const reason = (r.error || t("detail.control.shotFailed")).trim();
-      setStatusText(reason);
-      void alert(reason);
-    }
+  const takeShot = () => {
+    void requestPreview(true);
   };
 
   const startScrcpy = async () => {
@@ -1291,200 +1320,71 @@ function Control({
 
   return (
     <div className="split-control">
-      <div className="screen-area" ref={screenRef}
+      <DevicePreview
+        serial={serial}
+        disabled={disabled}
+        scrcpyStatus={scrcpyLabel}
+        preview={previewState}
+        previewFlash={previewFlash}
+        livePreview={livePreview}
+        fullscreen={fullscreen}
+        hideChrome={hideChrome}
+        screenRef={screenRef}
+        frameRef={frameRef}
         onMouseMove={bumpChrome}
-        onClick={disabled ? undefined : onScreenClick}
-        onDoubleClick={
-          disabled
-            ? undefined
-            : (e) => {
-                const { x, y } = toDevicePoint(e);
-                void act(t("detail.control.doubleClick"), async () => {
-                  await DeviceService.tap(serial, x, y);
-                  return DeviceService.tap(serial, x, y);
-                });
-              }
-        }
-        onContextMenu={disabled ? undefined : onContextMenu}
-        onAuxClick={disabled ? undefined : onAuxClick}
-        onMouseDown={disabled ? undefined : onMouseDown}
-        onMouseUp={disabled ? undefined : onMouseUp}
-        onWheel={
-          disabled
-            ? undefined
-            : (e) => {
-                const { x, y } = toDevicePoint(e as unknown as React.MouseEvent);
-                const dy = e.deltaY > 0 ? 300 : -300;
-                void DeviceService.swipe(serial, x, y, x, y + dy, 200).then(() => refreshPreview());
-              }
-        }
-      >
-        <div
-          className="screen-toolbar"
-          style={{ opacity: hideChrome ? 0 : 1, pointerEvents: hideChrome ? "none" : "auto", transition: "opacity .2s" }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onMouseUp={(e) => e.stopPropagation()}
-        >
-          <div className="row">
-            {scrcpyLabel === "running" ? (
-              <Button size="sm" variant="primary" onClick={() => void stopScrcpy()}>
-                {t("detail.control.mirroringActive")}
-              </Button>
-            ) : (
-              <Button size="sm" variant="secondary" disabled={disabled} onClick={() => void startScrcpy()}>
-                {t("detail.control.startMirroring")}
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={scrcpyLabel !== "running"}
-              onClick={() => void stopScrcpy()}
-            >
-              {t("detail.control.disconnect")}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={disabled || scrcpyLabel !== "running"}
-              onClick={() => void restartScrcpy()}
-            >
-              {t("detail.control.reconnect")}
-            </Button>
-            <Button size="sm" icon={<Camera size={14} />} disabled={disabled} onClick={() => void takeShot()}>
-              {t("detail.control.screenshot")}
-            </Button>
-            {shotPath && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  void DeviceService.revealInFolder(shotPath).catch((e) => void alert(String(e)))
-                }
-              >
-                {t("detail.control.openFolder")}
-              </Button>
-            )}
-          </div>
-          <div className="row">
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Expand size={14} />}
-              onClick={() => {
-                const el = screenRef.current;
-                if (!el) return;
-                if (document.fullscreenElement === el) {
-                  void document.exitFullscreen();
-                } else {
-                  void el.requestFullscreen().catch((e) => void alert(String(e)));
-                }
-              }}
-            >
-              {fullscreen ? t("detail.control.exitFullscreen") : t("detail.control.fullscreen")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<RotateCcw size={14} />}
-              disabled={disabled}
-              onClick={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true))}
-            >
-              {t("detail.control.rotate")}
-            </Button>
-          </div>
-        </div>
-
-        {preview ? (
-          <>
-            <img
-              ref={frameRef as React.Ref<HTMLImageElement>}
-              src={preview}
-              alt="screenshot"
-              style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-            />
-            <div
-              className="row"
-              onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{
-                position: "absolute",
-                top: 52,
-                right: 12,
-                zIndex: 2,
-                gap: 6,
-                opacity: hideChrome ? 0 : 1,
-                pointerEvents: hideChrome ? "none" : "auto",
-                transition: "opacity .2s",
-              }}
-            >
-              {previewStamp && (
-                <span className="badge info" style={{ opacity: previewFlash ? 1 : 0.7 }}>
-                  {previewFlash ? t("detail.control.updated", { time: previewStamp }) : previewStamp}
-                </span>
-              )}
-              <button
-                type="button"
-                className="badge"
-                onClick={() => {
-                  setLivePreview((v) => {
-                    const next = !v;
-                    if (!next) window.clearTimeout(refreshTimer.current);
-                    return next;
-                  });
-                }}
-              >
-                {livePreview ? t("detail.control.stopRefresh") : t("detail.control.resumeRefresh")}
-              </button>
-              <button
-                type="button"
-                className="badge"
-                onClick={() => {
-                  window.clearTimeout(refreshTimer.current);
-                  setPreview(null);
-                  setPreviewStamp("");
-                  setPreviewFlash(false);
-                }}
-              >
-                {t("detail.control.closePreview")}
-              </button>
-            </div>
-          </>
-        ) : (
-          <div ref={frameRef as React.Ref<HTMLDivElement>} className="screen-placeholder">
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{t("detail.control.liveView")}</div>
-            <div style={{ fontSize: 13, opacity: 0.8, maxWidth: 360, lineHeight: 1.6 }}>
-              {t("detail.control.liveViewHint")}
-            </div>
-            <div style={{ marginTop: 12 }} className="badge info">
-              scrcpy: {scrcpyLabel}
-            </div>
-            {shotPath && (
-              <div style={{ marginTop: 12 }}>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    void DeviceService.revealInFolder(shotPath).catch((e) => void alert(String(e)))
-                  }
-                >
-                  {t("detail.control.openLastShotFolder")}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="screen-stats" hidden={fullscreen} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onMouseUp={(e) => e.stopPropagation()}>
-          <span className="badge">{t("detail.control.hint.click")}</span>
-          <span className="badge">{t("detail.control.hint.drag")}</span>
-          <span className="badge">{t("detail.control.hint.wheel")}</span>
-          <span className="badge">{t("detail.control.hint.dblclick")}</span>
-          <span className="badge">{t("detail.control.hint.right")}</span>
-          <span className="badge">{t("detail.control.hint.middle")}</span>
-        </div>
-      </div>
+        onClick={onScreenClick}
+        onDoubleClick={(e) => {
+          const { x, y } = toDevicePoint(e);
+          void act(t("detail.control.doubleClick"), async () => {
+            await DeviceService.tap(serial, x, y);
+            return DeviceService.tap(serial, x, y);
+          });
+        }}
+        onContextMenu={onContextMenu}
+        onAuxClick={onAuxClick}
+        onMouseDown={onMouseDown}
+        onMouseUp={onMouseUp}
+        onWheel={(e) => {
+          const { x, y } = toDevicePoint(e);
+          const dy = e.deltaY > 0 ? 300 : -300;
+          void act(t("detail.control.swipe"), () => DeviceService.swipe(serial, x, y, x, y + dy, 200));
+        }}
+        onStartScrcpy={() => void startScrcpy()}
+        onStopScrcpy={() => void stopScrcpy()}
+        onRestartScrcpy={() => void restartScrcpy()}
+        onTakeShot={takeShot}
+        onRefreshPreview={() => void requestPreview(true)}
+        onToggleLivePreview={() => {
+          setLivePreview((value) => {
+            const next = !value;
+            if (next) refreshPreview();
+            else window.clearTimeout(refreshTimer.current);
+            return next;
+          });
+        }}
+        onClosePreview={() => {
+          window.clearTimeout(refreshTimer.current);
+          setPreviewState(emptyPreview());
+          setPreviewFlash(false);
+        }}
+        onOpenFolder={() => {
+          if (previewState.path) {
+            void DeviceService.revealInFolder(previewState.path).catch((e) =>
+              setStatusText(e instanceof Error ? e.message : String(e)),
+            );
+          }
+        }}
+        onFullscreen={() => {
+          const el = screenRef.current;
+          if (!el) return;
+          if (document.fullscreenElement === el) {
+            void document.exitFullscreen();
+          } else {
+            void el.requestFullscreen().catch((e) => setStatusText(String(e)));
+          }
+        }}
+        onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true))}
+      />
 
       <div className="control-panel">
         <Card title={t("detail.control.panelTitle")} padding>
