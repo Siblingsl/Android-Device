@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { normalizeActionError, shellResultFailure } from "./deviceActions";
+import {
+  normalizeActionError,
+  formatShellOutput,
+  runDeviceAction,
+  shellResultFailure,
+} from "./deviceActions";
 
 describe("shellResultFailure", () => {
   it("returns stderr when a resolved shell result reports failure", () => {
@@ -19,5 +24,35 @@ describe("shellResultFailure", () => {
 
   it("normalizes non-Error exceptions", () => {
     expect(normalizeActionError("ADB unavailable", "操作失败").message).toBe("ADB unavailable");
+  });
+
+  it("runs onFinally after a resolved failed ShellResult", async () => {
+    const events: string[] = [];
+
+    await expect(
+      runDeviceAction(
+        async () => ({ success: false, stdout: "device offline", stderr: "", exitCode: 1 }),
+        {
+          fallback: "设备操作失败",
+          onStart: () => {
+            events.push("start");
+          },
+          onError: (error) => {
+            events.push(`error:${error.message}`);
+          },
+          onFinally: () => {
+            events.push("finally");
+          },
+        },
+      ),
+    ).rejects.toThrow("device offline");
+
+    expect(events).toEqual(["start", "error:device offline", "finally"]);
+  });
+
+  it("preserves stderr and exit code in command diagnostics", () => {
+    expect(formatShellOutput("stdout text", "stderr text", 7)).toBe(
+      "stdout text\nstderr text\n[exit 7]",
+    );
   });
 });

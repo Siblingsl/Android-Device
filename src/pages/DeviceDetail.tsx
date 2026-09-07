@@ -25,6 +25,7 @@ import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
+import { formatShellOutput, runDeviceAction } from "../lib/deviceActions";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -980,6 +981,7 @@ function Control({
   const [clipboard, setClipboard] = useState("");
   const [shellCmd, setShellCmd] = useState("");
   const [shellOut, setShellOut] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
   const [copiedOut, setCopiedOut] = useState(false);
   const [history, setHistory] = useState<string[]>(() => {
     try {
@@ -1110,17 +1112,35 @@ function Control({
     }, 800);
   };
 
-  const act = async (label: string, fn: () => Promise<unknown>) => {
+  const appendDiagnostic = (message: string) => {
+    const detail = message.trim();
+    if (!detail) return;
+    setShellOut((prev) => `${prev}\n[control]\n${detail}`.trim());
+  };
+
+  const act = async (label: string, fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>) => {
     if (disabled) {
       setStatusText(t("detail.status.deviceOffline"));
       return;
     }
+    if (actionBusy) return;
+    setActionBusy(true);
     setStatusText(label);
     try {
-      await fn();
-      refreshPreview();
-    } finally {
+      await runDeviceAction(fn, {
+        fallback: t("detail.control.actionFailed"),
+        onSuccess: () => refreshPreview(),
+        onError: (error) => {
+          setStatusText(error.message);
+          appendDiagnostic(error.message);
+        },
+      });
       setStatusText(t("detail.status.ready"));
+    } catch {
+      // Error feedback is handled by onError; keep the rejected Promise local
+      // so mouse/keyboard handlers do not create an unhandled rejection.
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -1178,12 +1198,27 @@ function Control({
 
   const runShell = async (cmd?: string) => {
     const c = (cmd ?? shellCmd).trim();
-    if (!c) return;
+    if (!c || actionBusy) return;
+    setActionBusy(true);
     setStatusText(t("detail.control.runningShell"));
-    const r = await DeviceService.shell(serial, c);
-    setShellOut((r.stdout || r.stderr || "(empty)") + `\n[exit ${r.exitCode}]`);
-    setHistory((h) => [c, ...h.filter((x) => x !== c)].slice(0, 30));
-    setStatusText(t("detail.status.ready"));
+    try {
+      const r = await DeviceService.shell(serial, c);
+      const output = formatShellOutput(r.stdout, r.stderr, r.exitCode) || "(empty)";
+      setShellOut(output);
+      const failure = r.success ? null : (r.stderr || r.stdout || t("detail.control.shellFailed"));
+      if (failure) {
+        setStatusText(failure.trim() || t("detail.control.shellFailed"));
+        return;
+      }
+      setHistory((h) => [c, ...h.filter((x) => x !== c)].slice(0, 30));
+      setStatusText(t("detail.status.ready"));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setShellOut(formatShellOutput("", message));
+      setStatusText(message || t("detail.control.shellFailed"));
+    } finally {
+      setActionBusy(false);
+    }
   };
 
   const takeShot = async () => {
@@ -1266,7 +1301,7 @@ function Control({
                 const { x, y } = toDevicePoint(e);
                 void act(t("detail.control.doubleClick"), async () => {
                   await DeviceService.tap(serial, x, y);
-                  await DeviceService.tap(serial, x, y);
+                  return DeviceService.tap(serial, x, y);
                 });
               }
         }
