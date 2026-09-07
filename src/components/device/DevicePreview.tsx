@@ -1,4 +1,4 @@
-import type { MouseEvent, RefObject, WheelEvent } from "react";
+import type { KeyboardEvent, MouseEvent, RefObject, WheelEvent } from "react";
 import { Camera, Expand, RotateCcw } from "lucide-react";
 import { Button } from "../ui/Button";
 import type { PreviewState } from "../../lib/devicePreview";
@@ -16,6 +16,7 @@ interface DevicePreviewProps {
   screenRef: RefObject<HTMLDivElement | null>;
   frameRef: RefObject<HTMLElement | null>;
   onMouseMove: (event: MouseEvent<HTMLDivElement>) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onClick: (event: MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: MouseEvent<HTMLDivElement>) => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
@@ -46,6 +47,7 @@ export function DevicePreview({
   screenRef,
   frameRef,
   onMouseMove,
+  onKeyDown,
   onClick,
   onDoubleClick,
   onContextMenu,
@@ -76,6 +78,7 @@ export function DevicePreview({
       className="screen-area"
       ref={screenRef}
       tabIndex={disabled ? -1 : 0}
+      onKeyDown={disabled ? undefined : onKeyDown}
       onMouseMove={onMouseMove}
       onClick={disabled ? undefined : onClick}
       onDoubleClick={disabled ? undefined : onDoubleClick}
@@ -214,6 +217,7 @@ export function DevicePreview({
         <span className="badge">{t("detail.control.hint.dblclick")}</span>
         <span className="badge">{t("detail.control.hint.right")}</span>
         <span className="badge">{t("detail.control.hint.middle")}</span>
+        <span className="badge">{t("detail.control.hint.keyboard")}</span>
       </div>
     </div>
   );

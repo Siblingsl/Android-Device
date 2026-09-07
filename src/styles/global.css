@@ -450,6 +450,35 @@ a {
   gap: 8px;
 }
 
+.control-section-label {
+  margin: 14px 0 7px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.control-section-label:first-of-type {
+  margin-top: 0;
+}
+
+.screen-area:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.preview-error {
+  position: absolute;
+  right: 12px;
+  bottom: 48px;
+  z-index: 2;
+  max-width: min(70%, 460px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .shell-output {
   background: #0b1220;
   color: #d1e0ff;

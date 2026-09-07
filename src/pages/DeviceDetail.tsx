@@ -4,11 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft,
-  Camera,
-  Home,
   RefreshCw,
-  Keyboard,
-  Clipboard,
   FolderPlus,
   Trash2,
   Upload,
@@ -32,7 +28,9 @@ import {
   startPreviewRequest,
   type PreviewState,
 } from "../lib/devicePreview";
+import { shortcutForScreenKey } from "../lib/deviceInput";
 import { DevicePreview } from "../components/device/DevicePreview";
+import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -984,8 +982,6 @@ function Control({
   disabled?: boolean;
 }) {
   const { t } = useI18n();
-  const [text, setText] = useState("");
-  const [clipboard, setClipboard] = useState("");
   const [shellCmd, setShellCmd] = useState("");
   const [shellOut, setShellOut] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
@@ -1267,6 +1263,58 @@ function Control({
     void requestPreview(true);
   };
 
+  const runControlAction = (action: DeviceControlAction, value?: string | boolean) => {
+    if (action === "text") {
+      void act(t("detail.control.inputText"), () => DeviceService.text(serial, String(value ?? "")));
+      return;
+    }
+    if (action === "clipboard") {
+      void act(t("detail.control.clipboard"), () =>
+        DeviceService.sendClipboard(serial, String(value ?? "")),
+      );
+      return;
+    }
+    const labels: Record<Exclude<DeviceControlAction, "text" | "clipboard">, string> = {
+      home: "HOME",
+      back: "BACK",
+      recent: "RECENT",
+      power: "POWER",
+      volup: t("detail.control.volUp"),
+      voldown: t("detail.control.volDown"),
+      lock: t("detail.control.lock"),
+      wake: t("detail.control.wake"),
+      rotate: t("detail.control.rotate"),
+      notify: t("detail.control.notify"),
+      settings: t("detail.control.settings"),
+    };
+    const operations: Record<Exclude<DeviceControlAction, "text" | "clipboard">, () => Promise<{
+      success: boolean;
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    }>> = {
+      home: () => DeviceService.home(serial),
+      back: () => DeviceService.back(serial),
+      recent: () => DeviceService.recent(serial),
+      power: () => DeviceService.power(serial),
+      volup: () => DeviceService.volumeUp(serial),
+      voldown: () => DeviceService.volumeDown(serial),
+      lock: () => DeviceService.lock(serial),
+      wake: () => DeviceService.wake(serial),
+      rotate: () => DeviceService.rotate(serial, Boolean(value)),
+      notify: () => DeviceService.openNotifications(serial),
+      settings: () => DeviceService.openSettings(serial),
+    };
+    void act(labels[action], operations[action]);
+  };
+
+  const onScreenKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const shortcut = shortcutForScreenKey(event.nativeEvent);
+    if (!shortcut) return;
+    event.preventDefault();
+    runControlAction(shortcut);
+  };
+
   const startScrcpy = async () => {
     setStatusText(t("detail.control.startingScrcpy"));
     // Ensure network devices are connected first
@@ -1332,6 +1380,7 @@ function Control({
         screenRef={screenRef}
         frameRef={frameRef}
         onMouseMove={bumpChrome}
+        onKeyDown={onScreenKeyDown}
         onClick={onScreenClick}
         onDoubleClick={(e) => {
           const { x, y } = toDevicePoint(e);
@@ -1387,67 +1436,16 @@ function Control({
       />
 
       <div className="control-panel">
-        <Card title={t("detail.control.panelTitle")} padding>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-            {t("detail.control.panelHint")}
-          </div>
-          <div className="control-group">
-            <Button disabled={disabled} onClick={() => act("HOME", () => DeviceService.home(serial))} icon={<Home size={14} />}>HOME</Button>
-            <Button disabled={disabled} onClick={() => act("BACK", () => DeviceService.back(serial))}>BACK</Button>
-            <Button disabled={disabled} onClick={() => void takeShot()} icon={<Camera size={14} />}>{t("detail.control.screenshot")}</Button>
-            <select
-              disabled={disabled}
-              defaultValue=""
-              style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
-              onChange={(e) => {
-                const v = e.target.value;
-                e.target.value = "";
-                if (v === "recent") void act("RECENT", () => DeviceService.recent(serial));
-                if (v === "power") void act("POWER", () => DeviceService.power(serial));
-                if (v === "volup") void act(t("detail.control.volUp"), () => DeviceService.volumeUp(serial));
-                if (v === "voldown") void act(t("detail.control.volDown"), () => DeviceService.volumeDown(serial));
-                if (v === "lock") void act(t("detail.control.lock"), () => DeviceService.lock(serial));
-                if (v === "wake") void act(t("detail.control.wake"), () => DeviceService.wake(serial));
-                if (v === "rotate") void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true));
-                if (v === "notify") void act(t("detail.control.notify"), () => DeviceService.openNotifications(serial));
-                if (v === "settings") void act(t("detail.control.settings"), () => DeviceService.openSettings(serial));
-              }}
-            >
-              <option value="" disabled>
-                {t("detail.control.moreKeys")}
-              </option>
-              <option value="recent">RECENT</option>
-              <option value="power">POWER</option>
-              <option value="volup">{t("detail.control.volUp")}</option>
-              <option value="voldown">{t("detail.control.volDown")}</option>
-              <option value="lock">{t("detail.control.lock")}</option>
-              <option value="wake">{t("detail.control.wake")}</option>
-              <option value="rotate">{t("detail.control.rotate")}</option>
-              <option value="notify">{t("detail.control.notify")}</option>
-              <option value="settings">{t("detail.control.settings")}</option>
-            </select>
-          </div>
-
-          <div className="field" style={{ marginTop: 12 }}>
-            <label>{t("detail.control.inputText")}</label>
-            <div className="row">
-              <input style={{ flex: 1 }} value={text} onChange={(e) => setText(e.target.value)} placeholder={t("detail.control.inputPlaceholder")} />
-              <Button disabled={disabled} icon={<Keyboard size={14} />} onClick={() => act(t("detail.control.inputText"), () => DeviceService.text(serial, text))}>
-                {t("detail.control.send")}
-              </Button>
-            </div>
-          </div>
-
-          <div className="field" style={{ marginTop: 10 }}>
-            <label>{t("detail.control.sendClipboard")}</label>
-            <div className="row">
-              <input style={{ flex: 1 }} value={clipboard} onChange={(e) => setClipboard(e.target.value)} />
-              <Button disabled={disabled} icon={<Clipboard size={14} />} onClick={() => act(t("detail.control.clipboard"), () => DeviceService.sendClipboard(serial, clipboard))}>
-                {t("detail.control.send")}
-              </Button>
-            </div>
-          </div>
-        </Card>
+        <DeviceControlPanel
+          disabled={disabled}
+          busy={actionBusy}
+          onAction={runControlAction}
+          onScreenshot={takeShot}
+          onValidationError={(message) => {
+            setStatusText(message);
+            appendDiagnostic(message);
+          }}
+        />
 
         <Card title="ADB Shell">
           <div className="field">
