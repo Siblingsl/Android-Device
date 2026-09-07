@@ -1,0 +1,88 @@
+{
+  "description": "Prebuilt WSL binder kernel Release assets (Windows only). Linux uses host binder — no bzImage.",
+  "github": {
+    "owner": "YOUR_GITHUB_ORG",
+    "repo": "Android-Device",
+    "tag": "wsl-kernel-latest"
+  },
+  "installDirWindows": "C:\\\\wsl-kernel",
+  "assets": {
+    "windows-x64": {
+      "os": "windows",
+      "arch": "x64",
+      "supported": true,
+      "needsWslKernel": true,
+      "bzImage": "wsl-kernel-binder-windows-x64-bzImage",
+      "config": "wsl-kernel-binder-windows-x64-config",
+      "localBzImage": "C:\\\\wsl-kernel\\\\bzImage",
+      "localConfig": "C:\\\\wsl-kernel\\\\config-wsl-binder",
+      "notes": "Most PCs. Share one ~17MB bzImage via GitHub Release."
+    },
+    "windows-arm64": {
+      "os": "windows",
+      "arch": "arm64",
+      "supported": true,
+      "needsWslKernel": true,
+      "bzImage": "wsl-kernel-binder-windows-arm64-bzImage",
+      "config": "wsl-kernel-binder-windows-arm64-config",
+      "localBzImage": "C:\\\\wsl-kernel\\\\bzImage",
+      "localConfig": "C:\\\\wsl-kernel\\\\config-wsl-binder",
+      "notes": "Snapdragon / ARM Windows. Must build on ARM WSL or cross-build; x64 bzImage will NOT work."
+    },
+    "linux-x64": {
+      "os": "linux",
+      "arch": "x64",
+      "supported": true,
+      "needsWslKernel": false,
+      "bzImage": null,
+      "config": null,
+      "notes": "Native Docker. Load binder_linux / binderfs on host kernel. Do not install WSL bzImage."
+    },
+    "linux-arm64": {
+      "os": "linux",
+      "arch": "arm64",
+      "supported": true,
+      "needsWslKernel": false,
+      "bzImage": null,
+      "config": null,
+      "notes": "Native Docker on aarch64. Host binder required. Redroid image must support arm64."
+    },
+    "linux-armv7": {
+      "os": "linux",
+      "arch": "armv7",
+      "supported": false,
+      "needsWslKernel": false,
+      "notes": "Not targeted. Redroid images rarely available."
+    },
+    "linux-riscv64": {
+      "os": "linux",
+      "arch": "riscv64",
+      "supported": false,
+      "needsWslKernel": false,
+      "notes": "Not targeted."
+    },
+    "darwin-x64": {
+      "os": "darwin",
+      "arch": "x64",
+      "supported": false,
+      "needsWslKernel": false,
+      "notes": "macOS not supported for this product line."
+    },
+    "darwin-arm64": {
+      "os": "darwin",
+      "arch": "arm64",
+      "supported": false,
+      "needsWslKernel": false,
+      "notes": "macOS not supported for this product line."
+    }
+  },
+  "releaseChecklist": [
+    "Build on Windows x64 WSL: scripts/build-wsl-binder-kernel.sh",
+    "Rename C:\\\\wsl-kernel\\\\bzImage -> wsl-kernel-binder-windows-x64-bzImage",
+    "Rename config-wsl-binder -> wsl-kernel-binder-windows-x64-config",
+    "Optional: repeat on Windows ARM64 for arm64 assets",
+    "Create GitHub Release tag wsl-kernel-latest (or versioned)",
+    "Upload only bzImage + config (~17MB). Never upload modules.tar.gz",
+    "Set platform-assets.json github.owner/repo to your repo"
+  ]
+}

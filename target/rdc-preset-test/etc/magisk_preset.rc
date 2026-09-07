@@ -1,0 +1,37 @@
+# Magisk (redroid preset) — added by Redroid Device Center
+# Mirrors the community-proven ayasa520/redroid-script bootanim.rc trigger
+# block verbatim (verified against stuff/magisk.py): binaries in
+# /system/etc/init/magisk, daemon tmp at /sbin, su seclabel everywhere.
+# NOTE: --setup-sbin takes two args (source dir + tmp dir); getting this
+# wrong makes the magisk client retry forever and blocks init.
+
+on post-fs-data
+    start logd
+    exec u:r:su:s0 root root -- /system/etc/init/magisk/magiskpolicy --live --magisk
+    exec u:r:magisk:s0 root root -- /system/etc/init/magisk/magiskpolicy --live --magisk
+    exec u:r:update_engine:s0 root root -- /system/etc/init/magisk/magiskpolicy --live --magisk
+    exec u:r:su:s0 root root -- /system/etc/init/magisk/magisk --auto-selinux --setup-sbin /system/etc/init/magisk /sbin
+    exec u:r:su:s0 root root -- /sbin/magisk --auto-selinux --post-fs-data
+
+on nonencrypted
+    exec u:r:su:s0 root root -- /sbin/magisk --auto-selinux --service
+
+on property:vold.decrypt=trigger_restart_framework
+    exec u:r:su:s0 root root -- /sbin/magisk --auto-selinux --service
+
+on property:sys.boot_completed=1
+    mkdir /data/adb/magisk 0755 root root
+    exec u:r:su:s0 root root -- /sbin/magisk --auto-selinux --boot-complete
+    start rdc_preset
+
+on property:init.svc.zygote=restarting
+    exec u:r:su:s0 root root -- /sbin/magisk --auto-selinux --zygote-restart
+
+on property:init.svc.zygote=stopped
+    exec u:r:su:s0 root root -- /sbin/magisk --auto-selinux --zygote-restart
+
+service rdc_preset /system/bin/sh /system/etc/init/magisk/magisk_preset.sh
+    user root
+    oneshot
+    disabled
+    seclabel u:r:su:s0

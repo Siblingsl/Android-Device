@@ -1,0 +1,139 @@
+mod commands;
+mod models;
+mod services;
+
+use commands::*;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    services::log::info("System", "Redroid Device Center starting");
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            // System
+            get_dashboard,
+            get_system_status,
+            // Devices
+            list_devices,
+            get_device,
+            connect_device,
+            disconnect_device,
+            restart_device,
+            stop_device,
+            // Control
+            device_tap,
+            device_swipe,
+            device_long_press,
+            device_text,
+            device_keyevent,
+            device_home,
+            device_back,
+            device_recent,
+            device_power,
+            device_volume_up,
+            device_volume_down,
+            device_lock,
+            device_wake,
+            device_rotate,
+            device_open_notifications,
+            device_open_settings,
+            device_send_clipboard,
+            device_shell,
+            // APK / Apps
+            install_apk,
+            uninstall_app,
+            start_app,
+            stop_app,
+            clear_app_data,
+            list_apps,
+            get_app_detail,
+            get_app_permissions,
+            get_app_activities,
+            // Files
+            list_files,
+            upload_file,
+            download_file,
+            delete_file,
+            mkdir_remote,
+            storage_info,
+            // Screenshot
+            take_screenshot,
+            // Logcat
+            get_logcat,
+            // Device settings
+            set_device_resolution,
+            set_device_dpi,
+            set_device_language,
+            // Docker
+            get_docker_info,
+            refresh_docker_info,
+            create_redroid_instance,
+            get_create_stage,
+            next_free_adb_port,
+            check_instance_name,
+            check_adb_port,
+            start_docker_desktop,
+            get_local_gapps_path,
+            path_exists,
+            // Root / Magisk preset
+            get_magisk_assets,
+            get_root_status,
+            magisk_denylist_add,
+            magisk_denylist_remove,
+            magisk_apply_spoof,
+            magisk_set_shamiko_mode,
+            magisk_module_set_enabled,
+            magisk_module_remove,
+            magisk_repair_managers,
+            get_lsposed_scope,
+            get_su_policies,
+            magisk_set_su_policy,
+            magisk_remove_su_policy,
+            start_container,
+            stop_container,
+            restart_container,
+            remove_container,
+            rename_container,
+            clone_container,
+            inspect_container,
+            get_container_logs,
+            export_container_config,
+            list_volumes,
+            remove_volume,
+            remove_image,
+            prune_dangling_images,
+            // ADB
+            get_adb_info,
+            adb_start_server,
+            adb_kill_server,
+            adb_restart_server,
+            adb_connect,
+            adb_disconnect,
+            adb_reconnect,
+            adb_auto_fix,
+            adb_local_subnet,
+            adb_lan_scan,
+            // Scrcpy
+            scrcpy_start,
+            scrcpy_stop,
+            scrcpy_restart,
+            scrcpy_status,
+            // Logs
+            get_system_logs,
+            clear_system_logs,
+            export_system_logs,
+            append_log,
+            // Settings
+            get_settings,
+            update_settings,
+            reveal_in_folder,
+            probe_tool,
+            // WSL binder kernel (switch / restore / verify)
+            get_wsl_kernel_status,
+            switch_wsl_kernel,
+            verify_wsl_binder,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
