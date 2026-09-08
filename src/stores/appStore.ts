@@ -227,6 +227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             createWaitAdb: true,
             resourceAlertThreshold: 80,
             deviceRefreshIntervalSecs: 10,
+            deviceMonitorRules: {},
           },
         });
       }

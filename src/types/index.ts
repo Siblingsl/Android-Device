@@ -210,6 +210,14 @@ export interface ScreenshotResult {
   error?: string;
 }
 
+export type DeviceMonitorPreset = "inherit" | "sensitive" | "balanced" | "relaxed" | "custom";
+
+export interface DeviceMonitorRule {
+  preset: Exclude<DeviceMonitorPreset, "inherit">;
+  alertThreshold?: number;
+  refreshIntervalSecs?: number;
+}
+
 export interface AppSettings {
   theme: string;
   language: string;
@@ -234,6 +242,7 @@ export interface AppSettings {
   createWaitAdb?: boolean;
   resourceAlertThreshold: number;
   deviceRefreshIntervalSecs: number;
+  deviceMonitorRules: Record<string, DeviceMonitorRule>;
 }
 
 export interface DashboardData {

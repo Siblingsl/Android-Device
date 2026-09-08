@@ -617,6 +617,99 @@ a {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.12);
 }
+.device-monitor-policy {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--info);
+  border-radius: 10px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.device-monitor-policy.inherit { border-left-color: var(--text-muted); }
+.device-monitor-policy.sensitive { border-left-color: var(--warning); }
+.device-monitor-policy.balanced { border-left-color: var(--info); }
+.device-monitor-policy.relaxed { border-left-color: var(--success); }
+.device-monitor-policy.custom { border-left-color: #8b5cf6; }
+.device-monitor-policy-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+}
+.device-monitor-policy-toggle:hover { background: var(--bg-active); }
+.device-monitor-policy-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.device-monitor-policy-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+.device-monitor-policy-current {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-monitor-policy-action {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.device-monitor-policy-editor {
+  padding: 10px 11px 11px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.device-monitor-policy-editor .field > span,
+.device-monitor-policy-custom .field > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.device-monitor-policy-editor select,
+.device-monitor-policy-custom input {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  outline: none;
+  color: var(--text);
+  background: var(--bg);
+}
+.device-monitor-policy-editor select {
+  width: min(100%, 260px);
+  padding: 7px 10px;
+}
+.device-monitor-policy-custom {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 10px;
+}
+.device-monitor-policy-custom input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+}
+.device-monitor-policy-editor select:focus-visible,
+.device-monitor-policy-custom input:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+.device-monitor-policy-hint {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
 .device-monitor-notifications {
   margin-bottom: 12px;
   padding: 10px 11px;
@@ -784,6 +877,10 @@ a {
 
 @media (max-width: 680px) {
   .device-monitor-runtime { grid-template-columns: 1fr; }
+  .device-monitor-policy-toggle { grid-template-columns: auto 1fr; }
+  .device-monitor-policy-current { grid-column: 1 / -1; grid-row: 2; }
+  .device-monitor-policy-custom { grid-template-columns: 1fr; }
+  .device-monitor-policy-custom .btn { width: 100%; }
 }
 
 .btn {

@@ -36,7 +36,11 @@ import {
   type ControlFeedbackStatus,
 } from "../lib/controlFeedback";
 import { appendResourceSample, type ResourceSample } from "../lib/resourceMetrics";
-import { normalizeMonitorPreferences, resourceAlertFor } from "../lib/monitorPreferences";
+import {
+  applyDeviceMonitorRule,
+  resolveDeviceMonitorPreferences,
+  resourceAlertFor,
+} from "../lib/monitorPreferences";
 import {
   evaluateResourceAlert,
   MAX_MONITOR_ALERTS,
@@ -50,6 +54,7 @@ import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
   AppInfo,
+  DeviceMonitorPreset,
   DeviceInfo,
   FileEntry,
   LsposedScopeReport,
@@ -66,6 +71,7 @@ export function DeviceDetail() {
   const deviceId = decodeURIComponent(id);
   const navigate = useNavigate();
   const setStatusText = useAppStore((s) => s.setStatusText);
+  const saveSettings = useAppStore((s) => s.saveSettings);
   const appSettings = useAppStore((s) => s.settings);
   const monitorAlerts = useAppStore((s) => s.monitorAlerts);
   const addMonitorAlert = useAppStore((s) => s.addMonitorAlert);
@@ -88,17 +94,54 @@ export function DeviceDetail() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [metricHistory, setMetricHistory] = useState<ResourceSample[]>([]);
+  const [monitorRuleSaving, setMonitorRuleSaving] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
   const resourceAlertTracker = useRef<ResourceAlertTracker>({ active: null, lastEmittedAt: null });
-  const monitorPreferences = normalizeMonitorPreferences(
+  const monitorPreferences = resolveDeviceMonitorPreferences(
     appSettings?.resourceAlertThreshold,
     appSettings?.deviceRefreshIntervalSecs,
+    appSettings?.deviceMonitorRules?.[deviceId],
   );
   const deviceMonitorAlerts = monitorAlerts
     .filter((alert) => alert.deviceId === deviceId)
     .slice(0, MAX_MONITOR_ALERTS);
+
+  const saveMonitorRule = async (
+    preset: DeviceMonitorPreset,
+    alertThreshold: number,
+    refreshIntervalSecs: number,
+  ): Promise<boolean> => {
+    if (!appSettings || monitorRuleSaving) return false;
+    const rule = preset === "inherit"
+      ? undefined
+      : { preset, alertThreshold, refreshIntervalSecs };
+    const resolved = resolveDeviceMonitorPreferences(
+      appSettings.resourceAlertThreshold,
+      appSettings.deviceRefreshIntervalSecs,
+      rule,
+    );
+    setMonitorRuleSaving(true);
+    try {
+      await saveSettings({
+        ...appSettings,
+        deviceMonitorRules: applyDeviceMonitorRule(
+          appSettings.deviceMonitorRules,
+          deviceId,
+          resolved,
+        ),
+      });
+      setStatusText(t("detail.monitor.policy.saved"));
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusText(t("detail.monitor.policy.saveFailed", { message }));
+      return false;
+    } finally {
+      setMonitorRuleSaving(false);
+    }
+  };
 
   const load = async (silent = false) => {
     if (refreshInFlight.current) return device;
@@ -209,6 +252,7 @@ export function DeviceDetail() {
       deviceName: device.name || deviceId,
       kind: current,
       createdAt: now,
+      alertThreshold: monitorPreferences.alertThreshold,
     });
   }, [addMonitorAlert, device?.cpuUsage, device?.memoryUsage, device?.name, monitorPreferences.alertThreshold]);
 
@@ -403,6 +447,10 @@ export function DeviceDetail() {
             refreshError={refreshError}
             metricHistory={metricHistory}
             alertThreshold={monitorPreferences.alertThreshold}
+            refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
+            monitorPreset={monitorPreferences.preset}
+            monitorRuleSaving={monitorRuleSaving}
+            onMonitorRuleChange={saveMonitorRule}
             monitorAlerts={deviceMonitorAlerts}
             onDismissMonitorAlert={dismissMonitorAlert}
             onClearMonitorAlerts={() => clearMonitorAlerts(deviceId)}

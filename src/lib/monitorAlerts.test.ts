@@ -142,11 +142,16 @@ describe("parseStoredMonitorAlerts", () => {
     const result = parseStoredMonitorAlerts(JSON.stringify([
       { id: "older", deviceId: "device-a", deviceName: "Device A", kind: "cpu", createdAt: 1_000 },
       { id: "invalid-kind", deviceId: "device-a", deviceName: "Device A", kind: "disk", createdAt: 2_000 },
-      { id: "newer", deviceId: "device-b", deviceName: "Device B", kind: "memory", createdAt: 3_000 },
+      { id: "newer", deviceId: "device-b", deviceName: "Device B", kind: "memory", createdAt: 3_000, alertThreshold: 75 },
+      { id: "bad-threshold", deviceId: "device-c", deviceName: "Device C", kind: "both", createdAt: 2_500, alertThreshold: "75" },
       null,
     ]));
 
-    expect(result.map((alert) => alert.id)).toEqual(["newer", "older"]);
+    expect(result.map((alert) => [alert.id, alert.alertThreshold])).toEqual([
+      ["newer", 75],
+      ["bad-threshold", undefined],
+      ["older", undefined],
+    ]);
   });
 
   it("returns an empty history for corrupt persisted data", () => {
@@ -195,11 +200,12 @@ describe("serializeMonitorAlertsCsv", () => {
         deviceName: 'Lab "A"',
         kind: "both",
         createdAt: Date.UTC(2026, 8, 8, 1, 2, 3),
+        alertThreshold: 75,
       },
     ];
 
     expect(serializeMonitorAlertsCsv(alerts)).toBe(
-      '\uFEFFtimestamp,device_name,device_id,resource\r\n2026-09-08T01:02:03.000Z,"Lab ""A""","device,1",both',
+      '\uFEFFtimestamp,device_name,device_id,resource,alert_threshold\r\n2026-09-08T01:02:03.000Z,"Lab ""A""","device,1",both,75',
     );
   });
 });

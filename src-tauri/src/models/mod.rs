@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -213,6 +214,17 @@ pub struct ScreenshotResult {
     pub error: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceMonitorRule {
+    #[serde(default)]
+    pub preset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alert_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_interval_secs: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -255,6 +267,8 @@ pub struct AppSettings {
     pub resource_alert_threshold: f64,
     #[serde(default = "default_device_refresh_interval_secs")]
     pub device_refresh_interval_secs: u64,
+    #[serde(default)]
+    pub device_monitor_rules: BTreeMap<String, DeviceMonitorRule>,
 }
 
 fn default_resource_alert_threshold() -> f64 {
@@ -293,6 +307,7 @@ impl Default for AppSettings {
             create_wait_adb: true,
             resource_alert_threshold: default_resource_alert_threshold(),
             device_refresh_interval_secs: default_device_refresh_interval_secs(),
+            device_monitor_rules: BTreeMap::new(),
         }
     }
 }
@@ -448,4 +463,58 @@ pub struct WslKernelStatus {
     /// GitHub Release asset filename for this arch (if any)
     pub release_asset_bz_image: String,
     pub release_asset_config: String,
+}
+
+#[cfg(test)]
+mod app_settings_tests {
+    use super::{AppSettings, DeviceMonitorRule};
+
+    #[test]
+    fn app_settings_without_device_monitor_rules_remain_compatible() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("deviceMonitorRules");
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert!(settings.device_monitor_rules.is_empty());
+    }
+
+    #[test]
+    fn app_settings_round_trip_device_monitor_rules() {
+        let mut settings = AppSettings::default();
+        settings.device_monitor_rules.insert(
+            "device-a".into(),
+            DeviceMonitorRule {
+                preset: "custom".into(),
+                alert_threshold: Some(73.0),
+                refresh_interval_secs: Some(12),
+            },
+        );
+
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let decoded: AppSettings = serde_json::from_str(&encoded).unwrap();
+
+        let rule = decoded.device_monitor_rules.get("device-a").unwrap();
+        assert_eq!(rule.preset, "custom");
+        assert_eq!(rule.alert_threshold, Some(73.0));
+        assert_eq!(rule.refresh_interval_secs, Some(12));
+    }
+
+    #[test]
+    fn incomplete_device_monitor_rule_does_not_reject_all_settings() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["deviceMonitorRules"] = serde_json::json!({
+            "device-a": {}
+        });
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        let rule = settings.device_monitor_rules.get("device-a").unwrap();
+        assert_eq!(rule.preset, "");
+        assert_eq!(rule.alert_threshold, None);
+        assert_eq!(rule.refresh_interval_secs, None);
+    }
 }

@@ -259,7 +259,7 @@ export function MonitorAlertsPage() {
                   </div>
                   <div className="monitor-alert-history-message">
                     {t(monitorAlertMessageKey(alert.kind), {
-                      threshold: monitorPreferences.alertThreshold,
+                      threshold: alert.alertThreshold ?? monitorPreferences.alertThreshold,
                     })}
                   </div>
                   <div className="monitor-alert-history-time">

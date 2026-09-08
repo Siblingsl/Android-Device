@@ -27,6 +27,7 @@ export interface MonitorAlert {
   deviceName: string;
   kind: Exclude<ResourceAlert, null>;
   createdAt: number;
+  alertThreshold?: number;
 }
 
 export function evaluateResourceAlert(
@@ -85,6 +86,20 @@ export function parseStoredMonitorAlerts(raw: string | null): MonitorAlert[] {
           alert.createdAt >= 0
         );
       })
+      .map((item) => {
+        const threshold =
+          typeof item.alertThreshold === "number" && Number.isFinite(item.alertThreshold)
+            ? Math.round(Math.min(100, Math.max(50, item.alertThreshold)))
+            : undefined;
+        return {
+          id: item.id,
+          deviceId: item.deviceId,
+          deviceName: item.deviceName,
+          kind: item.kind,
+          createdAt: item.createdAt,
+          ...(threshold === undefined ? {} : { alertThreshold: threshold }),
+        };
+      })
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, MAX_MONITOR_ALERT_HISTORY);
   } catch {
@@ -110,11 +125,12 @@ export function serializeMonitorAlertsCsv(alerts: MonitorAlert[]): string {
       alert.deviceName,
       alert.deviceId,
       alert.kind,
+      alert.alertThreshold === undefined ? "" : String(alert.alertThreshold),
     ]
       .map(csvField)
       .join(","),
   );
-  return `\uFEFFtimestamp,device_name,device_id,resource${rows.length ? `\r\n${rows.join("\r\n")}` : ""}`;
+  return `\uFEFFtimestamp,device_name,device_id,resource,alert_threshold${rows.length ? `\r\n${rows.join("\r\n")}` : ""}`;
 }
 
 export async function runConfirmedMonitorAlertCleanup(

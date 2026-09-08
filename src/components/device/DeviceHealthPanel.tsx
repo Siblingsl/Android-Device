@@ -1,6 +1,17 @@
-import { AlertTriangle, Bell, CheckCircle2, CircleOff, RefreshCw, ServerCrash, WifiOff, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  Bell,
+  CheckCircle2,
+  CircleOff,
+  RefreshCw,
+  ServerCrash,
+  SlidersHorizontal,
+  WifiOff,
+  X,
+} from "lucide-react";
 import { useI18n } from "../../i18n";
-import type { DeviceInfo } from "../../types";
+import type { DeviceInfo, DeviceMonitorPreset } from "../../types";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { summarizeDeviceHealth, type DeviceHealthState } from "../../lib/deviceMonitor";
@@ -15,6 +26,14 @@ interface Props {
   refreshError: string | null;
   metricHistory: ResourceSample[];
   alertThreshold: number;
+  refreshIntervalSecs: number;
+  monitorPreset: DeviceMonitorPreset;
+  monitorRuleSaving: boolean;
+  onMonitorRuleChange: (
+    preset: DeviceMonitorPreset,
+    alertThreshold: number,
+    refreshIntervalSecs: number,
+  ) => Promise<boolean>;
   monitorAlerts: MonitorAlert[];
   onDismissMonitorAlert: (id: string) => void;
   onClearMonitorAlerts: () => void;
@@ -37,6 +56,10 @@ export function DeviceHealthPanel({
   refreshError,
   metricHistory,
   alertThreshold,
+  refreshIntervalSecs,
+  monitorPreset,
+  monitorRuleSaving,
+  onMonitorRuleChange,
   monitorAlerts,
   onDismissMonitorAlert,
   onClearMonitorAlerts,
@@ -45,6 +68,15 @@ export function DeviceHealthPanel({
   onRefresh,
 }: Props) {
   const { t } = useI18n();
+  const [policyOpen, setPolicyOpen] = useState(false);
+  const [draftPreset, setDraftPreset] = useState<DeviceMonitorPreset>(monitorPreset);
+  const [customThreshold, setCustomThreshold] = useState(alertThreshold);
+  const [customRefreshInterval, setCustomRefreshInterval] = useState(refreshIntervalSecs);
+  useEffect(() => {
+    setDraftPreset(monitorPreset);
+    setCustomThreshold(alertThreshold);
+    setCustomRefreshInterval(refreshIntervalSecs);
+  }, [alertThreshold, monitorPreset, refreshIntervalSecs]);
   const health = summarizeDeviceHealth(device);
   const stateLabel = t(`detail.monitor.state.${health.state}`);
   const dockerReady = health.containerReady;
@@ -93,7 +125,7 @@ export function DeviceHealthPanel({
               checked={autoRefresh}
               onChange={(e) => onAutoRefreshChange(e.target.checked)}
             />
-            {t("detail.monitor.autoRefresh")}
+            {t("detail.monitor.autoRefresh", { seconds: refreshIntervalSecs })}
           </label>
           <Button
             size="sm"
@@ -113,6 +145,102 @@ export function DeviceHealthPanel({
           {stateLabel}
         </span>
         <span className="muted">{updatedLabel}</span>
+      </div>
+
+      <div className={`device-monitor-policy ${monitorPreset}`}>
+        <button
+          type="button"
+          className="device-monitor-policy-toggle"
+          aria-expanded={policyOpen}
+          onClick={() => setPolicyOpen((open) => !open)}
+        >
+          <span className="device-monitor-policy-name">
+            <SlidersHorizontal size={14} />
+            {t("detail.monitor.policy.title")}
+          </span>
+          <span className="device-monitor-policy-current">
+            {t(`detail.monitor.policy.preset.${monitorPreset}`)} · {alertThreshold}% /{" "}
+            {refreshIntervalSecs}s
+          </span>
+          <span className="device-monitor-policy-action">
+            {t(policyOpen ? "detail.monitor.policy.close" : "detail.monitor.policy.configure")}
+          </span>
+        </button>
+        {policyOpen && (
+          <div className="device-monitor-policy-editor">
+            <label className="field">
+              <span>{t("detail.monitor.policy.preset")}</span>
+              <select
+                value={draftPreset}
+                disabled={monitorRuleSaving}
+                onChange={(event) => {
+                  const preset = event.target.value as DeviceMonitorPreset;
+                  setDraftPreset(preset);
+                  if (preset !== "custom") {
+                    void onMonitorRuleChange(preset, alertThreshold, refreshIntervalSecs).then(
+                      (saved) => {
+                        if (!saved) setDraftPreset(monitorPreset);
+                      },
+                    );
+                  }
+                }}
+              >
+                <option value="inherit">{t("detail.monitor.policy.preset.inherit")}</option>
+                <option value="sensitive">{t("detail.monitor.policy.preset.sensitive")}</option>
+                <option value="balanced">{t("detail.monitor.policy.preset.balanced")}</option>
+                <option value="relaxed">{t("detail.monitor.policy.preset.relaxed")}</option>
+                <option value="custom">{t("detail.monitor.policy.preset.custom")}</option>
+              </select>
+            </label>
+            {draftPreset === "custom" && (
+              <div className="device-monitor-policy-custom">
+                <label className="field">
+                  <span>{t("detail.monitor.policy.threshold")}</span>
+                  <div className="row">
+                    <input
+                      type="number"
+                      min={50}
+                      max={100}
+                      value={customThreshold}
+                      onChange={(event) => setCustomThreshold(Number(event.target.value))}
+                    />
+                    <span className="muted">%</span>
+                  </div>
+                </label>
+                <label className="field">
+                  <span>{t("detail.monitor.policy.interval")}</span>
+                  <div className="row">
+                    <input
+                      type="number"
+                      min={5}
+                      max={60}
+                      value={customRefreshInterval}
+                      onChange={(event) => setCustomRefreshInterval(Number(event.target.value))}
+                    />
+                    <span className="muted">s</span>
+                  </div>
+                </label>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={monitorRuleSaving}
+                  onClick={() =>
+                    void onMonitorRuleChange(
+                      "custom",
+                      customThreshold,
+                      customRefreshInterval,
+                    )
+                  }
+                >
+                  {t("detail.monitor.policy.save")}
+                </Button>
+              </div>
+            )}
+            <div className="device-monitor-policy-hint">
+              {t("detail.monitor.policy.hint")}
+            </div>
+          </div>
+        )}
       </div>
 
       {alertMessage && (
@@ -232,7 +360,7 @@ function MonitorAlertCenter({
               <AlertTriangle size={14} />
               <div className="device-monitor-notification-content">
                 <div className="device-monitor-notification-message">
-                  {resourceAlertMessageFor(alert.kind, t, threshold)}
+                  {resourceAlertMessageFor(alert.kind, t, alert.alertThreshold ?? threshold)}
                 </div>
                 <div className="device-monitor-notification-time">
                   {t("detail.monitor.notifications.at", {
