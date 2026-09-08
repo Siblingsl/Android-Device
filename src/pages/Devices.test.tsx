@@ -391,6 +391,72 @@ describe("Devices batch controls", () => {
     expect(screen.getByRole("button", { name: "导出 CSV" })).toBeTruthy();
   }, 15_000);
 
+  it("selects and deselects visible online devices without clearing other picks", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "全选在线" }));
+
+    expect((checkboxes[0] as HTMLInputElement).checked).toBe(true);
+    expect((checkboxes[1] as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "取消在线" }));
+
+    expect((checkboxes[0] as HTMLInputElement).checked).toBe(false);
+    expect((checkboxes[1] as HTMLInputElement).checked).toBe(true);
+  }, 15_000);
+
+  it("keeps selected devices checked after switching status filters", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    let checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    const deviceFilter = screen.getAllByRole("combobox")[0];
+    fireEvent.change(deviceFilter, { target: { value: "offline" } });
+    expect(await screen.findAllByRole("checkbox")).toHaveLength(1);
+
+    fireEvent.change(deviceFilter, { target: { value: "all" } });
+    checkboxes = await screen.findAllByRole("checkbox");
+    expect((checkboxes[0] as HTMLInputElement).checked).toBe(true);
+  }, 15_000);
+
+  it("shows the current actionable count and disables batch actions for hidden picks", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "offline" } });
+
+    expect(screen.getByText("已选 1")).toBeTruthy();
+    expect(screen.getByText("当前可操作 0")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "批量连接" }) as HTMLButtonElement).disabled).toBe(true);
+  }, 15_000);
+
   it("persists completed batch results and restores them without retry controls", async () => {
     vi.mocked(DeviceService.connect)
       .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })

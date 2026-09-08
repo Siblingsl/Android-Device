@@ -312,6 +312,9 @@ export function Devices() {
     );
   });
   const selectedDevices = visible.filter((d) => picked.includes(d.id));
+  const onlineVisible = visible.filter(isOnline);
+  const allOnlineVisiblePicked =
+    onlineVisible.length > 0 && onlineVisible.every((d) => picked.includes(d.id));
 
   const ensureOnline = async (d: DeviceInfo) => {
     if (d.online && d.adbStatus === "device") return null;
@@ -631,13 +634,31 @@ export function Devices() {
               ? t("devices.unselectAll")
               : t("devices.selectAll")}
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={onlineVisible.length === 0}
+            onClick={() => {
+              const onlineIds = new Set(onlineVisible.map((d) => d.id));
+              setPicked((current) =>
+                allOnlineVisiblePicked
+                  ? current.filter((id) => !onlineIds.has(id))
+                  : [...new Set([...current, ...onlineVisible.map((d) => d.id)])],
+              );
+            }}
+          >
+            {allOnlineVisiblePicked ? t("devices.unselectOnline") : t("devices.selectAllOnline")}
+          </Button>
           <span className="muted" style={{ fontSize: 12 }}>
             {t("devices.selectedCount", { n: picked.length })}
+          </span>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
           </span>
           <Button
             size="sm"
             variant="ghost"
-            disabled={picked.length === 0}
+            disabled={selectedDevices.length === 0}
             onClick={() => {
               const text = selectedDevices
                 .map((d) => d.serial)
@@ -658,7 +679,7 @@ export function Devices() {
           <Button
             size="sm"
             loading={busy === "batch"}
-            disabled={busy === "batch" || picked.length === 0}
+            disabled={busy === "batch" || selectedDevices.length === 0}
             onClick={() =>
               void batch(t("devices.batch.connect"), (d) => DeviceService.connect(d.serial))
             }
@@ -670,7 +691,7 @@ export function Devices() {
             variant="primary"
             icon={<Package size={13} />}
             loading={busy === "batch"}
-            disabled={busy === "batch" || picked.length === 0}
+            disabled={busy === "batch" || selectedDevices.length === 0}
             onClick={async () => {
               try {
                 const apk = await open({
@@ -680,7 +701,7 @@ export function Devices() {
                 });
                 if (typeof apk !== "string" || !apk) return;
                 const name = apk.split(/[/\\]/).pop() || apk;
-                if (!(await askConfirm(t("devices.confirmInstall", { name, n: picked.length })))) return;
+                if (!(await askConfirm(t("devices.confirmInstall", { name, n: selectedDevices.length })))) return;
                 await batch(t("devices.batch.installWith", { name }), async (d) => {
                   const miss = await ensureOnline(d);
                   if (miss) return miss;
@@ -698,7 +719,7 @@ export function Devices() {
             size="sm"
             icon={<Camera size={13} />}
             loading={busy === "batch"}
-            disabled={busy === "batch" || picked.length === 0}
+            disabled={busy === "batch" || selectedDevices.length === 0}
             onClick={() =>
               void batch(
                 t("devices.batch.screenshot"),
@@ -719,7 +740,7 @@ export function Devices() {
             {t("devices.batch.screenshot")}
           </Button>
           <select
-            disabled={busy === "batch" || picked.length === 0}
+            disabled={busy === "batch" || selectedDevices.length === 0}
             defaultValue=""
             style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
             onChange={async (e) => {
@@ -729,7 +750,7 @@ export function Devices() {
               if (v === "disconnect") void batch(t("devices.batch.disconnect"), (d) => DeviceService.disconnect(d.serial));
               if (v === "restart") void batch(t("devices.batch.restart"), (d) => DeviceService.restart(d.id));
               if (v === "stop") {
-                if (!(await askConfirm(t("devices.confirmStop", { n: picked.length })))) return;
+                if (!(await askConfirm(t("devices.confirmStop", { n: selectedDevices.length })))) return;
                 void batch(t("devices.batch.stop"), (d) => DeviceService.stop(d.id));
               }
               if (v === "wake") void batch(t("devices.batch.wake"), (d) => wakeDevice(d));
