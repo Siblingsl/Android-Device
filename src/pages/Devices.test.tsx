@@ -141,8 +141,8 @@ describe("Devices batch controls", () => {
     });
 
     expect(DeviceService.connect).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/未执行/)).toBeTruthy();
-    expect(await screen.findByText("用户停止")).toBeTruthy();
+    expect(await screen.findByText("未执行（用户停止）")).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 two 失败 未执行（用户停止） 用户停止/ })).toBeTruthy();
     expect(await screen.findByText(/批量 ADB 连接 已停止 · 1\/2 成功/)).toBeTruthy();
   }, 15_000);
 
@@ -475,6 +475,76 @@ describe("Devices batch controls", () => {
     expect(await screen.findByRole("combobox", { name: "失败原因" })).toBeTruthy();
     expect(screen.getByRole("row", { name: /历史设备 失败 device unauthorized 未授权/ })).toBeTruthy();
   });
+
+  it("shows actionable guidance for every failure reason", async () => {
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([
+        {
+          id: "reason-guidance",
+          title: "失败原因建议",
+          kind: "connect",
+          createdAt: Date.now(),
+          items: [
+            { id: "offline", name: "离线设备", ok: false, detail: "device offline" },
+            { id: "unauthorized", name: "未授权设备", ok: false, detail: "device unauthorized" },
+            { id: "timeout", name: "超时设备", ok: false, detail: "command timed out" },
+            { id: "skipped", name: "停止设备", ok: false, detail: "未执行（用户停止）" },
+            { id: "other", name: "其他设备", ok: false, detail: "unexpected command error" },
+          ],
+        },
+      ]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+
+    expect(await screen.findByText(/建议检查设备状态和 ADB 端口映射后重试/)).toBeTruthy();
+    expect(screen.getByText(/建议在设备上确认 ADB 授权后重试/)).toBeTruthy();
+    expect(screen.getByText(/建议检查设备响应，稍后重试/)).toBeTruthy();
+    expect(screen.getByText(/本项未执行，请确认目标后重新执行/)).toBeTruthy();
+    expect(screen.getByText(/建议查看说明详情后重试/)).toBeTruthy();
+  });
+
+  it("retries only failed devices matching the selected reason", async () => {
+    const retry = deferred<ShellResult>();
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device unauthorized", exitCode: 1 })
+      .mockReturnValueOnce(retry.promise);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    checkboxes.forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 0\/2 成功/);
+    fireEvent.change(screen.getByRole("combobox", { name: "失败原因" }), {
+      target: { value: "offline" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试此原因" }));
+
+    await screen.findByRole("button", { name: "停止后续" });
+    expect(screen.getByRole("status").textContent).toContain("（1/1）设备 one");
+    await act(async () => {
+      retry.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await retry.promise;
+    });
+
+    expect(await screen.findByText(/批量 ADB 连接 · 1\/1 成功/)).toBeTruthy();
+    expect(DeviceService.connect).toHaveBeenCalledTimes(3);
+    expect(DeviceService.connect).toHaveBeenNthCalledWith(3, "one-serial");
+  }, 15_000);
 
   it("selects and deselects visible online devices without clearing other picks", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([

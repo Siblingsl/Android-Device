@@ -382,12 +382,12 @@ export function Devices() {
         setBatchProgress({
           label,
           current: i + 1,
-          total: selectedDevices.length,
+          total: targetDevices.length,
           name: d.name,
           stopping: false,
         });
         setStatusText(
-          t("devices.batch.progress", { label, i: i + 1, total: selectedDevices.length, name: d.name }),
+          t("devices.batch.progress", { label, i: i + 1, total: targetDevices.length, name: d.name }),
         );
         try {
           const r = (await fn(d)) as { success?: boolean; stderr?: string; stdout?: string };
@@ -447,9 +447,9 @@ export function Devices() {
     }
   };
 
-  const retryFailedBatch = () => {
+  const retryBatchItems = (items: BatchReportItem[]) => {
     if (!batchReport?.retry || busy === "batch") return;
-    const failedIds = new Set(batchReport.items.filter((item) => !item.ok).map((item) => item.id));
+    const failedIds = new Set(items.filter((item) => !item.ok).map((item) => item.id));
     const retryDevices = devices.filter((device) => failedIds.has(device.id));
     if (retryDevices.length === 0) {
       setStatusText(t("devices.batch.retryUnavailable"));
@@ -460,6 +460,22 @@ export function Devices() {
     setBatchFilter("all");
     setBatchReasonFilter("all");
     void batch(label, action, kind, retryDevices);
+  };
+
+  const retryFailedBatch = () => {
+    retryBatchItems(batchReport?.items.filter((item) => !item.ok) ?? []);
+  };
+
+  const retrySelectedBatchReason = () => {
+    if (batchReasonFilter === "all") {
+      retryFailedBatch();
+      return;
+    }
+    retryBatchItems(
+      batchReport?.items.filter(
+        (item) => !item.ok && classifyBatchFailure(item.detail) === batchReasonFilter,
+      ) ?? [],
+    );
   };
 
   const exportBatchCsv = async (
@@ -557,8 +573,24 @@ export function Devices() {
         return t("devices.batch.reasonOther");
     }
   };
+  const batchFailureReasonHint = (reason: BatchFailureReason) => {
+    switch (reason) {
+      case "offline":
+        return t("devices.batch.reasonOfflineHint");
+      case "unauthorized":
+        return t("devices.batch.reasonUnauthorizedHint");
+      case "timeout":
+        return t("devices.batch.reasonTimeoutHint");
+      case "skipped":
+        return t("devices.batch.reasonSkippedHint");
+      default:
+        return t("devices.batch.reasonOtherHint");
+    }
+  };
   const batchFailureReasonCount = (reason: BatchFailureReason) =>
     failedBatchItems.filter((item) => classifyBatchFailure(item.detail) === reason).length;
+  const selectedReasonFailedCount =
+    batchReasonFilter === "all" ? 0 : batchFailureReasonCount(batchReasonFilter);
 
   return (
     <div>
@@ -899,6 +931,16 @@ export function Devices() {
                   >
                     {t("devices.retryFailed")}
                   </Button>
+                  {batchReasonFilter !== "all" && selectedReasonFailedCount > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={retrySelectedBatchReason}
+                      disabled={busy === "batch"}
+                    >
+                      {t("devices.batch.retryReason")}
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1044,7 +1086,7 @@ export function Devices() {
                       <div>{it.detail}</div>
                       {!it.ok && (
                         <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
-                          {batchFailureReasonLabel(classifyBatchFailure(it.detail))}
+                          {batchFailureReasonLabel(classifyBatchFailure(it.detail))} · {batchFailureReasonHint(classifyBatchFailure(it.detail))}
                         </div>
                       )}
                     </td>
