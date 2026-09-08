@@ -11,6 +11,7 @@ import {
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
   summarizeMonitorAlerts,
+  summarizeMonitorAlertsByDevice,
   buildMonitorAlertTrend,
   type MonitorAlert,
   type MonitorAlertTracker,
@@ -180,6 +181,42 @@ describe("monitor alert summaries and trend", () => {
       { dayStart: new Date(2026, 8, 7).getTime(), warning: 1, critical: 0 },
       { dayStart: new Date(2026, 8, 8).getTime(), warning: 1, critical: 1 },
     ]);
+  });
+
+  it("summarizes each device and marks a clear seven-day alert peak", () => {
+    const now = new Date(2026, 8, 8, 12, 0).getTime();
+    const today = new Date(2026, 8, 8, 9, 0).getTime();
+    const yesterday = new Date(2026, 8, 7, 9, 0).getTime();
+    const summaries = summarizeMonitorAlertsByDevice([
+      { id: "a-1", deviceId: "a", deviceName: "Device A", kind: "cpu", createdAt: today },
+      { id: "a-2", deviceId: "a", deviceName: "Device A", kind: "cpu", createdAt: today + 1_000 },
+      { id: "a-3", deviceId: "a", deviceName: "Device A", kind: "memory", createdAt: today + 2_000 },
+      { id: "a-4", deviceId: "a", deviceName: "Device A", kind: "both", createdAt: today + 3_000 },
+      { id: "a-5", deviceId: "a", deviceName: "Device A", kind: "cpu", createdAt: yesterday },
+      { id: "b-1", deviceId: "b", deviceName: "Device B", kind: "memory", severity: "critical", createdAt: today },
+      { id: "b-2", deviceId: "b", deviceName: "Device B", kind: "memory", severity: "critical", createdAt: today + 1_000 },
+    ], now);
+
+    expect(summaries.find((summary) => summary.deviceId === "a")).toEqual({
+      deviceId: "a",
+      deviceName: "Device A",
+      total: 5,
+      warning: 5,
+      critical: 0,
+      peakDayStart: new Date(2026, 8, 8).getTime(),
+      peakCount: 4,
+      peakIsAnomaly: true,
+    });
+    expect(summaries.find((summary) => summary.deviceId === "b")).toEqual({
+      deviceId: "b",
+      deviceName: "Device B",
+      total: 2,
+      warning: 0,
+      critical: 2,
+      peakDayStart: new Date(2026, 8, 8).getTime(),
+      peakCount: 2,
+      peakIsAnomaly: false,
+    });
   });
 });
 

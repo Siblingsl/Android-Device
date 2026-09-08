@@ -14,6 +14,7 @@ import {
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
   summarizeMonitorAlerts,
+  summarizeMonitorAlertsByDevice,
   type MonitorAlertFilter,
   type MonitorAlertKind,
 } from "../lib/monitorAlerts";
@@ -59,6 +60,10 @@ export function MonitorAlertsPage() {
   const trend = buildMonitorAlertTrend(filteredAlerts, Date.now());
   const trendMax = Math.max(1, ...trend.map((point) => point.warning + point.critical));
   const hasTrendData = trend.some((point) => point.warning > 0 || point.critical > 0);
+  const deviceSummaries = useMemo(
+    () => summarizeMonitorAlertsByDevice(filteredAlerts, Date.now()),
+    [filteredAlerts],
+  );
 
   const openDevice = (deviceId: string) => {
     setSelectedDeviceId(deviceId);
@@ -271,6 +276,72 @@ export function MonitorAlertsPage() {
               })}
             </div>
           </>
+        )}
+      </Card>
+
+      <Card
+        title={t("monitor.card.deviceComparison")}
+        className="monitor-alert-device-card"
+        action={<span className="muted monitor-alert-device-range">{t("monitor.deviceComparison.range")}</span>}
+      >
+        {deviceSummaries.length === 0 ? (
+          <div className="monitor-alert-device-empty">{t("monitor.deviceComparison.empty")}</div>
+        ) : (
+          <div className="monitor-alert-device-table" role="table" aria-label={t("monitor.card.deviceComparison")}>
+            <div className="monitor-alert-device-row monitor-alert-device-head" role="row">
+              <span role="columnheader">{t("monitor.deviceComparison.device")}</span>
+              <span role="columnheader">{t("monitor.deviceComparison.total")}</span>
+              <span role="columnheader">{t("monitor.deviceComparison.severity")}</span>
+              <span role="columnheader">{t("monitor.deviceComparison.peak")}</span>
+            </div>
+            {deviceSummaries.map((summary) => {
+              const peakLabel = summary.peakDayStart === null
+                ? "—"
+                : new Date(summary.peakDayStart).toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+              return (
+                <div className="monitor-alert-device-row" role="row" key={summary.deviceId}>
+                  <div className="monitor-alert-device-name" role="cell">
+                    <button
+                      type="button"
+                      className="monitor-alert-device-link"
+                      onClick={() => openDevice(summary.deviceId)}
+                    >
+                      {summary.deviceName}
+                    </button>
+                    {summary.peakIsAnomaly ? (
+                      <span className="monitor-alert-device-peak-badge" title={t("monitor.deviceComparison.peakHint")}>
+                        <AlertTriangle size={11} />
+                        {t("monitor.deviceComparison.peak")}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span
+                    className="monitor-alert-device-total"
+                    role="cell"
+                    data-label={t("monitor.deviceComparison.total")}
+                  >
+                    {summary.total}
+                  </span>
+                  <div
+                    className="monitor-alert-device-severity"
+                    role="cell"
+                    data-label={t("monitor.deviceComparison.severity")}
+                  >
+                    <span className="warning" title={t("monitor.severity.warning")}>{summary.warning}</span>
+                    <span className="critical" title={t("monitor.severity.critical")}>{summary.critical}</span>
+                  </div>
+                  <div
+                    className="monitor-alert-device-peak"
+                    role="cell"
+                    data-label={t("monitor.deviceComparison.peak")}
+                  >
+                    <span>{peakLabel}</span>
+                    {summary.peakCount > 0 ? <span className="muted">{summary.peakCount}</span> : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </Card>
 

@@ -1377,6 +1377,66 @@ a {
   font-size: 12px;
   text-align: center;
 }
+.monitor-alert-device-card { margin-bottom: 16px; }
+.monitor-alert-device-range { font-size: 11px; }
+.monitor-alert-device-table { display: grid; }
+.monitor-alert-device-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(42px, 0.5fr) minmax(74px, 0.8fr) minmax(112px, 0.9fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+.monitor-alert-device-head {
+  padding-top: 0;
+  border-top: 0;
+  color: var(--text-muted);
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase;
+}
+.monitor-alert-device-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.monitor-alert-device-link {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.monitor-alert-device-link:hover { color: var(--primary); }
+.monitor-alert-device-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.monitor-alert-device-peak-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 999px;
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.1);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.monitor-alert-device-total { font-weight: 700; }
+.monitor-alert-device-severity { display: flex; gap: 10px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.monitor-alert-device-severity .warning { color: var(--warning); }
+.monitor-alert-device-severity .critical { color: var(--danger); }
+.monitor-alert-device-peak { display: flex; align-items: center; gap: 8px; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.monitor-alert-device-peak > .muted { color: var(--text-secondary); }
+.monitor-alert-device-empty { padding: 30px 0; color: var(--text-muted); font-size: 12px; text-align: center; }
 .monitor-alert-history-limit { font-size: 11px; }
 .monitor-alert-history-tools {
   display: flex;
@@ -1486,6 +1546,23 @@ a {
   .monitor-alert-trend { gap: 3px; }
   .monitor-alert-trend-bars { gap: 2px; padding: 0 1px; }
   .monitor-alert-trend-label { font-size: 9px; }
+  .monitor-alert-device-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .monitor-alert-device-head { display: none; }
+  .monitor-alert-device-name { grid-column: 1 / -1; }
+  .monitor-alert-device-total,
+  .monitor-alert-device-severity,
+  .monitor-alert-device-peak { justify-content: space-between; gap: 8px; }
+  .monitor-alert-device-total::before,
+  .monitor-alert-device-severity::before,
+  .monitor-alert-device-peak::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-transform: uppercase;
+  }
+  .monitor-alert-device-total::before { margin-right: 14px; }
+  .monitor-alert-device-severity::before { margin-right: 14px; }
+  .monitor-alert-device-peak::before { margin-right: 14px; }
   .monitor-alert-history-item { grid-template-columns: auto minmax(0, 1fr); }
   .monitor-alert-history-actions { grid-column: 2; justify-content: flex-start; }
   .monitor-alert-history-card .card-head { align-items: flex-start; flex-direction: column; }

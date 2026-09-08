@@ -33,6 +33,17 @@ export interface MonitorAlertTrendPoint {
   critical: number;
 }
 
+export interface MonitorAlertDeviceSummary {
+  deviceId: string;
+  deviceName: string;
+  total: number;
+  warning: number;
+  critical: number;
+  peakDayStart: number | null;
+  peakCount: number;
+  peakIsAnomaly: boolean;
+}
+
 export interface ResourceAlertTracker {
   active: ResourceAlert;
   lastEmittedAt: number | null;
@@ -207,6 +218,64 @@ export function buildMonitorAlertTrend(
       critical: bucket.filter((alert) => alert.severity === "critical").length,
     };
   });
+}
+
+export function summarizeMonitorAlertsByDevice(
+  alerts: MonitorAlert[],
+  now: number,
+  days = 7,
+): MonitorAlertDeviceSummary[] {
+  const summaries = new Map<string, MonitorAlertDeviceSummary>();
+  alerts.forEach((alert) => {
+    const current = summaries.get(alert.deviceId) ?? {
+      deviceId: alert.deviceId,
+      deviceName: alert.deviceName || alert.deviceId,
+      total: 0,
+      warning: 0,
+      critical: 0,
+      peakDayStart: null,
+      peakCount: 0,
+      peakIsAnomaly: false,
+    };
+    if (current.deviceName === current.deviceId && alert.deviceName) current.deviceName = alert.deviceName;
+    current.total += 1;
+    current[alert.severity ?? "warning"] += 1;
+    summaries.set(alert.deviceId, current);
+  });
+
+  const trend = buildMonitorAlertTrend(alerts, now, days);
+  summaries.forEach((summary) => {
+    let activeDays = 0;
+    let activeTotal = 0;
+    trend.forEach((point) => {
+      const nextDay = new Date(point.dayStart);
+      nextDay.setDate(nextDay.getDate() + 1);
+      const dailyCount = alerts.filter(
+        (alert) =>
+          alert.deviceId === summary.deviceId &&
+          alert.createdAt >= point.dayStart &&
+          alert.createdAt < nextDay.getTime(),
+      ).length;
+      if (dailyCount > 0) {
+        activeDays += 1;
+        activeTotal += dailyCount;
+      }
+      if (dailyCount >= summary.peakCount) {
+        summary.peakCount = dailyCount;
+        summary.peakDayStart = dailyCount > 0 ? point.dayStart : summary.peakDayStart;
+      }
+    });
+    const activeAverage = activeDays > 0 ? activeTotal / activeDays : 0;
+    summary.peakIsAnomaly = summary.peakCount >= 2 && summary.peakCount > activeAverage * 1.5;
+  });
+
+  return [...summaries.values()].sort(
+    (a, b) =>
+      Number(b.peakIsAnomaly) - Number(a.peakIsAnomaly) ||
+      b.critical - a.critical ||
+      b.total - a.total ||
+      a.deviceName.localeCompare(b.deviceName),
+  );
 }
 
 function csvField(value: string): string {
