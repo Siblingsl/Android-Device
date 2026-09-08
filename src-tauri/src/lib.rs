@@ -10,6 +10,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(services::transfer::TransferRegistry::default())
         .invoke_handler(tauri::generate_handler![
             // System
             get_dashboard,
@@ -54,6 +55,9 @@ pub fn run() {
             list_files,
             upload_file,
             download_file,
+            upload_file_tracked,
+            download_file_tracked,
+            cancel_file_transfer,
             delete_file,
             mkdir_remote,
             storage_info,

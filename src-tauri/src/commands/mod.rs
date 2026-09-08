@@ -1,5 +1,5 @@
 use crate::models::*;
-use crate::services::{adb, device, docker, log, root, scrcpy, settings, wsl_kernel};
+use crate::services::{adb, device, docker, log, root, scrcpy, settings, transfer, wsl_kernel};
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tauri::async_runtime::spawn_blocking(f)
@@ -212,6 +212,15 @@ pub async fn get_app_activities(serial: String, package: String) -> String {
 
 // ---- Files ----
 
+fn tracked_transfer_error(message: impl Into<String>) -> ShellResult {
+    ShellResult {
+        success: false,
+        stdout: String::new(),
+        stderr: message.into(),
+        exit_code: -1,
+    }
+}
+
 #[tauri::command]
 pub async fn list_files(serial: String, path: String) -> Vec<FileEntry> {
     blocking(move || device::list_files(&serial, &path)).await
@@ -225,6 +234,76 @@ pub async fn upload_file(serial: String, local: String, remote: String) -> Shell
 #[tauri::command]
 pub async fn download_file(serial: String, remote: String, local: String) -> ShellResult {
     blocking(move || device::download_file(&serial, &remote, &local)).await
+}
+
+#[tauri::command]
+pub async fn upload_file_tracked(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, transfer::TransferRegistry>,
+    serial: String,
+    local: String,
+    remote: String,
+    operation_id: String,
+) -> Result<ShellResult, String> {
+    let registry = registry.inner().clone();
+    let operation_id = operation_id.trim().to_string();
+    let cancel = match registry.start(&operation_id) {
+        Ok(cancel) => cancel,
+        Err(error) => return Ok(tracked_transfer_error(error)),
+    };
+    let worker_operation_id = operation_id.clone();
+    let result = blocking(move || {
+        device::upload_file_tracked(
+            &app,
+            &serial,
+            &local,
+            &remote,
+            &worker_operation_id,
+            &cancel,
+        )
+    })
+    .await;
+    registry.finish(&operation_id);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn download_file_tracked(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, transfer::TransferRegistry>,
+    serial: String,
+    remote: String,
+    local: String,
+    operation_id: String,
+) -> Result<ShellResult, String> {
+    let registry = registry.inner().clone();
+    let operation_id = operation_id.trim().to_string();
+    let cancel = match registry.start(&operation_id) {
+        Ok(cancel) => cancel,
+        Err(error) => return Ok(tracked_transfer_error(error)),
+    };
+    let worker_operation_id = operation_id.clone();
+    let result = blocking(move || {
+        device::download_file_tracked(
+            &app,
+            &serial,
+            &remote,
+            &local,
+            &worker_operation_id,
+            &cancel,
+        )
+    })
+    .await;
+    registry.finish(&operation_id);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn cancel_file_transfer(
+    registry: tauri::State<'_, transfer::TransferRegistry>,
+    operation_id: String,
+) -> bool {
+    registry.cancel(operation_id.trim())
 }
 
 #[tauri::command]
@@ -679,4 +758,17 @@ pub async fn switch_wsl_kernel(mode: String, apply: bool) -> ShellResult {
 #[tauri::command]
 pub async fn verify_wsl_binder() -> ShellResult {
     blocking(wsl_kernel::verify_binder).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracked_transfer_error_preserves_shell_result_contract() {
+        let result = tracked_transfer_error("duplicate transfer");
+        assert!(!result.success);
+        assert_eq!(result.stderr, "duplicate transfer");
+        assert_eq!(result.exit_code, -1);
+    }
 }
