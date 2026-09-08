@@ -71,6 +71,26 @@ type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
 type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
 type PreviewOutcome = { success: boolean; message: string };
 
+function operationErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return message.trim() || fallback;
+}
+
+function reportOperationError(
+  error: unknown,
+  fallback: string,
+  setStatusText: (message: string) => void,
+) {
+  const reason = operationErrorMessage(error, fallback);
+  setStatusText(reason);
+  void alert(reason);
+}
+
+function isDialogCancellation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /cancel|abort|取消/i.test(message);
+}
+
 export function DeviceDetail() {
   const { id = "" } = useParams();
   const deviceId = decodeURIComponent(id);
@@ -1939,15 +1959,19 @@ function Files({
               onClick={async () => {
                 const name = prompt(t("detail.files.folderNamePrompt"));
                 if (!name) return;
-                const r = await DeviceService.mkdir(serial, `${path.replace(/\/+$/, "")}/${name}`);
-                if (!r.success) {
-                  const reason = (r.stderr || r.stdout || t("detail.files.createFailed")).trim();
-                  setStatusText(reason);
-                  void alert(reason);
-                  return;
+                try {
+                  const r = await DeviceService.mkdir(serial, `${path.replace(/\/+$/, "")}/${name}`);
+                  if (!r.success) {
+                    const reason = (r.stderr || r.stdout || t("detail.files.createFailed")).trim();
+                    setStatusText(reason);
+                    void alert(reason);
+                    return;
+                  }
+                  setStatusText(t("detail.files.created", { name }));
+                  await load();
+                } catch (e) {
+                  reportOperationError(e, t("detail.files.createFailed"), setStatusText);
                 }
-                setStatusText(t("detail.files.created", { name }));
-                await load();
               }}
             >
               {t("detail.files.newFolder")}
@@ -1956,11 +1980,13 @@ function Files({
               size="sm"
               icon={<Upload size={14} />}
               onClick={async () => {
+                let transferStarted = false;
                 try {
                   const local = await open({ multiple: false, directory: false });
                   if (typeof local !== "string" || !local) return;
                   setStatusText(t("detail.files.uploading"));
                   const name = local.split(/[/\\]/).pop() || "file";
+                  transferStarted = true;
                   const r = await DeviceService.uploadFile(
                     serial,
                     local,
@@ -1974,8 +2000,10 @@ function Files({
                   }
                   setStatusText(t("detail.files.uploadDone"));
                   await load();
-                } catch {
-                  /* cancelled */
+                } catch (e) {
+                  if (transferStarted || !isDialogCancellation(e)) {
+                    reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
+                  }
                 }
               }}
             >
@@ -2123,10 +2151,12 @@ function Files({
                           variant="ghost"
                           icon={<Download size={14} />}
                           onClick={async () => {
+                            let transferStarted = false;
                             try {
                               const local = await save({ defaultPath: f.name });
                               if (!local) return;
                               setStatusText(t("detail.files.downloading"));
+                              transferStarted = true;
                               const r = await DeviceService.downloadFile(serial, f.path, local);
                               if (!r.success) {
                                 const reason = (r.stderr || r.stdout || t("detail.files.downloadFailed")).trim();
@@ -2138,8 +2168,10 @@ function Files({
                               if (await askConfirm(t("detail.files.confirmReveal"))) {
                                 await DeviceService.revealInFolder(local);
                               }
-                            } catch {
-                              /* cancelled */
+                            } catch (e) {
+                              if (transferStarted || !isDialogCancellation(e)) {
+                                reportOperationError(e, t("detail.files.downloadFailed"), setStatusText);
+                              }
                             }
                           }}
                         />
@@ -2149,16 +2181,20 @@ function Files({
                         variant="ghost"
                         icon={<Trash2 size={14} />}
                         onClick={async () => {
-                          if (!(await askConfirm(t("detail.files.confirmDelete", { name: f.name })))) return;
-                          const r = await DeviceService.deleteFile(serial, f.path);
-                          if (!r.success) {
-                            const reason = (r.stderr || r.stdout || t("detail.files.deleteFailed")).trim();
-                            setStatusText(reason);
-                            void alert(reason);
-                            return;
+                          try {
+                            if (!(await askConfirm(t("detail.files.confirmDelete", { name: f.name })))) return;
+                            const r = await DeviceService.deleteFile(serial, f.path);
+                            if (!r.success) {
+                              const reason = (r.stderr || r.stdout || t("detail.files.deleteFailed")).trim();
+                              setStatusText(reason);
+                              void alert(reason);
+                              return;
+                            }
+                            setStatusText(t("detail.files.deleted", { name: f.name }));
+                            await load();
+                          } catch (e) {
+                            reportOperationError(e, t("detail.files.deleteFailed"), setStatusText);
                           }
-                          setStatusText(t("detail.files.deleted", { name: f.name }));
-                          await load();
                         }}
                       />
                     </div>
@@ -2306,7 +2342,7 @@ function Apps({
                     void alert(reason);
                   }
                 } catch (e) {
-                  if (e) void alert(String(e));
+                  reportOperationError(e, t("detail.apps.installFailed"), setStatusText);
                 } finally {
                   setInstalling(false);
                 }
@@ -2386,6 +2422,8 @@ function Apps({
                               setStatusText(r.stderr || r.stdout || t("detail.apps.startFailed"));
                               void alert(r.stderr || r.stdout || t("detail.apps.startFailed"));
                             }
+                          } catch (e) {
+                            reportOperationError(e, t("detail.apps.startFailed"), setStatusText);
                           } finally {
                             setAppBusy(null);
                           }
@@ -2408,6 +2446,8 @@ function Apps({
                               setStatusText(r.stderr || r.stdout || t("detail.apps.stopFailed"));
                               void alert(r.stderr || r.stdout || t("detail.apps.stopFailed"));
                             }
+                          } catch (e) {
+                            reportOperationError(e, t("detail.apps.stopFailed"), setStatusText);
                           } finally {
                             setAppBusy(null);
                           }
@@ -2458,6 +2498,8 @@ function Apps({
                                 setStatusText(r.stderr || r.stdout || t("detail.apps.clearFailed"));
                                 void alert(r.stderr || r.stdout || t("detail.apps.clearFailed"));
                               }
+                            }).catch((e) => {
+                              reportOperationError(e, t("detail.apps.clearFailed"), setStatusText);
                             });
                           }
                           if (v === "copy") {
@@ -2477,6 +2519,8 @@ function Apps({
                                 setStatusText(r.stderr || r.stdout || t("detail.apps.uninstallFailed"));
                                 void alert(r.stderr || r.stdout || t("detail.apps.uninstallFailed"));
                               }
+                            }).catch((e) => {
+                              reportOperationError(e, t("detail.apps.uninstallFailed"), setStatusText);
                             });
                           }
                         }}

@@ -14,6 +14,10 @@ vi.mock("../services/deviceService", () => ({
     startContainer: vi.fn(),
     restart: vi.fn(),
     stop: vi.fn(),
+    mkdir: vi.fn(),
+    uploadFile: vi.fn(),
+    deleteFile: vi.fn(),
+    downloadFile: vi.fn(),
     getRootStatus: vi.fn(),
     getLsposedScope: vi.fn(),
     getSuPolicies: vi.fn(),
@@ -23,6 +27,11 @@ vi.mock("../services/deviceService", () => ({
     getAppDetail: vi.fn(),
     getAppPermissions: vi.fn(),
     getAppActivities: vi.fn(),
+    startApp: vi.fn(),
+    stopApp: vi.fn(),
+    clearAppData: vi.fn(),
+    uninstallApp: vi.fn(),
+    installApk: vi.fn(),
     logcat: vi.fn(),
     scrcpyStatus: vi.fn(),
     screenshot: vi.fn(),
@@ -53,6 +62,7 @@ vi.mock("../stores/appStore", () => ({
 
 const { DeviceService } = await import("../services/deviceService");
 const { askConfirm } = await import("../lib/dialogs");
+const { open, save } = await import("@tauri-apps/plugin-dialog");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -168,9 +178,20 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.startContainer).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
+    vi.mocked(DeviceService.mkdir).mockReset();
+    vi.mocked(DeviceService.uploadFile).mockReset();
+    vi.mocked(DeviceService.deleteFile).mockReset();
+    vi.mocked(DeviceService.downloadFile).mockReset();
+    vi.mocked(DeviceService.startApp).mockReset();
+    vi.mocked(DeviceService.stopApp).mockReset();
+    vi.mocked(DeviceService.clearAppData).mockReset();
+    vi.mocked(DeviceService.uninstallApp).mockReset();
+    vi.mocked(DeviceService.installApk).mockReset();
     vi.mocked(askConfirm).mockReset();
     vi.mocked(askConfirm).mockResolvedValue(true);
     vi.stubGlobal("alert", vi.fn());
+    vi.mocked(open).mockReset();
+    vi.mocked(save).mockReset();
     sessionStorage.clear();
   });
 
@@ -550,5 +571,205 @@ describe("DeviceDetail refresh ordering", () => {
     });
 
     expect(alert).toHaveBeenCalledWith("stop unavailable");
+  });
+
+  it("reports a folder creation error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.mkdir).mockRejectedValueOnce(new Error("mkdir unavailable"));
+    vi.stubGlobal("prompt", vi.fn().mockReturnValue("new-folder"));
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "新建" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("mkdir unavailable");
+  });
+
+  it("reports a file deletion error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(DeviceService.deleteFile).mockRejectedValueOnce(new Error("delete unavailable"));
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const trashButton = screen.getAllByRole("button").find((button) => button.querySelector("svg.lucide-trash-2"));
+    expect(trashButton).toBeTruthy();
+    fireEvent.click(trashButton!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("delete unavailable");
+  });
+
+  it("reports a file upload error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
+    vi.mocked(DeviceService.uploadFile).mockRejectedValueOnce(new Error("upload unavailable"));
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("upload unavailable");
+  });
+
+  it("reports a file download error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
+    vi.mocked(DeviceService.downloadFile).mockRejectedValueOnce(new Error("download unavailable"));
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const downloadButton = screen.getAllByRole("button").find((button) => button.querySelector("svg.lucide-download"));
+    expect(downloadButton).toBeTruthy();
+    fireEvent.click(downloadButton!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("download unavailable");
+  });
+
+  it("keeps file upload cancellation silent", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(open).mockRejectedValueOnce(new Error("user canceled"));
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).not.toHaveBeenCalled();
+    expect(DeviceService.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps file download cancellation silent", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockRejectedValueOnce(new Error("user canceled"));
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const downloadButton = screen.getAllByRole("button").find((button) => button.querySelector("svg.lucide-download"));
+    expect(downloadButton).toBeTruthy();
+    fireEvent.click(downloadButton!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).not.toHaveBeenCalled();
+    expect(DeviceService.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("reports an app start error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("测试应用")]);
+    vi.mocked(DeviceService.startApp).mockRejectedValueOnce(new Error("start unavailable"));
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("start unavailable");
+  });
+
+  it("reports an app stop error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("测试应用")]);
+    vi.mocked(DeviceService.stopApp).mockRejectedValueOnce(new Error("stop unavailable"));
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("stop unavailable");
+  });
+
+  it("reports an app data clearing error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("测试应用")]);
+    vi.mocked(DeviceService.clearAppData).mockRejectedValueOnce(new Error("clear unavailable"));
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const appActions = screen.getAllByRole("combobox");
+    fireEvent.change(appActions[appActions.length - 1], { target: { value: "clear" } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("clear unavailable");
+  });
+
+  it("reports an app uninstall error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("测试应用")]);
+    vi.mocked(DeviceService.uninstallApp).mockRejectedValueOnce(new Error("uninstall unavailable"));
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const appActions = screen.getAllByRole("combobox");
+    fireEvent.change(appActions[appActions.length - 1], { target: { value: "uninstall" } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("uninstall unavailable");
   });
 });
