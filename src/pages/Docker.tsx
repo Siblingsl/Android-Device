@@ -9,6 +9,7 @@ import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
 import { DeviceService } from "../services/deviceService";
 import { probeTool } from "../hooks/useToolProbe";
+import { createRequestSequence } from "../lib/requestSequence";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
 import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
@@ -81,6 +82,7 @@ export function DockerPage() {
   const createFormRef = useRef<HTMLDivElement>(null);
   const [portTaken, setPortTaken] = useState(false);
   const [portSuggestion, setPortSuggestion] = useState<number | null>(null);
+  const loadSequence = useRef(createRequestSequence()).current;
 
   const suggestName = async (base: string) => {
     const raw = base.trim() || "redroid";
@@ -204,27 +206,32 @@ export function DockerPage() {
     };
   }, [form.adbPort]);
 
-  const probeTools = async () => {
+  const probeTools = async (token: number) => {
     const [d, a] = await Promise.all([
       probeTool("docker", settings?.dockerPath),
       probeTool("adb", settings?.adbPath),
     ]);
+    if (!loadSequence.isCurrent(token)) return;
     setTools({ docker: d, adb: a });
   };
 
   const load = async () => {
+    const token = loadSequence.begin();
     setLoading(true);
     try {
       const [d, k] = await Promise.all([
         DeviceService.refreshDockerInfo(),
         DeviceService.getWslKernelStatus().catch(() => null),
       ]);
+      if (!loadSequence.isCurrent(token)) return;
       setInfo(d);
       setKernel(k);
-      void probeTools();
+      void probeTools(token);
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       setStatusText(e instanceof Error ? t("docker.refreshFailedWith", { msg: e.message }) : t("docker.refreshFailed"));
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
       setLoading(false);
     }
   };
@@ -294,6 +301,7 @@ export function DockerPage() {
       .catch(() => {
         /* ignore */
       });
+    return () => loadSequence.invalidate();
   }, []);
 
   const run = async (id: string, fn: () => Promise<unknown>, msg: string) => {
