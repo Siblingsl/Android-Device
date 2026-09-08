@@ -2,10 +2,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { save } from "@tauri-apps/plugin-dialog";
 import { Devices } from "./Devices";
 import type { DeviceInfo, ShellResult } from "../types";
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn() }));
 vi.mock("../lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../services/deviceService", () => ({
@@ -16,6 +17,8 @@ vi.mock("../services/deviceService", () => ({
     restart: vi.fn(),
     stop: vi.fn(),
     refreshDevices: vi.fn(),
+    exportLogs: vi.fn(),
+    revealInFolder: vi.fn(),
   },
 }));
 const storeState = vi.hoisted(() => ({
@@ -78,6 +81,9 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.disconnect).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
+    vi.mocked(DeviceService.exportLogs).mockReset();
+    vi.mocked(DeviceService.revealInFolder).mockReset();
+    vi.mocked(save).mockReset();
     vi.mocked(askConfirm).mockReset();
     vi.mocked(copyText).mockReset();
     storeState.setSelectedDeviceId.mockReset();
@@ -87,6 +93,9 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.disconnect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.exportLogs).mockResolvedValue("C:\\exports\\batch.csv");
+    vi.mocked(DeviceService.revealInFolder).mockResolvedValue(undefined);
+    vi.mocked(save).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(askConfirm).mockResolvedValue(true);
     vi.mocked(copyText).mockResolvedValue(undefined);
   });
@@ -193,6 +202,63 @@ describe("Devices batch controls", () => {
     expect(DeviceService.connect).toHaveBeenNthCalledWith(1, "one-serial");
     expect(DeviceService.connect).toHaveBeenNthCalledWith(2, "two-serial");
     expect(DeviceService.connect).toHaveBeenNthCalledWith(3, "one-serial");
+  }, 15_000);
+
+  it("exports batch results as an escaped UTF-8 CSV file", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({
+        success: false,
+        stdout: "",
+        stderr: 'offline, "retry"\nagain',
+        exitCode: 1,
+      })
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    expect(await screen.findByText(/批量 ADB 连接 · 1\/2 成功/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "导出 CSV" }));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith({
+        defaultPath: expect.stringMatching(/^redroid-batch-results-\d{4}-\d{2}-\d{2}\.csv$/),
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      }),
+    );
+    expect(DeviceService.exportLogs).toHaveBeenCalledWith(
+      "C:\\exports\\batch.csv",
+      '\uFEFF设备,设备 ID,结果,说明\r\n设备 one,one,失败,"offline, ""retry""\nagain"\r\n设备 two,two,成功,成功',
+    );
+    expect(DeviceService.revealInFolder).toHaveBeenCalledWith("C:\\exports\\batch.csv");
+  }, 15_000);
+
+  it("copies batch results with a readable text header", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 2\/2 成功/);
+    fireEvent.click(screen.getByRole("button", { name: "复制结果" }));
+
+    await waitFor(() =>
+      expect(copyText).toHaveBeenCalledWith(
+        "设备\t结果\t说明\n设备 one\t成功\t成功\n设备 two\t成功\t成功",
+      ),
+    );
   }, 15_000);
 
   it("disables the refresh button while the device list is loading", async () => {

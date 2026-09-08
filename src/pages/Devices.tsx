@@ -7,8 +7,9 @@ import {
   Package,
   Play,
   RefreshCw,
+  Download,
 } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { createRequestSequence } from "../lib/requestSequence";
@@ -33,6 +34,38 @@ type BatchReport = {
   items: BatchReportItem[];
   retry: { label: string; kind: string; action: BatchAction };
 };
+
+function csvField(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function serializeBatchResultsText(
+  items: BatchReportItem[],
+  headers: readonly [string, string, string],
+  successLabel: string,
+  failedLabel: string,
+): string {
+  return [
+    headers.join("\t"),
+    ...items.map((item) =>
+      [item.name, item.ok ? successLabel : failedLabel, item.detail].join("\t"),
+    ),
+  ].join("\n");
+}
+
+function serializeBatchResultsCsv(
+  items: BatchReportItem[],
+  headers: readonly [string, string, string, string],
+  successLabel: string,
+  failedLabel: string,
+): string {
+  const rows = items.map((item) =>
+    [item.name, item.id, item.ok ? successLabel : failedLabel, item.detail]
+      .map(csvField)
+      .join(","),
+  );
+  return `\uFEFF${headers.map(csvField).join(",")}\r\n${rows.join("\r\n")}`;
+}
 
 function readFilter(): "all" | "online" | "offline" {
   try {
@@ -328,6 +361,40 @@ export function Devices() {
     void batch(label, action, kind, retryDevices);
   };
 
+  const exportBatchCsv = async () => {
+    if (!batchReport) return;
+    try {
+      const path = await save({
+        defaultPath: `redroid-batch-results-${new Date().toISOString().slice(0, 10)}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!path) return;
+      const saved = await DeviceService.exportLogs(
+        path,
+        serializeBatchResultsCsv(
+          batchReport.items,
+          [
+            t("devices.table.device"),
+            t("devices.table.id"),
+            t("devices.table.result"),
+            t("devices.table.detail"),
+          ],
+          t("devices.success"),
+          t("devices.failed"),
+        ),
+      );
+      const outputPath = saved || path;
+      setStatusText(t("devices.exportedBatch", { path: outputPath }));
+      if (await askConfirm(t("devices.revealExportConfirm", { path: outputPath }))) {
+        await DeviceService.revealInFolder(outputPath);
+      }
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      setStatusText(t("devices.exportFailed", { error }));
+      void alert(error);
+    }
+  };
+
   const cancelBatch = () => {
     if (busy !== "batch" || batchCancelRequested.current) return;
     batchCancelRequested.current = true;
@@ -606,11 +673,21 @@ export function Devices() {
               )}
               <Button
                 size="sm"
+                icon={<Download size={14} />}
+                onClick={() => void exportBatchCsv()}
+              >
+                {t("devices.exportCsv")}
+              </Button>
+              <Button
+                size="sm"
                 variant="ghost"
                 onClick={() => {
-                  const text = batchReport.items
-                    .map((it) => `${it.name}\t${it.ok ? t("devices.success") : t("devices.failed")}\t${it.detail}`)
-                    .join("\n");
+                  const text = serializeBatchResultsText(
+                    batchReport.items,
+                    [t("devices.table.device"), t("devices.table.result"), t("devices.table.detail")],
+                    t("devices.success"),
+                    t("devices.failed"),
+                  );
                   void copyText(text).then(
                     () => setStatusText(t("devices.copiedBatch")),
                     () => setStatusText(t("common.panel.copyFailed")),
