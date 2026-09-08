@@ -43,6 +43,21 @@ type BatchReport = BatchHistoryItem & {
 };
 
 type BatchResultFilter = "all" | "success" | "failed";
+type BatchFailureReason = "offline" | "unauthorized" | "timeout" | "skipped" | "other";
+type BatchReasonFilter = "all" | BatchFailureReason;
+
+function classifyBatchFailure(detail: string): BatchFailureReason {
+  const normalized = detail.trim().toLowerCase();
+  if (/未执行|not executed|stopped by user/.test(normalized)) return "skipped";
+  if (/unauthorized|unauth|未授权/.test(normalized)) return "unauthorized";
+  if (/timeout|timed out|超时/.test(normalized)) return "timeout";
+  if (
+    /offline|not ready|未就绪|no devices|device not found|找不到设备|离线/.test(normalized)
+  ) {
+    return "offline";
+  }
+  return "other";
+}
 
 function isBatchReportItem(value: unknown): value is BatchReportItem {
   if (!value || typeof value !== "object") return false;
@@ -164,6 +179,7 @@ export function Devices() {
   const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
   const [batchHistory, setBatchHistory] = useState<BatchHistoryItem[]>(readBatchHistory);
   const [batchFilter, setBatchFilter] = useState<BatchResultFilter>("all");
+  const [batchReasonFilter, setBatchReasonFilter] = useState<BatchReasonFilter>("all");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{
     label: string;
@@ -412,6 +428,7 @@ export function Devices() {
         retry: { label, kind, action: fn },
       });
       setBatchFilter("all");
+      setBatchReasonFilter("all");
       setBatchHistory((history) => [
         historyEntry,
         ...history.filter((entry) => entry.id !== historyEntry.id),
@@ -441,6 +458,7 @@ export function Devices() {
     const { label, kind, action } = batchReport.retry;
     setBatchReport(null);
     setBatchFilter("all");
+    setBatchReasonFilter("all");
     void batch(label, action, kind, retryDevices);
   };
 
@@ -514,12 +532,33 @@ export function Devices() {
   };
 
   const visibleBatchItems = batchReport
-    ? batchReport.items.filter((item) =>
-        batchFilter === "all" || (batchFilter === "success" ? item.ok : !item.ok),
-      )
+    ? batchReport.items.filter((item) => {
+        const statusMatches =
+          batchFilter === "all" || (batchFilter === "success" ? item.ok : !item.ok);
+        const reasonMatches =
+          batchReasonFilter === "all" ||
+          (!item.ok && classifyBatchFailure(item.detail) === batchReasonFilter);
+        return statusMatches && reasonMatches;
+      })
     : [];
   const failedBatchItems = batchReport?.items.filter((item) => !item.ok) ?? [];
   const successfulBatchCount = batchReport?.items.filter((item) => item.ok).length ?? 0;
+  const batchFailureReasonLabel = (reason: BatchFailureReason) => {
+    switch (reason) {
+      case "offline":
+        return t("devices.batch.reasonOffline");
+      case "unauthorized":
+        return t("devices.batch.reasonUnauthorized");
+      case "timeout":
+        return t("devices.batch.reasonTimeout");
+      case "skipped":
+        return t("devices.batch.reasonSkipped");
+      default:
+        return t("devices.batch.reasonOther");
+    }
+  };
+  const batchFailureReasonCount = (reason: BatchFailureReason) =>
+    failedBatchItems.filter((item) => classifyBatchFailure(item.detail) === reason).length;
 
   return (
     <div>
@@ -583,6 +622,7 @@ export function Devices() {
                     onClick={() => {
                       setBatchReport(entry);
                       setBatchFilter("all");
+                      setBatchReasonFilter("all");
                       setHistoryOpen(false);
                     }}
                   >
@@ -939,6 +979,33 @@ export function Devices() {
               <option value="success">{t("devices.batch.resultSuccess")}</option>
               <option value="failed">{t("devices.batch.resultFailed")}</option>
             </select>
+            {failedBatchItems.length > 0 && (
+              <select
+                aria-label={t("devices.batch.reasonFilter")}
+                value={batchReasonFilter}
+                onChange={(e) => setBatchReasonFilter(e.target.value as BatchReasonFilter)}
+                style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
+              >
+                <option value="all">{t("devices.batch.reasonAll")}</option>
+                <option value="offline">
+                  {t("devices.batch.reasonOfflineCount", { n: batchFailureReasonCount("offline") })}
+                </option>
+                <option value="unauthorized">
+                  {t("devices.batch.reasonUnauthorizedCount", {
+                    n: batchFailureReasonCount("unauthorized"),
+                  })}
+                </option>
+                <option value="timeout">
+                  {t("devices.batch.reasonTimeoutCount", { n: batchFailureReasonCount("timeout") })}
+                </option>
+                <option value="skipped">
+                  {t("devices.batch.reasonSkippedCount", { n: batchFailureReasonCount("skipped") })}
+                </option>
+                <option value="other">
+                  {t("devices.batch.reasonOtherCount", { n: batchFailureReasonCount("other") })}
+                </option>
+              </select>
+            )}
           </div>
           <table className="table">
             <thead>
@@ -974,7 +1041,12 @@ export function Devices() {
                     </td>
                     <td className={it.ok ? "ok" : "bad"}>{it.ok ? t("devices.success") : t("devices.failed")}</td>
                     <td className="mono" style={{ fontSize: 11, wordBreak: "break-all" }}>
-                      {it.detail}
+                      <div>{it.detail}</div>
+                      {!it.ok && (
+                        <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+                          {batchFailureReasonLabel(classifyBatchFailure(it.detail))}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))

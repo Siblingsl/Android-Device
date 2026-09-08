@@ -142,6 +142,7 @@ describe("Devices batch controls", () => {
 
     expect(DeviceService.connect).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/未执行/)).toBeTruthy();
+    expect(await screen.findByText("用户停止")).toBeTruthy();
     expect(await screen.findByText(/批量 ADB 连接 已停止 · 1\/2 成功/)).toBeTruthy();
   }, 15_000);
 
@@ -390,6 +391,90 @@ describe("Devices batch controls", () => {
     expect(screen.getByRole("button", { name: "重试失败" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "导出 CSV" })).toBeTruthy();
   }, 15_000);
+
+  it("classifies failed batch results with actionable reason labels", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      device("one"),
+      device("two"),
+      device("three"),
+    ]);
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device unauthorized", exitCode: 1 })
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "command timed out", exitCode: 1 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    checkboxes.forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 0\/3 成功/);
+    expect(screen.getByRole("combobox", { name: "失败原因" })).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 one 失败 device offline 设备离线\/未就绪/ })).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 two 失败 device unauthorized 未授权/ })).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 three 失败 command timed out 超时/ })).toBeTruthy();
+  }, 15_000);
+
+  it("combines failure reason and result filters without changing retry scope", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device unauthorized", exitCode: 1 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    checkboxes.forEach((checkbox) => fireEvent.click(checkbox));
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 0\/2 成功/);
+    fireEvent.change(screen.getByRole("combobox", { name: "失败原因" }), {
+      target: { value: "offline" },
+    });
+
+    expect(screen.getByText("当前显示 1/2 条")).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 one 失败 device offline/ })).toBeTruthy();
+    expect(screen.queryByRole("row", { name: /设备 two 失败 device unauthorized/ })).toBeNull();
+
+    fireEvent.change(screen.getByRole("combobox", { name: "结果筛选" }), {
+      target: { value: "success" },
+    });
+    expect(screen.getByText("当前筛选下没有结果")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试失败" })).toBeTruthy();
+  }, 15_000);
+
+  it("derives failure reasons when opening legacy historical results", async () => {
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([
+        {
+          id: "legacy-failure",
+          title: "历史失败结果",
+          kind: "connect",
+          createdAt: Date.now(),
+          items: [{ id: "device-legacy", name: "历史设备", ok: false, detail: "device unauthorized" }],
+        },
+      ]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+
+    expect(await screen.findByRole("combobox", { name: "失败原因" })).toBeTruthy();
+    expect(screen.getByRole("row", { name: /历史设备 失败 device unauthorized 未授权/ })).toBeTruthy();
+  });
 
   it("selects and deselects visible online devices without clearing other picks", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
