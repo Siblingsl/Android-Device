@@ -147,8 +147,20 @@ export function Devices() {
     setBusy(id);
     setStatusText(msg);
     try {
-      await action();
+      const result = await action();
       await load({ silent: true });
+      if (
+        result &&
+        typeof result === "object" &&
+        "success" in result &&
+        (result as { success?: boolean }).success === false
+      ) {
+        const shellResult = result as { stderr?: string; stdout?: string };
+        const err = shellResult.stderr?.trim() || shellResult.stdout?.trim() || t("devices.status.actionFailed");
+        setStatusText(err);
+        void alert(err);
+        return;
+      }
       setStatusText(okMsg);
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e);

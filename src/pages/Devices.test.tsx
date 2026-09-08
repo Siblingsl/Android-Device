@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { Devices } from "./Devices";
@@ -10,6 +10,7 @@ vi.mock("../services/deviceService", () => ({
   DeviceService: {
     listDevices: vi.fn(),
     connect: vi.fn(),
+    restart: vi.fn(),
     refreshDevices: vi.fn(),
   },
 }));
@@ -68,10 +69,12 @@ describe("Devices batch controls", () => {
     sessionStorage.clear();
     vi.mocked(DeviceService.listDevices).mockReset();
     vi.mocked(DeviceService.connect).mockReset();
+    vi.mocked(DeviceService.restart).mockReset();
     storeState.setSelectedDeviceId.mockReset();
     storeState.setStatusText.mockReset();
     vi.mocked(DeviceService.listDevices).mockResolvedValue([device("one"), device("two")]);
     vi.mocked(DeviceService.connect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
   });
 
   afterEach(() => {
@@ -124,4 +127,29 @@ describe("Devices batch controls", () => {
     expect(DeviceService.connect).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/未执行/)).toBeNull();
   }, 15_000);
+
+  it("shows the backend error when restarting one device fails", async () => {
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    vi.mocked(DeviceService.restart).mockResolvedValue({
+      success: false,
+      stdout: "",
+      stderr: "restart unavailable",
+      exitCode: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "restart" } });
+
+    await waitFor(() => expect(DeviceService.restart).toHaveBeenCalledWith("one"));
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("restart unavailable"));
+    expect(storeState.setStatusText).toHaveBeenCalledWith("restart unavailable");
+    expect(storeState.setStatusText).not.toHaveBeenCalledWith("就绪");
+  });
 });
