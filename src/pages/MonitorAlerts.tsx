@@ -60,6 +60,10 @@ export function MonitorAlertsPage() {
   const trend = buildMonitorAlertTrend(filteredAlerts, Date.now());
   const trendMax = Math.max(1, ...trend.map((point) => point.warning + point.critical));
   const hasTrendData = trend.some((point) => point.warning > 0 || point.critical > 0);
+  const selectedDayLabel =
+    typeof filters.dayStart === "number" && Number.isFinite(filters.dayStart)
+      ? new Date(filters.dayStart).toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" })
+      : "";
   const deviceSummaries = useMemo(
     () => summarizeMonitorAlertsByDevice(filteredAlerts, Date.now()),
     [filteredAlerts],
@@ -225,6 +229,7 @@ export function MonitorAlertsPage() {
                 setFilters((current) => ({
                   ...current,
                   timeRange: e.target.value as MonitorAlertFilter["timeRange"],
+                  dayStart: undefined,
                 }))
               }
             >
@@ -235,6 +240,17 @@ export function MonitorAlertsPage() {
           </label>
         </div>
         <div className="monitor-alert-filter-result">{t("monitor.filter.result", { n: filteredAlerts.length })}</div>
+        {selectedDayLabel ? (
+          <div className="monitor-alert-filter-day">
+            <span>{t("monitor.filter.selectedDay", { date: selectedDayLabel })}</span>
+            <button
+              type="button"
+              onClick={() => setFilters((current) => ({ ...current, dayStart: undefined }))}
+            >
+              {t("monitor.filter.clearDay")}
+            </button>
+          </div>
+        ) : null}
       </Card>
 
       <Card
@@ -250,12 +266,24 @@ export function MonitorAlertsPage() {
               <span><i className="warning" />{t("monitor.severity.warning")}</span>
               <span><i className="critical" />{t("monitor.severity.critical")}</span>
             </div>
-            <div className="monitor-alert-trend" role="img" aria-label={t("monitor.card.trend")}>
+            <div className="monitor-alert-trend" role="group" aria-label={t("monitor.card.trend")}>
               {trend.map((point) => {
                 const day = new Date(point.dayStart);
                 const label = day.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
                 return (
-                  <div className="monitor-alert-trend-column" key={point.dayStart}>
+                  <button
+                    type="button"
+                    className={`monitor-alert-trend-column${filters.dayStart === point.dayStart ? " selected" : ""}`}
+                    aria-pressed={filters.dayStart === point.dayStart}
+                    title={t("monitor.trend.selectDay", { date: label })}
+                    onClick={() =>
+                      setFilters((current) => ({
+                        ...current,
+                        dayStart: current.dayStart === point.dayStart ? undefined : point.dayStart,
+                      }))
+                    }
+                    key={point.dayStart}
+                  >
                     <div className="monitor-alert-trend-bars">
                       <div
                         className="monitor-alert-trend-bar warning"
@@ -271,7 +299,7 @@ export function MonitorAlertsPage() {
                       </div>
                     </div>
                     <span className="monitor-alert-trend-label">{label}</span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -295,9 +323,10 @@ export function MonitorAlertsPage() {
               <span role="columnheader">{t("monitor.deviceComparison.peak")}</span>
             </div>
             {deviceSummaries.map((summary) => {
-              const peakLabel = summary.peakDayStart === null
+              const peakDayStart = summary.peakDayStart;
+              const peakLabel = peakDayStart === null
                 ? "—"
-                : new Date(summary.peakDayStart).toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+                : new Date(peakDayStart).toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
               return (
                 <div className="monitor-alert-device-row" role="row" key={summary.deviceId}>
                   <div className="monitor-alert-device-name" role="cell">
@@ -308,11 +337,26 @@ export function MonitorAlertsPage() {
                     >
                       {summary.deviceName}
                     </button>
-                    {summary.peakIsAnomaly ? (
-                      <span className="monitor-alert-device-peak-badge" title={t("monitor.deviceComparison.peakHint")}>
+                    {summary.peakIsAnomaly && peakDayStart !== null ? (
+                      <button
+                        type="button"
+                        className="monitor-alert-device-peak-badge"
+                        title={t("monitor.deviceComparison.peakHint")}
+                        aria-label={t("monitor.deviceComparison.selectPeak", {
+                          device: summary.deviceName,
+                          date: peakLabel,
+                        })}
+                        onClick={() =>
+                          setFilters((current) => ({
+                            ...current,
+                            deviceId: summary.deviceId,
+                            dayStart: peakDayStart,
+                          }))
+                        }
+                      >
                         <AlertTriangle size={11} />
                         {t("monitor.deviceComparison.peak")}
-                      </span>
+                      </button>
                     ) : null}
                   </div>
                   <span

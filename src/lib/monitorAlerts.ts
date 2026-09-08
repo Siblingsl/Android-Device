@@ -16,6 +16,7 @@ export interface MonitorAlertFilter {
   kind: MonitorAlertKind | "all";
   severity?: MonitorAlertSeverity | "all";
   timeRange: MonitorAlertTimeRange;
+  dayStart?: number;
 }
 
 export interface MonitorAlertSummary {
@@ -312,8 +313,24 @@ export function filterMonitorAlerts(
   filter: MonitorAlertFilter,
   now: number,
 ): MonitorAlert[] {
+  const exactDay =
+    typeof filter.dayStart === "number" && Number.isFinite(filter.dayStart)
+      ? new Date(filter.dayStart)
+      : null;
+  exactDay?.setHours(0, 0, 0, 0);
+  const exactDayStart = exactDay?.getTime() ?? null;
+  const exactDayEnd =
+    exactDayStart === null
+      ? null
+      : (() => {
+          const nextDay = new Date(exactDayStart);
+          nextDay.setDate(nextDay.getDate() + 1);
+          return nextDay.getTime();
+        })();
   const cutoff =
-    filter.timeRange === "24h"
+    exactDayStart !== null
+      ? null
+      : filter.timeRange === "24h"
       ? now - 24 * 60 * 60 * 1_000
       : filter.timeRange === "7d"
         ? now - 7 * 24 * 60 * 60 * 1_000
@@ -327,6 +344,11 @@ export function filterMonitorAlerts(
         !filter.severity ||
         filter.severity === "all" ||
         (alert.severity ?? "warning") === filter.severity,
+    )
+    .filter(
+      (alert) =>
+        exactDayStart === null ||
+        (exactDayEnd !== null && alert.createdAt >= exactDayStart && alert.createdAt < exactDayEnd),
     )
     .filter((alert) => cutoff === null || alert.createdAt >= cutoff)
     .sort((a, b) => b.createdAt - a.createdAt);

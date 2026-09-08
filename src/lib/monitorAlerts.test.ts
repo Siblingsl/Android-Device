@@ -157,6 +157,27 @@ describe("filterMonitorAlerts", () => {
       ),
     ).toHaveLength(4);
   });
+
+  it("filters an exact local calendar day while keeping adjacent days out", () => {
+    const dayStart = new Date(2026, 8, 8).getTime();
+    const sameDay = {
+      id: "same-day",
+      deviceId: "device-a",
+      deviceName: "Device A",
+      kind: "cpu" as const,
+      createdAt: new Date(2026, 8, 8, 18, 0).getTime(),
+    };
+    const nextDay = { ...sameDay, id: "next-day", createdAt: new Date(2026, 8, 9, 0, 0).getTime() };
+    const previousDay = { ...sameDay, id: "previous-day", createdAt: new Date(2026, 8, 7, 23, 59).getTime() };
+
+    expect(
+      filterMonitorAlerts(
+        [sameDay, nextDay, previousDay],
+        { deviceId: "all", kind: "all", timeRange: "24h", dayStart },
+        new Date(2026, 8, 10, 12, 0).getTime(),
+      ),
+    ).toEqual([sameDay]);
+  });
 });
 
 describe("monitor alert summaries and trend", () => {
