@@ -408,6 +408,10 @@ export function DeviceDetail() {
                     autoTried.current = "";
                     const d = await load();
                     await connectIfNeeded(d ?? device);
+                  } catch (e) {
+                    const reason = e instanceof Error ? e.message : t("detail.status.startFailed");
+                    setStatusText(reason);
+                    void alert(reason);
                   } finally {
                     setConnecting(false);
                   }
@@ -443,11 +447,17 @@ export function DeviceDetail() {
                 if (!(await askConfirm(t("detail.confirm.restart", { name: device.name })))) return;
                 void (async () => {
                   setStatusText(t("detail.status.restarting"));
-                  const r = await DeviceService.restart(deviceId);
-                  setStatusText(r.success ? t("detail.status.restartSent") : r.stderr || t("detail.status.restartFailed"));
-                  if (r.success) {
-                    autoTried.current = "";
-                    window.setTimeout(() => void load(), 3000);
+                  try {
+                    const r = await DeviceService.restart(deviceId);
+                    setStatusText(r.success ? t("detail.status.restartSent") : r.stderr || t("detail.status.restartFailed"));
+                    if (r.success) {
+                      autoTried.current = "";
+                      window.setTimeout(() => void load(), 3000);
+                    }
+                  } catch (e) {
+                    const reason = e instanceof Error ? e.message : t("detail.status.restartFailed");
+                    setStatusText(reason);
+                    void alert(reason);
                   }
                 })();
               }
@@ -455,9 +465,15 @@ export function DeviceDetail() {
                 if (!(await askConfirm(t("detail.confirm.stop", { name: device.name })))) return;
                 void (async () => {
                   setStatusText(t("detail.status.stopping"));
-                  const r = await DeviceService.stop(deviceId);
-                  setStatusText(r.success ? t("detail.status.stopped") : r.stderr || t("detail.status.stopFailed"));
-                  await load();
+                  try {
+                    const r = await DeviceService.stop(deviceId);
+                    setStatusText(r.success ? t("detail.status.stopped") : r.stderr || t("detail.status.stopFailed"));
+                    await load();
+                  } catch (e) {
+                    const reason = e instanceof Error ? e.message : t("detail.status.stopFailed");
+                    setStatusText(reason);
+                    void alert(reason);
+                  }
                 })();
               }
             }}

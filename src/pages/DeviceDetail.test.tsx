@@ -11,6 +11,9 @@ vi.mock("../services/deviceService", () => ({
   DeviceService: {
     getDevice: vi.fn(),
     listDevices: vi.fn(),
+    startContainer: vi.fn(),
+    restart: vi.fn(),
+    stop: vi.fn(),
     getRootStatus: vi.fn(),
     getLsposedScope: vi.fn(),
     getSuPolicies: vi.fn(),
@@ -49,6 +52,7 @@ vi.mock("../stores/appStore", () => ({
 }));
 
 const { DeviceService } = await import("../services/deviceService");
+const { askConfirm } = await import("../lib/dialogs");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -161,11 +165,18 @@ describe("DeviceDetail refresh ordering", () => {
       error: "unavailable",
     });
     vi.mocked(DeviceService.getDevice).mockReset();
+    vi.mocked(DeviceService.startContainer).mockReset();
+    vi.mocked(DeviceService.restart).mockReset();
+    vi.mocked(DeviceService.stop).mockReset();
+    vi.mocked(askConfirm).mockReset();
+    vi.mocked(askConfirm).mockResolvedValue(true);
+    vi.stubGlobal("alert", vi.fn());
     sessionStorage.clear();
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -476,5 +487,68 @@ describe("DeviceDetail refresh ordering", () => {
       await Promise.resolve();
     });
     expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("reports a container start error and releases the busy state", async () => {
+    const offlineDevice = {
+      ...device("device-1"),
+      online: false,
+      adbStatus: "offline",
+      containerId: "container-1",
+    };
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(offlineDevice);
+    vi.mocked(DeviceService.startContainer).mockRejectedValueOnce(new Error("docker unavailable"));
+
+    renderDetail("overview");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "启动容器" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("docker unavailable");
+    expect((screen.getByRole("button", { name: "启动容器" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("reports a restart error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.restart).mockRejectedValueOnce(new Error("restart unavailable"));
+
+    renderDetail("overview");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "restart" } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("restart unavailable");
+  });
+
+  it("reports a stop error instead of leaving an unhandled rejection", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.stop).mockRejectedValueOnce(new Error("stop unavailable"));
+
+    renderDetail("overview");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "stop" } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith("stop unavailable");
   });
 });
