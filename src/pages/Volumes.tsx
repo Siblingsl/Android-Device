@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Database, RefreshCw, Smartphone, Trash2 } from "lucide-react";
 import { copyText } from "../lib/clipboard";
 import { Card } from "../components/ui/Card";
 import { askConfirm } from "../lib/dialogs";
+import { createRequestSequence } from "../lib/requestSequence";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
 import { DeviceService } from "../services/deviceService";
@@ -36,27 +37,35 @@ export function VolumesPage() {
   const dockerPath = useAppStore((s) => s.settings?.dockerPath);
   const navigate = useNavigate();
   const { t } = useI18n();
+  const loadSequence = useRef(createRequestSequence()).current;
 
   const load = async () => {
+    const token = loadSequence.begin();
     setLoading(true);
     try {
       const probe = await probeTool("docker", dockerPath);
+      if (!loadSequence.isCurrent(token)) return;
       setDocker(probe);
       if (probe.ok) {
-        setVolumes(await DeviceService.listVolumes());
+        const next = await DeviceService.listVolumes();
+        if (!loadSequence.isCurrent(token)) return;
+        setVolumes(next);
       } else {
         setVolumes([]);
       }
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       const msg = e instanceof Error ? e.message : String(e);
       setStatusText(t("volumes.refreshFailedWith", { msg }));
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
       setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
+    return () => loadSequence.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
