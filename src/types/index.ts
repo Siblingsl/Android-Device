@@ -232,6 +232,8 @@ export interface AppSettings {
   createAutoStart?: boolean;
   createStayOnForm?: boolean;
   createWaitAdb?: boolean;
+  resourceAlertThreshold: number;
+  deviceRefreshIntervalSecs: number;
 }
 
 export interface DashboardData {

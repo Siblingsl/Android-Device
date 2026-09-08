@@ -36,6 +36,7 @@ import {
   type ControlFeedbackStatus,
 } from "../lib/controlFeedback";
 import { appendResourceSample, type ResourceSample } from "../lib/resourceMetrics";
+import { normalizeMonitorPreferences } from "../lib/monitorPreferences";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
@@ -60,6 +61,7 @@ export function DeviceDetail() {
   const deviceId = decodeURIComponent(id);
   const navigate = useNavigate();
   const setStatusText = useAppStore((s) => s.setStatusText);
+  const appSettings = useAppStore((s) => s.settings);
   const { t } = useI18n();
   const tabs: Tab[] = ["overview", "control", "files", "apps", "logs", "settings"];
   const [tab, setTab] = useState<Tab>(() => {
@@ -80,6 +82,10 @@ export function DeviceDetail() {
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
+  const monitorPreferences = normalizeMonitorPreferences(
+    appSettings?.resourceAlertThreshold,
+    appSettings?.deviceRefreshIntervalSecs,
+  );
 
   const load = async (silent = false) => {
     if (refreshInFlight.current) return device;
@@ -175,9 +181,12 @@ export function DeviceDetail() {
 
   useEffect(() => {
     if (!device || !autoRefresh) return;
-    const timer = window.setInterval(() => void load(true), 10000);
+    const timer = window.setInterval(
+      () => void load(true),
+      monitorPreferences.refreshIntervalSecs * 1000,
+    );
     return () => window.clearInterval(timer);
-  }, [autoRefresh, deviceId, device !== null]);
+  }, [autoRefresh, deviceId, device !== null, monitorPreferences.refreshIntervalSecs]);
 
   if (loading && !device) {
     return (
@@ -360,6 +369,7 @@ export function DeviceDetail() {
             lastUpdatedAt={lastUpdatedAt}
             refreshError={refreshError}
             metricHistory={metricHistory}
+            alertThreshold={monitorPreferences.alertThreshold}
             autoRefresh={autoRefresh}
             onAutoRefreshChange={setAutoRefresh}
             onRefresh={() => void load()}

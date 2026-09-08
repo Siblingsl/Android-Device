@@ -630,6 +630,10 @@ a {
   border-radius: 10px;
   background: var(--bg-hover);
 }
+.device-monitor-runtime-card.warning {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.06);
+}
 .device-monitor-runtime-head {
   display: flex;
   align-items: baseline;
@@ -642,6 +646,7 @@ a {
   white-space: nowrap;
   font-size: 14px;
 }
+.device-monitor-runtime-value.warning { color: var(--warning); }
 .device-monitor-runtime-source {
   color: var(--text-muted);
   font-size: 10px;

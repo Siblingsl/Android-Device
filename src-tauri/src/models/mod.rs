@@ -251,6 +251,18 @@ pub struct AppSettings {
     /// Default for create form: wait until ADB boot_completed.
     #[serde(default = "default_true")]
     pub create_wait_adb: bool,
+    #[serde(default = "default_resource_alert_threshold")]
+    pub resource_alert_threshold: f64,
+    #[serde(default = "default_device_refresh_interval_secs")]
+    pub device_refresh_interval_secs: u64,
+}
+
+fn default_resource_alert_threshold() -> f64 {
+    80.0
+}
+
+fn default_device_refresh_interval_secs() -> u64 {
+    10
 }
 
 impl Default for AppSettings {
@@ -279,6 +291,8 @@ impl Default for AppSettings {
             create_auto_start: false,
             create_stay_on_form: false,
             create_wait_adb: true,
+            resource_alert_threshold: default_resource_alert_threshold(),
+            device_refresh_interval_secs: default_device_refresh_interval_secs(),
         }
     }
 }

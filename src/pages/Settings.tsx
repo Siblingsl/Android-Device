@@ -9,6 +9,7 @@ import { DeviceService } from "../services/deviceService";
 import { useToolProbe } from "../hooks/useToolProbe";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
+import { normalizeMonitorPreferences } from "../lib/monitorPreferences";
 import type { AppSettings } from "../types";
 
 const PATH_FIELDS = [
@@ -89,6 +90,11 @@ export function SettingsPage() {
     return <div className="empty-state">{t("settings.loading")}</div>;
   }
 
+  const monitorPreferences = normalizeMonitorPreferences(
+    form.resourceAlertThreshold,
+    form.deviceRefreshIntervalSecs,
+  );
+
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setForm({ ...form, [key]: value });
   };
@@ -129,8 +135,14 @@ export function SettingsPage() {
           disabled={!dirty}
           onClick={async () => {
             const live = new Set(devices.map((d) => d.id));
+            const monitor = normalizeMonitorPreferences(
+              form.resourceAlertThreshold,
+              form.deviceRefreshIntervalSecs,
+            );
             const cleaned = {
               ...form,
+              resourceAlertThreshold: monitor.alertThreshold,
+              deviceRefreshIntervalSecs: monitor.refreshIntervalSecs,
               autoStartDeviceIds: (form.autoStartDeviceIds ?? []).filter((id) => live.has(id)),
             };
             setForm(cleaned);
@@ -293,6 +305,47 @@ export function SettingsPage() {
           </div>
         </Card>
       </div>
+
+      <Card title={t("settings.card.monitor")} className="settings-monitor-card">
+        <div className="form-grid">
+          <div className="field">
+            <label>{t("settings.resourceAlertThreshold")}</label>
+            <div className="row">
+              <input
+                type="number"
+                min={50}
+                max={100}
+                step={1}
+                value={monitorPreferences.alertThreshold}
+                onChange={(e) => set("resourceAlertThreshold", Number(e.target.value))}
+                onBlur={() => set("resourceAlertThreshold", monitorPreferences.alertThreshold)}
+              />
+              <span className="muted">%</span>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              {t("settings.resourceAlertThresholdHint")}
+            </div>
+          </div>
+          <div className="field">
+            <label>{t("settings.deviceRefreshInterval")}</label>
+            <div className="row">
+              <input
+                type="number"
+                min={5}
+                max={60}
+                step={1}
+                value={monitorPreferences.refreshIntervalSecs}
+                onChange={(e) => set("deviceRefreshIntervalSecs", Number(e.target.value))}
+                onBlur={() => set("deviceRefreshIntervalSecs", monitorPreferences.refreshIntervalSecs)}
+              />
+              <span className="muted">{t("settings.seconds")}</span>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              {t("settings.deviceRefreshIntervalHint")}
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <Card title={t("settings.card.autoStart")}>
         <label className="row" style={{ marginBottom: 12 }}>

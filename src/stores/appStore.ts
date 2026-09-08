@@ -163,6 +163,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             createAutoStart: false,
             createStayOnForm: false,
             createWaitAdb: true,
+            resourceAlertThreshold: 80,
+            deviceRefreshIntervalSecs: 10,
           },
         });
       }

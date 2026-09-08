@@ -5,6 +5,7 @@ import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { summarizeDeviceHealth, type DeviceHealthState } from "../../lib/deviceMonitor";
 import type { ResourceSample } from "../../lib/resourceMetrics";
+import { resourceAlertFor, type ResourceAlert } from "../../lib/monitorPreferences";
 
 interface Props {
   device: DeviceInfo;
@@ -12,6 +13,7 @@ interface Props {
   lastUpdatedAt: number | null;
   refreshError: string | null;
   metricHistory: ResourceSample[];
+  alertThreshold: number;
   autoRefresh: boolean;
   onAutoRefreshChange: (enabled: boolean) => void;
   onRefresh: () => void;
@@ -30,6 +32,7 @@ export function DeviceHealthPanel({
   lastUpdatedAt,
   refreshError,
   metricHistory,
+  alertThreshold,
   autoRefresh,
   onAutoRefreshChange,
   onRefresh,
@@ -55,6 +58,7 @@ export function DeviceHealthPanel({
       : device.resourceSource === "android"
         ? t("detail.monitor.source.android")
         : t("detail.monitor.source.none");
+  const resourceAlert = resourceAlertFor(cpuUsage, memoryUsage, alertThreshold);
   const updatedLabel = lastUpdatedAt
     ? t("detail.monitor.updatedAt", { time: new Date(lastUpdatedAt).toLocaleTimeString() })
     : t("detail.monitor.notUpdated");
@@ -68,6 +72,7 @@ export function DeviceHealthPanel({
         : health.state === "container"
           ? t("detail.monitor.alert.container")
           : null;
+  const resourceAlertMessage = resourceAlertMessageFor(resourceAlert, t, alertThreshold);
 
   return (
     <Card
@@ -110,6 +115,13 @@ export function DeviceHealthPanel({
         </div>
       )}
 
+      {resourceAlertMessage && (
+        <div className="notice device-monitor-alert warn" role="alert">
+          <AlertTriangle size={15} />
+          <span>{resourceAlertMessage}</span>
+        </div>
+      )}
+
       <div className="device-monitor-runtime">
         <RuntimeMetric
           label={t("detail.monitor.runtime.cpu")}
@@ -118,6 +130,7 @@ export function DeviceHealthPanel({
           samples={metricHistory}
           sampleKey="cpuUsage"
           source={resourceSource}
+          alertThreshold={alertThreshold}
         />
         <RuntimeMetric
           label={t("detail.monitor.runtime.memory")}
@@ -126,6 +139,7 @@ export function DeviceHealthPanel({
           samples={metricHistory}
           sampleKey="memoryUsage"
           source={resourceSource}
+          alertThreshold={alertThreshold}
         />
       </div>
 
@@ -165,6 +179,17 @@ export function DeviceHealthPanel({
   );
 }
 
+function resourceAlertMessageFor(
+  alert: ResourceAlert,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  threshold: number,
+) {
+  if (alert === "cpu") return t("detail.monitor.alert.resourceCpu", { threshold });
+  if (alert === "memory") return t("detail.monitor.alert.resourceMemory", { threshold });
+  if (alert === "both") return t("detail.monitor.alert.resourceBoth", { threshold });
+  return null;
+}
+
 function RuntimeMetric({
   label,
   value,
@@ -172,6 +197,7 @@ function RuntimeMetric({
   samples,
   sampleKey,
   source,
+  alertThreshold,
 }: {
   label: string;
   value: string;
@@ -179,13 +205,15 @@ function RuntimeMetric({
   samples: ResourceSample[];
   sampleKey: "cpuUsage" | "memoryUsage";
   source: string;
+  alertThreshold: number;
 }) {
   const points = samples.slice(-12);
+  const warning = usage !== null && usage >= alertThreshold;
   return (
-    <div className="device-monitor-runtime-card">
+    <div className={`device-monitor-runtime-card ${warning ? "warning" : ""}`}>
       <div className="device-monitor-runtime-head">
         <span className="device-monitor-label">{label}</span>
-        <strong className="device-monitor-runtime-value">{value}</strong>
+        <strong className={`device-monitor-runtime-value ${warning ? "warning" : ""}`}>{value}</strong>
       </div>
       <div className="device-monitor-runtime-source">{source}</div>
       <div className="device-monitor-trend" aria-label={label}>
