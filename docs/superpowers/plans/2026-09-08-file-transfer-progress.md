@@ -137,7 +137,7 @@ pub async fn upload_file_tracked(
     local: String,
     remote: String,
     operation_id: String,
-) -> ShellResult;
+) -> Result<ShellResult, String>;
 
 pub async fn download_file_tracked(
     app: tauri::AppHandle,
@@ -146,7 +146,7 @@ pub async fn download_file_tracked(
     remote: String,
     local: String,
     operation_id: String,
-) -> ShellResult;
+) -> Result<ShellResult, String>;
 
 pub fn cancel_file_transfer(
     registry: tauri::State<'_, TransferRegistry>,

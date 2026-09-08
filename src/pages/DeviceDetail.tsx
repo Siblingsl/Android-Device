@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { askConfirm } from "../lib/dialogs";
 import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { copyText } from "../lib/clipboard";
 import { createRequestSequence } from "../lib/requestSequence";
 import {
@@ -65,6 +66,7 @@ import type {
   MonitorQuietHours,
   RootStatus,
   SuPolicyEntry,
+  FileTransferProgress,
 } from "../types";
 
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
@@ -72,8 +74,14 @@ type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
 type PreviewOutcome = { success: boolean; message: string };
 type FileTransferState = {
   kind: "upload" | "download";
-  id: string;
+  operationId: string;
+  target: string;
   label: string;
+  status: FileTransferProgress["status"];
+  bytesTransferred: number | null;
+  totalBytes: number | null;
+  percent: number | null;
+  cancelling: boolean;
   error: string | null;
 };
 type InstallRetry = { path: string; name: string; error: string | null };
@@ -96,6 +104,13 @@ function reportOperationError(
 function isDialogCancellation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return /cancel|abort|取消/i.test(message);
+}
+
+function createTransferId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function DeviceDetail() {
@@ -1853,6 +1868,10 @@ function Files({
   const [sortAsc, setSortAsc] = useState(true);
   const [transfer, setTransfer] = useState<FileTransferState | null>(null);
   const transferRetry = useRef<(() => Promise<void>) | null>(null);
+  const activeTransferId = useRef<string | null>(null);
+  const cancelledTransferIds = useRef(new Set<string>());
+  const cancelInFlight = useRef<string | null>(null);
+  const listenerReady = useRef<Promise<void>>(Promise.resolve());
   const loadSequence = useRef(createRequestSequence()).current;
   const visibleFiles = files
     .filter(
@@ -1919,6 +1938,49 @@ function Files({
     }
   }, [serial, path]);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const subscription = listen<FileTransferProgress>("file-transfer-progress", (event) => {
+      const payload = event.payload;
+      if (!payload || payload.operationId !== activeTransferId.current) return;
+      if (payload.status === "cancelled") {
+        cancelledTransferIds.current.add(payload.operationId);
+        cancelInFlight.current = null;
+        transferRetry.current = null;
+        setStatusText(t("detail.files.transferCancelled"));
+        setTransfer(null);
+        return;
+      }
+      setTransfer((current) => {
+        if (!current || current.operationId !== payload.operationId) return current;
+        const failed = payload.status === "failed";
+        return {
+          ...current,
+          status: payload.status,
+          bytesTransferred: payload.bytesTransferred,
+          totalBytes: payload.totalBytes,
+          percent: payload.percent,
+          error: failed ? operationErrorMessage(payload.message, t("detail.files.transferFailed")) : current.error,
+        };
+      });
+    });
+    listenerReady.current = subscription.then(
+      (dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      },
+      () => undefined,
+    );
+    return () => {
+      disposed = true;
+      activeTransferId.current = null;
+      cancelInFlight.current = null;
+      unlisten?.();
+      unlisten = null;
+    };
+  }, []);
+
   const go = (p: string) => {
     const next = p.trim() || "/";
     setPath(next);
@@ -1936,54 +1998,136 @@ function Files({
 
   const runUpload = async (local: string, remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`) => {
     const name = local.split(/[/\\]/).pop() || "file";
-    const state = { kind: "upload" as const, id: remote, label: name, error: null };
+    const operationId = createTransferId();
+    const state: FileTransferState = {
+      kind: "upload",
+      operationId,
+      target: remote,
+      label: name,
+      status: "queued",
+      bytesTransferred: null,
+      totalBytes: null,
+      percent: null,
+      cancelling: false,
+      error: null,
+    };
+    activeTransferId.current = operationId;
+    cancelledTransferIds.current.delete(operationId);
+    cancelInFlight.current = null;
     setTransfer(state);
     transferRetry.current = () => runUpload(local, remote);
     setStatusText(t("detail.files.uploading"));
     try {
-      const r = await DeviceService.uploadFile(serial, local, remote);
+      await listenerReady.current;
+      const r = await DeviceService.uploadFileTracked(serial, local, remote, operationId);
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
       if (!r.success) {
         const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.uploadFailed"));
         setStatusText(reason);
         void alert(reason);
-        setTransfer({ ...state, error: reason });
+        setTransfer((current) => current && current.operationId === operationId
+          ? { ...current, status: "failed", cancelling: false, error: reason }
+          : current);
         return;
       }
       setStatusText(t("detail.files.uploadDone"));
       setTransfer(null);
       transferRetry.current = null;
+      activeTransferId.current = null;
       await load();
     } catch (e) {
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
       const reason = operationErrorMessage(e, t("detail.files.uploadFailed"));
       reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
-      setTransfer({ ...state, error: reason });
+      setTransfer((current) => current && current.operationId === operationId
+        ? { ...current, status: "failed", cancelling: false, error: reason }
+        : current);
     }
   };
 
   const runDownload = async (f: FileEntry, local: string) => {
-    const state = { kind: "download" as const, id: f.path, label: f.name, error: null };
+    const operationId = createTransferId();
+    const state: FileTransferState = {
+      kind: "download",
+      operationId,
+      target: f.path,
+      label: f.name,
+      status: "queued",
+      bytesTransferred: null,
+      totalBytes: null,
+      percent: null,
+      cancelling: false,
+      error: null,
+    };
+    activeTransferId.current = operationId;
+    cancelledTransferIds.current.delete(operationId);
+    cancelInFlight.current = null;
     setTransfer(state);
     transferRetry.current = () => runDownload(f, local);
     setStatusText(t("detail.files.downloading"));
     try {
-      const r = await DeviceService.downloadFile(serial, f.path, local);
+      await listenerReady.current;
+      const r = await DeviceService.downloadFileTracked(serial, f.path, local, operationId);
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
       if (!r.success) {
         const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.downloadFailed"));
         setStatusText(reason);
         void alert(reason);
-        setTransfer({ ...state, error: reason });
+        setTransfer((current) => current && current.operationId === operationId
+          ? { ...current, status: "failed", cancelling: false, error: reason }
+          : current);
         return;
       }
       setStatusText(t("detail.files.downloadDone"));
+      setTransfer((current) => current && current.operationId === operationId
+        ? { ...current, status: "completed", cancelling: false }
+        : current);
       if (await askConfirm(t("detail.files.confirmReveal"))) {
         await DeviceService.revealInFolder(local);
       }
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
       setTransfer(null);
       transferRetry.current = null;
+      activeTransferId.current = null;
     } catch (e) {
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
       const reason = operationErrorMessage(e, t("detail.files.downloadFailed"));
       reportOperationError(e, t("detail.files.downloadFailed"), setStatusText);
-      setTransfer({ ...state, error: reason });
+      setTransfer((current) => current && current.operationId === operationId
+        ? { ...current, status: "failed", cancelling: false, error: reason }
+        : current);
+    }
+  };
+
+  const cancelTransfer = async () => {
+    const current = transfer;
+    if (
+      !current ||
+      current.error ||
+      (current.status !== "queued" && current.status !== "running") ||
+      current.cancelling ||
+      cancelInFlight.current === current.operationId
+    ) {
+      return;
+    }
+    const operationId = current.operationId;
+    cancelInFlight.current = operationId;
+    cancelledTransferIds.current.add(operationId);
+    setTransfer((state) => state && state.operationId === operationId ? { ...state, cancelling: true } : state);
+    try {
+      const accepted = await DeviceService.cancelFileTransfer(operationId);
+      if (!accepted && activeTransferId.current === operationId) {
+        cancelledTransferIds.current.delete(operationId);
+        cancelInFlight.current = null;
+        setTransfer((state) => state && state.operationId === operationId ? { ...state, cancelling: false } : state);
+      }
+    } catch (e) {
+      cancelledTransferIds.current.delete(operationId);
+      cancelInFlight.current = null;
+      if (activeTransferId.current === operationId) {
+        setTransfer((state) => state && state.operationId === operationId ? { ...state, cancelling: false } : state);
+        reportOperationError(e, t("detail.files.transferCancelFailed"), setStatusText);
+      }
     }
   };
 
@@ -1991,6 +2135,23 @@ function Files({
     const retry = transferRetry.current;
     if (retry) void retry();
   };
+
+  const transferActive = Boolean(
+    transfer &&
+      !transfer.error &&
+      (transfer.status === "queued" || transfer.status === "running"),
+  );
+  const transferBusy = Boolean(
+    transfer &&
+      !transfer.error &&
+      transfer.status !== "cancelled" &&
+      transfer.status !== "failed",
+  );
+  const transferLabel = transfer
+    ? transfer.kind === "upload"
+      ? t("detail.files.uploading")
+      : t("detail.files.downloading")
+    : "";
 
   return (
     <div className="stack">
@@ -2046,8 +2207,8 @@ function Files({
             <Button
               size="sm"
               icon={<Upload size={14} />}
-              loading={transfer?.kind === "upload" && transfer.error === null}
-              disabled={transfer?.error === null}
+              loading={transferBusy && transfer?.kind === "upload"}
+              disabled={transferBusy}
               onClick={async () => {
                 try {
                   const local = await open({ multiple: false, directory: false });
@@ -2065,12 +2226,32 @@ function Files({
           </div>
         </div>
         {transfer && (
-          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
+          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12, flexWrap: "wrap" }}>
             <span className={transfer.error ? "error" : "muted"}>
               {transfer.error
                 ? `${transfer.error} · ${transfer.label}`
-                : `${transfer.kind === "upload" ? t("detail.files.uploading") : t("detail.files.downloading")} · ${transfer.label}`}
+                : `${transferLabel} · ${transfer.label} · ${t("detail.files.transferRunning")}`}
             </span>
+            {transfer.percent !== null && !transfer.error && (
+              <>
+                <progress
+                  role="progressbar"
+                  max={100}
+                  value={transfer.percent}
+                  aria-label={`${transferLabel} ${transfer.label}`}
+                  style={{ width: 140 }}
+                />
+                <span className="muted">{t("detail.files.transferPercent", { percent: transfer.percent })}</span>
+              </>
+            )}
+            {!transfer.error && transfer.percent === null && (
+              <span className="muted">{t("detail.files.transferIndeterminate")}</span>
+            )}
+            {transferActive && (
+              <Button size="sm" variant="ghost" loading={transfer.cancelling} onClick={() => void cancelTransfer()}>
+                {transfer.cancelling ? t("detail.files.transferCancelling") : t("detail.files.cancelTransfer")}
+              </Button>
+            )}
             {transfer.error && (
               <Button size="sm" variant="ghost" onClick={retryTransfer}>
                 {transfer.kind === "upload" ? t("detail.files.retryUpload") : t("detail.files.retryDownload")}
@@ -2217,8 +2398,8 @@ function Files({
                           size="sm"
                           variant="ghost"
                           icon={<Download size={14} />}
-                          loading={transfer?.kind === "download" && transfer.id === f.path && transfer.error === null}
-                          disabled={transfer?.error === null}
+                          loading={transferBusy && transfer?.kind === "download" && transfer.target === f.path}
+                          disabled={transferBusy}
                           onClick={async () => {
                             try {
                               const local = await save({ defaultPath: f.name });

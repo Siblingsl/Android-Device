@@ -4,9 +4,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { DeviceDetail } from "./DeviceDetail";
-import type { AppInfo, DeviceInfo, FileEntry, RootStatus, ScreenshotResult } from "../types";
+import type {
+  AppInfo,
+  DeviceInfo,
+  FileEntry,
+  FileTransferProgress,
+  RootStatus,
+  ShellResult,
+  ScreenshotResult,
+} from "../types";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
+const transferEventState = vi.hoisted(() => ({
+  handler: null as ((event: { payload: FileTransferProgress }) => void) | null,
+  unlisten: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (_event: string, handler: (event: { payload: FileTransferProgress }) => void) => {
+    transferEventState.handler = handler;
+    return transferEventState.unlisten;
+  }),
+}));
 vi.mock("../services/deviceService", () => ({
   DeviceService: {
     getDevice: vi.fn(),
@@ -18,6 +36,9 @@ vi.mock("../services/deviceService", () => ({
     uploadFile: vi.fn(),
     deleteFile: vi.fn(),
     downloadFile: vi.fn(),
+    uploadFileTracked: vi.fn(),
+    downloadFileTracked: vi.fn(),
+    cancelFileTransfer: vi.fn(),
     getRootStatus: vi.fn(),
     getLsposedScope: vi.fn(),
     getSuPolicies: vi.fn(),
@@ -144,6 +165,30 @@ function renderDetail(tab: string) {
   );
 }
 
+function emitTransfer(overrides: Partial<FileTransferProgress> = {}) {
+  const calls = [
+    ...vi.mocked(DeviceService.uploadFileTracked).mock.calls,
+    ...vi.mocked(DeviceService.downloadFileTracked).mock.calls,
+  ];
+  const operationId = overrides.operationId ?? calls[calls.length - 1]?.[3] ?? "op-test";
+  const payload: FileTransferProgress = {
+    operationId,
+    direction: overrides.direction ?? "download",
+    status: overrides.status ?? "running",
+    bytesTransferred: overrides.bytesTransferred ?? null,
+    totalBytes: overrides.totalBytes ?? null,
+    percent: overrides.percent ?? null,
+    message: overrides.message ?? "running",
+  };
+  act(() => {
+    transferEventState.handler?.({ payload });
+  });
+}
+
+function findDownloadButton() {
+  return screen.getAllByRole("button").find((button) => button.querySelector("svg.lucide-download"));
+}
+
 function NavigateTo({ path }: { path: string }) {
   const navigate = useNavigate();
   useEffect(() => {
@@ -182,6 +227,9 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.uploadFile).mockReset();
     vi.mocked(DeviceService.deleteFile).mockReset();
     vi.mocked(DeviceService.downloadFile).mockReset();
+    vi.mocked(DeviceService.uploadFileTracked).mockReset();
+    vi.mocked(DeviceService.downloadFileTracked).mockReset();
+    vi.mocked(DeviceService.cancelFileTransfer).mockReset();
     vi.mocked(DeviceService.startApp).mockReset();
     vi.mocked(DeviceService.stopApp).mockReset();
     vi.mocked(DeviceService.clearAppData).mockReset();
@@ -192,6 +240,8 @@ describe("DeviceDetail refresh ordering", () => {
     vi.stubGlobal("alert", vi.fn());
     vi.mocked(open).mockReset();
     vi.mocked(save).mockReset();
+    transferEventState.handler = null;
+    transferEventState.unlisten.mockReset();
     sessionStorage.clear();
   });
 
@@ -616,7 +666,7 @@ describe("DeviceDetail refresh ordering", () => {
   it("reports a file upload error instead of leaving an unhandled rejection", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
-    vi.mocked(DeviceService.uploadFile).mockRejectedValueOnce(new Error("upload unavailable"));
+    vi.mocked(DeviceService.uploadFileTracked).mockRejectedValueOnce(new Error("upload unavailable"));
 
     renderDetail("files");
     await act(async () => {
@@ -636,7 +686,7 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
     vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
-    vi.mocked(DeviceService.downloadFile).mockRejectedValueOnce(new Error("download unavailable"));
+    vi.mocked(DeviceService.downloadFileTracked).mockRejectedValueOnce(new Error("download unavailable"));
 
     renderDetail("files");
     await act(async () => {
@@ -670,7 +720,7 @@ describe("DeviceDetail refresh ordering", () => {
     });
 
     expect(alert).not.toHaveBeenCalled();
-    expect(DeviceService.uploadFile).not.toHaveBeenCalled();
+    expect(DeviceService.uploadFileTracked).not.toHaveBeenCalled();
   });
 
   it("keeps file download cancellation silent", async () => {
@@ -692,7 +742,7 @@ describe("DeviceDetail refresh ordering", () => {
     });
 
     expect(alert).not.toHaveBeenCalled();
-    expect(DeviceService.downloadFile).not.toHaveBeenCalled();
+    expect(DeviceService.downloadFileTracked).not.toHaveBeenCalled();
   });
 
   it("reports an app start error instead of leaving an unhandled rejection", async () => {
@@ -773,11 +823,154 @@ describe("DeviceDetail refresh ordering", () => {
     expect(alert).toHaveBeenCalledWith("uninstall unavailable");
   });
 
-  it("shows upload progress and blocks duplicate uploads", async () => {
+  it("uses tracked upload and renders a real event percentage", async () => {
+    const pending = deferred<ShellResult>();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
+    vi.mocked(DeviceService.uploadFileTracked).mockReturnValueOnce(pending.promise);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.uploadFileTracked).toHaveBeenCalledWith(
+      "device-1-serial",
+      "C:/upload.txt",
+      "/sdcard/upload.txt",
+      expect.any(String),
+    );
+    emitTransfer({ direction: "upload", percent: 50, bytesTransferred: 512, totalBytes: 1024 });
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("50");
+
+    await act(async () => {
+      pending.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await pending.promise;
+      await Promise.resolve();
+    });
+  });
+
+  it("shows indeterminate progress when the backend has no percentage", async () => {
+    const pending = deferred<ShellResult>();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
+    vi.mocked(DeviceService.downloadFileTracked).mockReturnValueOnce(pending.promise);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(findDownloadButton()!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    emitTransfer({ direction: "download", status: "running" });
+    expect(screen.getByRole("status").textContent).toContain("进行中");
+    expect(screen.queryByRole("progressbar")).toBeNull();
+
+    await act(async () => {
+      pending.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await pending.promise;
+      await Promise.resolve();
+    });
+  });
+
+  it("sends cancellation once and stays silent for a cancelled transfer", async () => {
+    const pending = deferred<ShellResult>();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
+    vi.mocked(DeviceService.downloadFileTracked).mockReturnValueOnce(pending.promise);
+    vi.mocked(DeviceService.cancelFileTransfer).mockResolvedValueOnce(true);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(findDownloadButton()!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    emitTransfer({ direction: "download", status: "running" });
+
+    const cancelButton = screen.getByRole("button", { name: /取消/ });
+    fireEvent.click(cancelButton);
+    fireEvent.click(cancelButton);
+    expect(DeviceService.cancelFileTransfer).toHaveBeenCalledTimes(1);
+
+    emitTransfer({ direction: "download", status: "cancelled" });
+    await act(async () => {
+      pending.resolve({ success: false, stdout: "", stderr: "command cancelled", exitCode: -1 });
+      await pending.promise;
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/下载失败/)).toBeNull();
+    expect((findDownloadButton() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("removes the listener on unmount and ignores another operation", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    const view = renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    emitTransfer({ operationId: "other-op", direction: "download", percent: 90 });
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    view.unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(transferEventState.unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries with a new operation id without reopening the save dialog", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
+    vi.mocked(DeviceService.downloadFileTracked)
+      .mockRejectedValueOnce(new Error("download unavailable"))
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(findDownloadButton()!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试下载" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.downloadFileTracked).toHaveBeenCalledTimes(2);
+    expect(new Set(vi.mocked(DeviceService.downloadFileTracked).mock.calls.map((call) => call[3])).size).toBe(2);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps duplicate upload protection while a tracked transfer is running", async () => {
     const pending = deferred<{ success: boolean; stdout: string; stderr: string; exitCode: number }>();
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
-    vi.mocked(DeviceService.uploadFile).mockReturnValueOnce(pending.promise);
+    vi.mocked(DeviceService.uploadFileTracked).mockReturnValueOnce(pending.promise);
 
     renderDetail("files");
     await act(async () => {
@@ -794,7 +987,7 @@ describe("DeviceDetail refresh ordering", () => {
     expect(screen.getByRole("status").textContent).toContain("上传中");
     expect((uploadButton as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(uploadButton);
-    expect(DeviceService.uploadFile).toHaveBeenCalledTimes(1);
+    expect(DeviceService.uploadFileTracked).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       pending.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
@@ -806,7 +999,7 @@ describe("DeviceDetail refresh ordering", () => {
   it("offers an upload retry without reopening the file picker", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
-    vi.mocked(DeviceService.uploadFile)
+    vi.mocked(DeviceService.uploadFileTracked)
       .mockRejectedValueOnce(new Error("upload unavailable"))
       .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
 
@@ -826,16 +1019,21 @@ describe("DeviceDetail refresh ordering", () => {
       await Promise.resolve();
     });
 
-    expect(DeviceService.uploadFile).toHaveBeenCalledTimes(2);
+    expect(DeviceService.uploadFileTracked).toHaveBeenCalledTimes(2);
     expect(open).toHaveBeenCalledTimes(1);
-    expect(DeviceService.uploadFile).toHaveBeenLastCalledWith("device-1-serial", "C:/upload.txt", "/sdcard/upload.txt");
+    expect(DeviceService.uploadFileTracked).toHaveBeenLastCalledWith(
+      "device-1-serial",
+      "C:/upload.txt",
+      "/sdcard/upload.txt",
+      expect.any(String),
+    );
   });
 
   it("offers a download retry without reopening the save dialog", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
     vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
-    vi.mocked(DeviceService.downloadFile)
+    vi.mocked(DeviceService.downloadFileTracked)
       .mockRejectedValueOnce(new Error("download unavailable"))
       .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
 
@@ -857,9 +1055,14 @@ describe("DeviceDetail refresh ordering", () => {
       await Promise.resolve();
     });
 
-    expect(DeviceService.downloadFile).toHaveBeenCalledTimes(2);
+    expect(DeviceService.downloadFileTracked).toHaveBeenCalledTimes(2);
     expect(save).toHaveBeenCalledTimes(1);
-    expect(DeviceService.downloadFile).toHaveBeenLastCalledWith("device-1-serial", "/sdcard/old.txt", "C:/old.txt");
+    expect(DeviceService.downloadFileTracked).toHaveBeenLastCalledWith(
+      "device-1-serial",
+      "/sdcard/old.txt",
+      "C:/old.txt",
+      expect.any(String),
+    );
   });
 
   it("blocks uploads while a download is in progress", async () => {
@@ -867,7 +1070,7 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
     vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
-    vi.mocked(DeviceService.downloadFile).mockReturnValueOnce(pending.promise);
+    vi.mocked(DeviceService.downloadFileTracked).mockReturnValueOnce(pending.promise);
 
     renderDetail("files");
     await act(async () => {
