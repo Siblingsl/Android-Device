@@ -192,6 +192,18 @@ export function removeMonitorAlertsByIds(alerts: MonitorAlert[], ids: string[]):
   return next.length === alerts.length ? alerts : next;
 }
 
+export function restoreMonitorAlerts(
+  alerts: MonitorAlert[],
+  dismissed: MonitorAlert[],
+  limit = MAX_MONITOR_ALERT_HISTORY,
+): MonitorAlert[] {
+  const byId = new Map<string, MonitorAlert>();
+  [...dismissed, ...alerts].forEach((alert) => byId.set(alert.id, alert));
+  return [...byId.values()]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, Math.max(1, limit));
+}
+
 export function summarizeMonitorAlerts(alerts: MonitorAlert[]): MonitorAlertSummary {
   return alerts.reduce<MonitorAlertSummary>(
     (summary, alert) => {

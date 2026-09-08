@@ -65,6 +65,29 @@ describe("app monitor alert state", () => {
     ]);
   });
 
+  it("restores the last batch and clears the undo slot", () => {
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+    useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-2000"));
+    useAppStore.getState().dismissMonitorAlerts(["alert-1000"]);
+
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(true);
+    expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual([
+      "alert-2000",
+      "alert-1000",
+    ]);
+    expect(useAppStore.getState().lastDismissedMonitorAlerts).toBeNull();
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(false);
+  });
+
+  it("invalidates undo after clearing monitor history", () => {
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+    useAppStore.getState().dismissMonitorAlerts(["alert-1000"]);
+
+    useAppStore.getState().clearMonitorAlerts();
+
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(false);
+  });
+
   it("clears alerts older than a timestamp and persists the retained history", () => {
     useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
     useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-70000"));

@@ -9,6 +9,7 @@ import {
   monitorAlertMessageKey,
   parseStoredMonitorAlerts,
   removeMonitorAlertsByIds,
+  restoreMonitorAlerts,
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
   summarizeMonitorAlerts,
@@ -202,6 +203,25 @@ describe("removeMonitorAlertsByIds", () => {
 
     expect(removeMonitorAlertsByIds(alerts, ["a", "c"]).map((alert) => alert.id)).toEqual(["b"]);
     expect(removeMonitorAlertsByIds(alerts, [])).toEqual(alerts);
+  });
+});
+
+describe("restoreMonitorAlerts", () => {
+  it("restores dismissed records by newest timestamp without duplicating current records", () => {
+    const current: MonitorAlert[] = [
+      { id: "current", deviceId: "device-a", deviceName: "A", kind: "cpu", createdAt: 3 },
+      { id: "same", deviceId: "device-a", deviceName: "A", kind: "memory", createdAt: 2 },
+    ];
+    const dismissed: MonitorAlert[] = [
+      { id: "restored", deviceId: "device-b", deviceName: "B", kind: "both", createdAt: 4 },
+      { id: "same", deviceId: "device-a", deviceName: "A", kind: "cpu", createdAt: 1 },
+    ];
+
+    expect(restoreMonitorAlerts(current, dismissed).map((alert) => alert.id)).toEqual([
+      "restored",
+      "current",
+      "same",
+    ]);
   });
 });
 

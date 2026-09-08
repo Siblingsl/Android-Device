@@ -7,6 +7,9 @@ import { useI18n } from "../../i18n";
 export function StatusBar() {
   const status = useAppStore((s) => s.status);
   const statusText = useAppStore((s) => s.statusText);
+  const lastDismissedMonitorAlerts = useAppStore((s) => s.lastDismissedMonitorAlerts);
+  const restoreDismissedMonitorAlerts = useAppStore((s) => s.restoreDismissedMonitorAlerts);
+  const setStatusText = useAppStore((s) => s.setStatusText);
   const devices = useAppStore((s) => s.devices);
   const deviceCount = devices.length;
   const navigate = useNavigate();
@@ -82,14 +85,30 @@ export function StatusBar() {
               : t("common.status.devicesOnline", { online, total: deviceCount })}
         </button>
       </div>
-      <button
-        type="button"
-        className="right"
-        title={logHint ? t("common.status.openRelatedLogs") : t("common.status.openSystemLogs")}
-        onClick={() => goLogs(/自动启动|Docker/.test(statusText) ? "System" : /ADB/.test(statusText) ? "ADB" : "all")}
-      >
-        {statusText}
-      </button>
+      <div className="right">
+        <button
+          type="button"
+          className="statusbar-message"
+          title={logHint ? t("common.status.openRelatedLogs") : t("common.status.openSystemLogs")}
+          onClick={() => goLogs(/自动启动|Docker/.test(statusText) ? "System" : /ADB/.test(statusText) ? "ADB" : "all")}
+        >
+          {statusText}
+        </button>
+        {lastDismissedMonitorAlerts?.length ? (
+          <button
+            type="button"
+            className="statusbar-undo"
+            onClick={() => {
+              const count = lastDismissedMonitorAlerts.length;
+              if (restoreDismissedMonitorAlerts()) {
+                setStatusText(t("monitor.batchDismiss.undoDone", { n: count }));
+              }
+            }}
+          >
+            {t("monitor.batchDismiss.undo")}
+          </button>
+        ) : null}
+      </div>
     </footer>
   );
 }
