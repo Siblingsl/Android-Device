@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Cable, Link2, RefreshCw, Unplug, Wrench } from "lucide-react";
 import { copyText } from "../lib/clipboard";
@@ -7,6 +7,7 @@ import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
 import { DeviceService } from "../services/deviceService";
 import { askConfirm } from "../lib/dialogs";
+import { createRequestSequence } from "../lib/requestSequence";
 import { probeTool, type ProbeHit } from "../hooks/useToolProbe";
 import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
@@ -35,6 +36,7 @@ export function AdbPage() {
   const [lanAuto, setLanAuto] = useState(true);
   const [lanScanning, setLanScanning] = useState(false);
   const [lanResult, setLanResult] = useState<LanScanResult | null>(null);
+  const loadSequence = useRef(createRequestSequence()).current;
 
   useEffect(() => {
     void DeviceService.getLocalSubnet()
@@ -105,27 +107,34 @@ export function AdbPage() {
   };
 
   const load = async () => {
+    const token = loadSequence.begin();
     setLoading(true);
     try {
       const [adb, docker] = await Promise.all([
         probeTool("adb", settings?.adbPath),
         probeTool("docker", settings?.dockerPath),
       ]);
+      if (!loadSequence.isCurrent(token)) return;
       setTools({ adb, docker });
       if (adb.ok) {
-        setInfo(await DeviceService.getAdbInfo());
+        const nextInfo = await DeviceService.getAdbInfo();
+        if (!loadSequence.isCurrent(token)) return;
+        setInfo(nextInfo);
       } else {
         setInfo(null);
       }
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       setStatusText(e instanceof Error ? t("adb.refreshFailedWith", { msg: e.message }) : t("adb.refreshFailed"));
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
       setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
+    return () => loadSequence.invalidate();
   }, []);
 
   useEffect(() => {
