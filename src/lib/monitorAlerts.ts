@@ -5,6 +5,7 @@ export type { ResourceAlert } from "./monitorPreferences";
 export const MONITOR_ALERT_COOLDOWN_MS = 60_000;
 export const MAX_MONITOR_ALERTS = 8;
 export const MAX_MONITOR_ALERT_HISTORY = 50;
+export const MONITOR_ALERT_STORAGE_KEY = "rdc.monitorAlerts";
 
 export type MonitorAlertKind = Exclude<ResourceAlert, null>;
 export type MonitorAlertTimeRange = "24h" | "7d" | "all";
@@ -61,6 +62,68 @@ export function appendMonitorAlert(
   limit = MAX_MONITOR_ALERTS,
 ): MonitorAlert[] {
   return [alert, ...alerts].slice(0, Math.max(1, limit));
+}
+
+export function parseStoredMonitorAlerts(raw: string | null): MonitorAlert[] {
+  if (!raw) return [];
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is MonitorAlert => {
+        if (!item || typeof item !== "object") return false;
+        const alert = item as Partial<MonitorAlert>;
+        return (
+          typeof alert.id === "string" &&
+          alert.id.length > 0 &&
+          typeof alert.deviceId === "string" &&
+          alert.deviceId.length > 0 &&
+          typeof alert.deviceName === "string" &&
+          (alert.kind === "cpu" || alert.kind === "memory" || alert.kind === "both") &&
+          typeof alert.createdAt === "number" &&
+          Number.isFinite(alert.createdAt) &&
+          alert.createdAt >= 0
+        );
+      })
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, MAX_MONITOR_ALERT_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+export function clearMonitorAlertsBefore(
+  alerts: MonitorAlert[],
+  cutoff: number,
+): MonitorAlert[] {
+  return alerts.filter((alert) => alert.createdAt >= cutoff);
+}
+
+function csvField(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+export function serializeMonitorAlertsCsv(alerts: MonitorAlert[]): string {
+  const rows = alerts.map((alert) =>
+    [
+      new Date(alert.createdAt).toISOString(),
+      alert.deviceName,
+      alert.deviceId,
+      alert.kind,
+    ]
+      .map(csvField)
+      .join(","),
+  );
+  return `\uFEFFtimestamp,device_name,device_id,resource${rows.length ? `\r\n${rows.join("\r\n")}` : ""}`;
+}
+
+export async function runConfirmedMonitorAlertCleanup(
+  confirmAction: () => Promise<boolean>,
+  cleanupAction: () => void,
+): Promise<boolean> {
+  if (!(await confirmAction())) return false;
+  cleanupAction();
+  return true;
 }
 
 export function filterMonitorAlerts(

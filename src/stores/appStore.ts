@@ -3,8 +3,11 @@ import type { AppSettings, DeviceInfo, SystemStatus } from "../types";
 import { DeviceService } from "../services/deviceService";
 import {
   appendMonitorAlert,
+  clearMonitorAlertsBefore,
   hasRecentMonitorAlert,
   MAX_MONITOR_ALERT_HISTORY,
+  MONITOR_ALERT_STORAGE_KEY,
+  parseStoredMonitorAlerts,
   type MonitorAlert,
 } from "../lib/monitorAlerts";
 
@@ -26,6 +29,7 @@ interface AppState {
   addMonitorAlert: (alert: MonitorAlert) => void;
   dismissMonitorAlert: (id: string) => void;
   clearMonitorAlerts: (deviceId?: string) => void;
+  clearMonitorAlertsBefore: (cutoff: number) => void;
   refreshStatus: () => Promise<void>;
   refreshDevices: () => Promise<void>;
   loadSettings: () => Promise<void>;
@@ -40,6 +44,22 @@ let statusFails = 0;
 let deviceFails = 0;
 
 let lastWasRefreshFail = false;
+
+function readMonitorAlerts(): MonitorAlert[] {
+  try {
+    return parseStoredMonitorAlerts(localStorage.getItem(MONITOR_ALERT_STORAGE_KEY));
+  } catch {
+    return [];
+  }
+}
+
+function persistMonitorAlerts(alerts: MonitorAlert[]) {
+  try {
+    localStorage.setItem(MONITOR_ALERT_STORAGE_KEY, JSON.stringify(alerts));
+  } catch {
+    /* local persistence is best effort */
+  }
+}
 
 function noteRefreshOk() {
   statusFails = 0;
@@ -77,7 +97,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   })(),
   status: null,
   devices: [],
-  monitorAlerts: [],
+  monitorAlerts: readMonitorAlerts(),
   settings: null,
   loading: false,
   statusText: tStatic("common.status.ready"),
@@ -108,18 +128,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   addMonitorAlert: (alert) =>
     set((state) => {
       if (hasRecentMonitorAlert(state.monitorAlerts, alert)) return state;
-      return {
-        monitorAlerts: appendMonitorAlert(state.monitorAlerts, alert, MAX_MONITOR_ALERT_HISTORY),
-      };
+      const monitorAlerts = appendMonitorAlert(
+        state.monitorAlerts,
+        alert,
+        MAX_MONITOR_ALERT_HISTORY,
+      );
+      persistMonitorAlerts(monitorAlerts);
+      return { monitorAlerts };
     }),
   dismissMonitorAlert: (id) =>
-    set((state) => ({ monitorAlerts: state.monitorAlerts.filter((alert) => alert.id !== id) })),
+    set((state) => {
+      const monitorAlerts = state.monitorAlerts.filter((alert) => alert.id !== id);
+      persistMonitorAlerts(monitorAlerts);
+      return { monitorAlerts };
+    }),
   clearMonitorAlerts: (deviceId) =>
-    set((state) => ({
-      monitorAlerts: deviceId
+    set((state) => {
+      const monitorAlerts = deviceId
         ? state.monitorAlerts.filter((alert) => alert.deviceId !== deviceId)
-        : [],
-    })),
+        : [];
+      persistMonitorAlerts(monitorAlerts);
+      return { monitorAlerts };
+    }),
+  clearMonitorAlertsBefore: (cutoff) =>
+    set((state) => {
+      const monitorAlerts = clearMonitorAlertsBefore(state.monitorAlerts, cutoff);
+      persistMonitorAlerts(monitorAlerts);
+      return { monitorAlerts };
+    }),
 
   refreshStatus: async () => {
     if (statusInFlight) return;

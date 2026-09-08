@@ -1,17 +1,22 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { BellRing, Cpu, MemoryStick, Trash2, X } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { BellRing, Clock3, Cpu, Download, MemoryStick, Trash2, X } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+import { alertMsg, askConfirm } from "../lib/dialogs";
 import { useI18n } from "../i18n";
 import {
   filterMonitorAlerts,
   MAX_MONITOR_ALERT_HISTORY,
   monitorAlertMessageKey,
+  runConfirmedMonitorAlertCleanup,
+  serializeMonitorAlertsCsv,
   type MonitorAlertFilter,
   type MonitorAlertKind,
 } from "../lib/monitorAlerts";
 import { normalizeMonitorPreferences } from "../lib/monitorPreferences";
+import { DeviceService } from "../services/deviceService";
 import { useAppStore } from "../stores/appStore";
 
 export function MonitorAlertsPage() {
@@ -23,6 +28,9 @@ export function MonitorAlertsPage() {
   const setSelectedDeviceId = useAppStore((s) => s.setSelectedDeviceId);
   const dismissMonitorAlert = useAppStore((s) => s.dismissMonitorAlert);
   const clearMonitorAlerts = useAppStore((s) => s.clearMonitorAlerts);
+  const clearMonitorAlertsBefore = useAppStore((s) => s.clearMonitorAlertsBefore);
+  const setStatusText = useAppStore((s) => s.setStatusText);
+  const [cleanupChoice, setCleanupChoice] = useState("");
   const [filters, setFilters] = useState<MonitorAlertFilter>({
     deviceId: "all",
     kind: "all",
@@ -54,6 +62,41 @@ export function MonitorAlertsPage() {
   const openDevice = (deviceId: string) => {
     setSelectedDeviceId(deviceId);
     navigate(`/devices/${encodeURIComponent(deviceId)}`);
+  };
+
+  const cleanupOlderAlerts = async (range: "24h" | "7d") => {
+    const days = range === "24h" ? 1 : 7;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1_000;
+    const count = alerts.filter((alert) => alert.createdAt < cutoff).length;
+    if (count === 0) {
+      setStatusText(t("monitor.cleanup.none"));
+      return;
+    }
+    const completed = await runConfirmedMonitorAlertCleanup(
+      () => askConfirm(t("monitor.cleanup.confirm", { n: count, range: t(`monitor.cleanup.${range}`) })),
+      () => clearMonitorAlertsBefore(cutoff),
+    );
+    if (completed) setStatusText(t("monitor.cleanup.done", { n: count }));
+  };
+
+  const exportFilteredAlerts = async () => {
+    try {
+      const path = await save({
+        defaultPath: `monitor-alerts-${new Date().toISOString().slice(0, 10)}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!path) return;
+      const saved = await DeviceService.exportLogs(path, serializeMonitorAlertsCsv(filteredAlerts));
+      setStatusText(t("monitor.export.done", { path: saved }));
+      if (await askConfirm(t("monitor.export.confirm", { path: saved }))) {
+        await DeviceService.revealInFolder(saved);
+      }
+    } catch (error) {
+      if (!error) return;
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusText(t("monitor.export.failed", { error: message }));
+      await alertMsg(t("monitor.export.failed", { error: message }));
+    }
   };
 
   return (
@@ -93,7 +136,15 @@ export function MonitorAlertsPage() {
               size="sm"
               variant="danger"
               icon={<Trash2 size={14} />}
-              onClick={() => clearMonitorAlerts()}
+              onClick={() => {
+                const count = alerts.length;
+                void runConfirmedMonitorAlertCleanup(
+                  () => askConfirm(t("monitor.clearConfirm", { n: count })),
+                  () => clearMonitorAlerts(),
+                ).then((completed) => {
+                  if (completed) setStatusText(t("monitor.cleanup.done", { n: count }));
+                });
+              }}
             >
               {t("monitor.clearAll")}
             </Button>
@@ -156,9 +207,39 @@ export function MonitorAlertsPage() {
         title={t("monitor.card.history")}
         className="monitor-alert-history-card"
         action={
-          <span className="muted monitor-alert-history-limit">
-            {alerts.length} / {MAX_MONITOR_ALERT_HISTORY}
-          </span>
+          <div className="monitor-alert-history-tools">
+            <span className="muted monitor-alert-history-limit">
+              {alerts.length} / {MAX_MONITOR_ALERT_HISTORY}
+            </span>
+            <label className="monitor-alert-cleanup-control">
+              <Clock3 size={13} aria-hidden="true" />
+              <select
+                value={cleanupChoice}
+                disabled={alerts.length === 0}
+                aria-label={t("monitor.cleanup.label")}
+                onChange={(event) => {
+                  const range = event.target.value as "24h" | "7d" | "";
+                  setCleanupChoice(range);
+                  if (range) {
+                    void cleanupOlderAlerts(range).finally(() => setCleanupChoice(""));
+                  }
+                }}
+              >
+                <option value="">{t("monitor.cleanup.label")}</option>
+                <option value="24h">{t("monitor.cleanup.before24h")}</option>
+                <option value="7d">{t("monitor.cleanup.before7d")}</option>
+              </select>
+            </label>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<Download size={14} />}
+              disabled={filteredAlerts.length === 0}
+              onClick={() => void exportFilteredAlerts()}
+            >
+              {t("monitor.export")}
+            </Button>
+          </div>
         }
       >
         {filteredAlerts.length === 0 ? (

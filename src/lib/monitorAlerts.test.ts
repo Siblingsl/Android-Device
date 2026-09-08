@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   appendMonitorAlert,
+  clearMonitorAlertsBefore,
   evaluateResourceAlert,
   filterMonitorAlerts,
   hasRecentMonitorAlert,
   monitorAlertMessageKey,
+  parseStoredMonitorAlerts,
+  runConfirmedMonitorAlertCleanup,
+  serializeMonitorAlertsCsv,
   type MonitorAlert,
   type ResourceAlertTracker,
 } from "./monitorAlerts";
@@ -130,5 +134,102 @@ describe("hasRecentMonitorAlert", () => {
         { ...existing, id: "alert-memory", kind: "memory", createdAt: 2_000 },
       ),
     ).toBe(false);
+  });
+});
+
+describe("parseStoredMonitorAlerts", () => {
+  it("restores valid alerts newest first and ignores malformed persisted entries", () => {
+    const result = parseStoredMonitorAlerts(JSON.stringify([
+      { id: "older", deviceId: "device-a", deviceName: "Device A", kind: "cpu", createdAt: 1_000 },
+      { id: "invalid-kind", deviceId: "device-a", deviceName: "Device A", kind: "disk", createdAt: 2_000 },
+      { id: "newer", deviceId: "device-b", deviceName: "Device B", kind: "memory", createdAt: 3_000 },
+      null,
+    ]));
+
+    expect(result.map((alert) => alert.id)).toEqual(["newer", "older"]);
+  });
+
+  it("returns an empty history for corrupt persisted data", () => {
+    expect(parseStoredMonitorAlerts("not-json")).toEqual([]);
+    expect(parseStoredMonitorAlerts(JSON.stringify({ alerts: [] }))).toEqual([]);
+  });
+
+  it("caps restored history to the newest fifty alerts", () => {
+    const stored = Array.from({ length: 55 }, (_, index) => ({
+      id: `alert-${index}`,
+      deviceId: "device-a",
+      deviceName: "Device A",
+      kind: "cpu",
+      createdAt: index,
+    }));
+
+    const result = parseStoredMonitorAlerts(JSON.stringify(stored));
+
+    expect(result).toHaveLength(50);
+    expect(result[0]?.id).toBe("alert-54");
+    expect(result[49]?.id).toBe("alert-5");
+  });
+});
+
+describe("clearMonitorAlertsBefore", () => {
+  it("removes only alerts older than the selected cutoff", () => {
+    const alerts: MonitorAlert[] = [
+      { id: "at-cutoff", deviceId: "a", deviceName: "A", kind: "cpu", createdAt: 2_000 },
+      { id: "older", deviceId: "b", deviceName: "B", kind: "memory", createdAt: 1_999 },
+      { id: "newer", deviceId: "c", deviceName: "C", kind: "both", createdAt: 3_000 },
+    ];
+
+    expect(clearMonitorAlertsBefore(alerts, 2_000).map((alert) => alert.id)).toEqual([
+      "at-cutoff",
+      "newer",
+    ]);
+  });
+});
+
+describe("serializeMonitorAlertsCsv", () => {
+  it("exports stable timestamps and escapes device fields for spreadsheet import", () => {
+    const alerts: MonitorAlert[] = [
+      {
+        id: "alert-1",
+        deviceId: "device,1",
+        deviceName: 'Lab "A"',
+        kind: "both",
+        createdAt: Date.UTC(2026, 8, 8, 1, 2, 3),
+      },
+    ];
+
+    expect(serializeMonitorAlertsCsv(alerts)).toBe(
+      '\uFEFFtimestamp,device_name,device_id,resource\r\n2026-09-08T01:02:03.000Z,"Lab ""A""","device,1",both',
+    );
+  });
+});
+
+describe("runConfirmedMonitorAlertCleanup", () => {
+  it("keeps history unchanged when cleanup is not confirmed", async () => {
+    let cleared = false;
+
+    const completed = await runConfirmedMonitorAlertCleanup(
+      async () => false,
+      () => {
+        cleared = true;
+      },
+    );
+
+    expect(completed).toBe(false);
+    expect(cleared).toBe(false);
+  });
+
+  it("runs cleanup once after confirmation", async () => {
+    let clearCount = 0;
+
+    const completed = await runConfirmedMonitorAlertCleanup(
+      async () => true,
+      () => {
+        clearCount += 1;
+      },
+    );
+
+    expect(completed).toBe(true);
+    expect(clearCount).toBe(1);
   });
 });
