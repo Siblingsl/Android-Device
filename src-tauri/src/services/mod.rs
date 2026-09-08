@@ -6,5 +6,6 @@ pub mod log;
 pub mod root;
 pub mod scrcpy;
 pub mod settings;
+pub mod transfer;
 pub mod util;
 pub mod wsl_kernel;
