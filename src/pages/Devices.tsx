@@ -839,7 +839,10 @@ export function Devices() {
                     }
                     if (v === "stop") {
                       if (!canStop) return;
-                      void run(d.id, () => DeviceService.stop(d.id), t("devices.status.stop", { name: d.name }));
+                      void (async () => {
+                        if (!(await askConfirm(t("devices.confirmStopOne", { name: d.name })))) return;
+                        await run(d.id, () => DeviceService.stop(d.id), t("devices.status.stop", { name: d.name }));
+                      })();
                     }
                     if (v === "copy" && d.serial) {
                       void copyText(d.serial).then(

@@ -6,11 +6,13 @@ import { Devices } from "./Devices";
 import type { DeviceInfo, ShellResult } from "../types";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn() }));
 vi.mock("../services/deviceService", () => ({
   DeviceService: {
     listDevices: vi.fn(),
     connect: vi.fn(),
     restart: vi.fn(),
+    stop: vi.fn(),
     refreshDevices: vi.fn(),
   },
 }));
@@ -31,6 +33,7 @@ vi.mock("../stores/appStore", () => ({
 }));
 
 const { DeviceService } = await import("../services/deviceService");
+const { askConfirm } = await import("../lib/dialogs");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -70,11 +73,15 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.listDevices).mockReset();
     vi.mocked(DeviceService.connect).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
+    vi.mocked(DeviceService.stop).mockReset();
+    vi.mocked(askConfirm).mockReset();
     storeState.setSelectedDeviceId.mockReset();
     storeState.setStatusText.mockReset();
     vi.mocked(DeviceService.listDevices).mockResolvedValue([device("one"), device("two")]);
     vi.mocked(DeviceService.connect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(askConfirm).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -151,5 +158,36 @@ describe("Devices batch controls", () => {
     await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("restart unavailable"));
     expect(storeState.setStatusText).toHaveBeenCalledWith("restart unavailable");
     expect(storeState.setStatusText).not.toHaveBeenCalledWith("就绪");
+  });
+
+  it("does not stop one device when the confirmation is cancelled", async () => {
+    vi.mocked(askConfirm).mockResolvedValue(false);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "stop" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("停止设备 设备 one？"));
+    expect(DeviceService.stop).not.toHaveBeenCalled();
+    expect(storeState.setStatusText).not.toHaveBeenCalledWith("停止 设备 one");
+  });
+
+  it("stops one device only after the confirmation is accepted", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "stop" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("停止设备 设备 one？"));
+    await waitFor(() => expect(DeviceService.stop).toHaveBeenCalledWith("one"));
   });
 });
