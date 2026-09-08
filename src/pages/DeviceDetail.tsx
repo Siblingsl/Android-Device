@@ -70,6 +70,13 @@ import type {
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
 type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
 type PreviewOutcome = { success: boolean; message: string };
+type FileTransferState = {
+  kind: "upload" | "download";
+  id: string;
+  label: string;
+  error: string | null;
+};
+type InstallRetry = { path: string; name: string; error: string | null };
 
 function operationErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -1844,6 +1851,8 @@ function Files({
   const [fileQuery, setFileQuery] = useState("");
   const [sortKey, setSortKey] = useState<"name" | "size" | "modified">("name");
   const [sortAsc, setSortAsc] = useState(true);
+  const [transfer, setTransfer] = useState<FileTransferState | null>(null);
+  const transferRetry = useRef<(() => Promise<void>) | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
   const visibleFiles = files
     .filter(
@@ -1925,6 +1934,64 @@ function Files({
     go(path.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/");
   };
 
+  const runUpload = async (local: string, remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`) => {
+    const name = local.split(/[/\\]/).pop() || "file";
+    const state = { kind: "upload" as const, id: remote, label: name, error: null };
+    setTransfer(state);
+    transferRetry.current = () => runUpload(local, remote);
+    setStatusText(t("detail.files.uploading"));
+    try {
+      const r = await DeviceService.uploadFile(serial, local, remote);
+      if (!r.success) {
+        const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.uploadFailed"));
+        setStatusText(reason);
+        void alert(reason);
+        setTransfer({ ...state, error: reason });
+        return;
+      }
+      setStatusText(t("detail.files.uploadDone"));
+      setTransfer(null);
+      transferRetry.current = null;
+      await load();
+    } catch (e) {
+      const reason = operationErrorMessage(e, t("detail.files.uploadFailed"));
+      reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
+      setTransfer({ ...state, error: reason });
+    }
+  };
+
+  const runDownload = async (f: FileEntry, local: string) => {
+    const state = { kind: "download" as const, id: f.path, label: f.name, error: null };
+    setTransfer(state);
+    transferRetry.current = () => runDownload(f, local);
+    setStatusText(t("detail.files.downloading"));
+    try {
+      const r = await DeviceService.downloadFile(serial, f.path, local);
+      if (!r.success) {
+        const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.downloadFailed"));
+        setStatusText(reason);
+        void alert(reason);
+        setTransfer({ ...state, error: reason });
+        return;
+      }
+      setStatusText(t("detail.files.downloadDone"));
+      if (await askConfirm(t("detail.files.confirmReveal"))) {
+        await DeviceService.revealInFolder(local);
+      }
+      setTransfer(null);
+      transferRetry.current = null;
+    } catch (e) {
+      const reason = operationErrorMessage(e, t("detail.files.downloadFailed"));
+      reportOperationError(e, t("detail.files.downloadFailed"), setStatusText);
+      setTransfer({ ...state, error: reason });
+    }
+  };
+
+  const retryTransfer = () => {
+    const retry = transferRetry.current;
+    if (retry) void retry();
+  };
+
   return (
     <div className="stack">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
@@ -1979,29 +2046,15 @@ function Files({
             <Button
               size="sm"
               icon={<Upload size={14} />}
+              loading={transfer?.kind === "upload" && transfer.error === null}
+              disabled={transfer?.error === null}
               onClick={async () => {
-                let transferStarted = false;
                 try {
                   const local = await open({ multiple: false, directory: false });
                   if (typeof local !== "string" || !local) return;
-                  setStatusText(t("detail.files.uploading"));
-                  const name = local.split(/[/\\]/).pop() || "file";
-                  transferStarted = true;
-                  const r = await DeviceService.uploadFile(
-                    serial,
-                    local,
-                    `${path.replace(/\/+$/, "")}/${name}`,
-                  );
-                  if (!r.success) {
-                    const reason = (r.stderr || r.stdout || t("detail.files.uploadFailed")).trim();
-                    setStatusText(reason);
-                    void alert(reason);
-                    return;
-                  }
-                  setStatusText(t("detail.files.uploadDone"));
-                  await load();
+                  await runUpload(local);
                 } catch (e) {
-                  if (transferStarted || !isDialogCancellation(e)) {
+                  if (!isDialogCancellation(e)) {
                     reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
                   }
                 }
@@ -2011,6 +2064,20 @@ function Files({
             </Button>
           </div>
         </div>
+        {transfer && (
+          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
+            <span className={transfer.error ? "error" : "muted"}>
+              {transfer.error
+                ? `${transfer.error} · ${transfer.label}`
+                : `${transfer.kind === "upload" ? t("detail.files.uploading") : t("detail.files.downloading")} · ${transfer.label}`}
+            </span>
+            {transfer.error && (
+              <Button size="sm" variant="ghost" onClick={retryTransfer}>
+                {transfer.kind === "upload" ? t("detail.files.retryUpload") : t("detail.files.retryDownload")}
+              </Button>
+            )}
+          </div>
+        )}
         <div className="row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 10, fontSize: 12 }}>
           <button type="button" className="muted" onClick={() => go("/")}>
             /
@@ -2150,26 +2217,15 @@ function Files({
                           size="sm"
                           variant="ghost"
                           icon={<Download size={14} />}
+                          loading={transfer?.kind === "download" && transfer.id === f.path && transfer.error === null}
+                          disabled={transfer?.error === null}
                           onClick={async () => {
-                            let transferStarted = false;
                             try {
                               const local = await save({ defaultPath: f.name });
                               if (!local) return;
-                              setStatusText(t("detail.files.downloading"));
-                              transferStarted = true;
-                              const r = await DeviceService.downloadFile(serial, f.path, local);
-                              if (!r.success) {
-                                const reason = (r.stderr || r.stdout || t("detail.files.downloadFailed")).trim();
-                                setStatusText(reason);
-                                void alert(reason);
-                                return;
-                              }
-                              setStatusText(t("detail.files.downloadDone"));
-                              if (await askConfirm(t("detail.files.confirmReveal"))) {
-                                await DeviceService.revealInFolder(local);
-                              }
+                              await runDownload(f, local);
                             } catch (e) {
-                              if (transferStarted || !isDialogCancellation(e)) {
+                              if (!isDialogCancellation(e)) {
                                 reportOperationError(e, t("detail.files.downloadFailed"), setStatusText);
                               }
                             }
@@ -2240,6 +2296,7 @@ function Apps({
   const [detailBusy, setDetailBusy] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [installRetry, setInstallRetry] = useState<InstallRetry | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
   const detailSequence = useRef(createRequestSequence()).current;
 
@@ -2286,6 +2343,34 @@ function Apps({
       a.label.toLowerCase().includes(keyword.toLowerCase())
   );
 
+  const runInstall = async (apkPath: string) => {
+    const name = apkPath.split(/[/\\]/).pop() || apkPath;
+    const retry = { path: apkPath, name, error: null };
+    setInstallRetry(retry);
+    setInstalling(true);
+    setStatusText(t("detail.apps.installing", { name }));
+    try {
+      const r = await DeviceService.installApk(serial, apkPath, true);
+      const ok = r.success || /success/i.test(r.stdout);
+      if (ok) {
+        setStatusText(t("detail.apps.installSuccess", { name }));
+        setInstallRetry(null);
+        await load();
+      } else {
+        const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.apps.installFailed"));
+        setStatusText(reason);
+        void alert(reason);
+        setInstallRetry({ ...retry, error: reason });
+      }
+    } catch (e) {
+      const reason = operationErrorMessage(e, t("detail.apps.installFailed"));
+      reportOperationError(e, t("detail.apps.installFailed"), setStatusText);
+      setInstallRetry({ ...retry, error: reason });
+    } finally {
+      setInstalling(false);
+    }
+  };
+
   return (
     <div className="stack">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
@@ -2328,23 +2413,11 @@ function Apps({
                     filters: [{ name: "APK", extensions: ["apk"] }],
                   });
                   if (typeof path !== "string" || !path) return;
-                  const name = path.split(/[/\\]/).pop() || path;
-                  setInstalling(true);
-                  setStatusText(t("detail.apps.installing", { name }));
-                  const r = await DeviceService.installApk(serial, path, true);
-                  const ok = r.success || /success/i.test(r.stdout);
-                  if (ok) {
-                    setStatusText(t("detail.apps.installSuccess", { name }));
-                    await load();
-                  } else {
-                    const reason = (r.stderr || r.stdout || t("detail.apps.installFailed")).trim();
-                    setStatusText(reason);
-                    void alert(reason);
-                  }
+                  await runInstall(path);
                 } catch (e) {
-                  reportOperationError(e, t("detail.apps.installFailed"), setStatusText);
-                } finally {
-                  setInstalling(false);
+                  if (!isDialogCancellation(e)) {
+                    reportOperationError(e, t("detail.apps.installFailed"), setStatusText);
+                  }
                 }
               }}
             >
@@ -2352,6 +2425,18 @@ function Apps({
             </Button>
           </div>
         </div>
+        {installing ? (
+          <div className="muted" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
+            {installRetry ? t("detail.apps.installing", { name: installRetry.name }) : t("detail.apps.installingShort")}
+          </div>
+        ) : installRetry?.error ? (
+          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
+            <span className="error">{installRetry.error}</span>
+            <Button size="sm" variant="ghost" onClick={() => void runInstall(installRetry.path)}>
+              {t("detail.apps.retryInstall")}
+            </Button>
+          </div>
+        ) : null}
 
         {loading ? (
           <Skeleton count={8} height={28} />

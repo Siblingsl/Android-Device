@@ -772,4 +772,154 @@ describe("DeviceDetail refresh ordering", () => {
 
     expect(alert).toHaveBeenCalledWith("uninstall unavailable");
   });
+
+  it("shows upload progress and blocks duplicate uploads", async () => {
+    const pending = deferred<{ success: boolean; stdout: string; stderr: string; exitCode: number }>();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
+    vi.mocked(DeviceService.uploadFile).mockReturnValueOnce(pending.promise);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const uploadButton = screen.getByRole("button", { name: "上传" });
+    fireEvent.click(uploadButton);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toContain("上传中");
+    expect((uploadButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(uploadButton);
+    expect(DeviceService.uploadFile).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pending.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await pending.promise;
+      await Promise.resolve();
+    });
+  });
+
+  it("offers an upload retry without reopening the file picker", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(open).mockResolvedValueOnce("C:/upload.txt");
+    vi.mocked(DeviceService.uploadFile)
+      .mockRejectedValueOnce(new Error("upload unavailable"))
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试上传" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.uploadFile).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(DeviceService.uploadFile).toHaveBeenLastCalledWith("device-1-serial", "C:/upload.txt", "/sdcard/upload.txt");
+  });
+
+  it("offers a download retry without reopening the save dialog", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
+    vi.mocked(DeviceService.downloadFile)
+      .mockRejectedValueOnce(new Error("download unavailable"))
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const downloadButton = screen.getAllByRole("button").find((button) => button.querySelector("svg.lucide-download"));
+    expect(downloadButton).toBeTruthy();
+    fireEvent.click(downloadButton!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试下载" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.downloadFile).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(DeviceService.downloadFile).toHaveBeenLastCalledWith("device-1-serial", "/sdcard/old.txt", "C:/old.txt");
+  });
+
+  it("blocks uploads while a download is in progress", async () => {
+    const pending = deferred<{ success: boolean; stdout: string; stderr: string; exitCode: number }>();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/old.txt");
+    vi.mocked(DeviceService.downloadFile).mockReturnValueOnce(pending.promise);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const downloadButton = screen.getAllByRole("button").find((button) => button.querySelector("svg.lucide-download"));
+    expect(downloadButton).toBeTruthy();
+    fireEvent.click(downloadButton!);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const uploadButton = screen.getByRole("button", { name: "上传" });
+
+    expect((uploadButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(uploadButton);
+    expect(open).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await pending.promise;
+      await Promise.resolve();
+    });
+  });
+
+  it("offers an APK install retry using the previously selected path", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(open).mockResolvedValueOnce("C:/app.apk");
+    vi.mocked(DeviceService.listApps).mockResolvedValue([]);
+    vi.mocked(DeviceService.installApk)
+      .mockRejectedValueOnce(new Error("install unavailable"))
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "安装 APK" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重试安装" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.installApk).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(DeviceService.installApk).toHaveBeenLastCalledWith("device-1-serial", "C:/app.apk", true);
+  });
 });
