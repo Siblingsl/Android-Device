@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Monitor,
@@ -11,6 +11,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
+import { createRequestSequence } from "../lib/requestSequence";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -67,21 +68,36 @@ export function Devices() {
   const refreshDevices = useAppStore((s) => s.refreshDevices);
   const screenshotDir = useAppStore((s) => s.settings?.screenshotPath);
   const { t } = useI18n();
+  const loadSequence = useRef(createRequestSequence()).current;
+  const localLoadActive = useRef(false);
+  const loadingRequest = useRef<number | null>(null);
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
-    if (!silent) setLoading(true);
+    const token = loadSequence.begin();
+    localLoadActive.current = true;
+    if (!silent) {
+      loadingRequest.current = token;
+      setLoading(true);
+    }
     try {
       const list = await DeviceService.listDevices();
+      if (!loadSequence.isCurrent(token)) return;
       setDevices(list);
       const ids = new Set(list.map((d) => d.id));
       setPicked((prev) => prev.filter((id) => ids.has(id)));
       await refreshDevices();
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       const msg = e instanceof Error ? e.message : String(e);
       setStatusText(t("devices.status.refreshFailedWith", { msg }));
     } finally {
-      if (!silent) setLoading(false);
+      if (!loadSequence.isCurrent(token)) return;
+      localLoadActive.current = false;
+      if (loadingRequest.current !== null) {
+        loadingRequest.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -90,13 +106,18 @@ export function Devices() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => () => {
+    loadSequence.invalidate();
+    localLoadActive.current = false;
+  }, [loadSequence]);
+
   // The 15s layout tick refreshes the shared store even when this page has
   // its own list; without syncing, a transient backend hiccup at mount time
   // would keep a stale device list on screen until manual refresh.
   const storeDevices = useAppStore((s) => s.devices);
   const storeDevicesKey = storeDevices.map((d) => `${d.id}:${d.adbStatus}:${d.dockerStatus}`).join("|");
   useEffect(() => {
-    if (storeDevices.length) setDevices(storeDevices);
+    if (!localLoadActive.current && storeDevices.length) setDevices(storeDevices);
   }, [storeDevicesKey]);
 
   useEffect(() => {

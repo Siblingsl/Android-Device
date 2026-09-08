@@ -50,7 +50,7 @@ import { tStatic } from "../i18n";
 type MonitorAlertUndoKind = "dismiss" | "clear" | "cleanup";
 
 let statusInFlight = false;
-let devicesInFlight = false;
+let devicesInFlight: Promise<void> | null = null;
 let statusFails = 0;
 let deviceFails = 0;
 
@@ -267,22 +267,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  refreshDevices: async () => {
-    if (devicesInFlight) return;
-    devicesInFlight = true;
+  refreshDevices: () => {
+    if (devicesInFlight) return devicesInFlight;
     const hasData = get().devices.length > 0;
     if (!hasData) set({ loading: true });
-    try {
-      const devices = await DeviceService.listDevices();
-      set({ devices, loading: false });
-      deviceFails = 0;
-      if (statusFails === 0) noteRefreshOk();
-    } catch {
-      set({ loading: false });
-      noteRefreshFail("device");
-    } finally {
-      devicesInFlight = false;
-    }
+    const request = (async () => {
+      try {
+        const devices = await DeviceService.listDevices();
+        set({ devices, loading: false });
+        deviceFails = 0;
+        if (statusFails === 0) noteRefreshOk();
+      } catch {
+        set({ loading: false });
+        noteRefreshFail("device");
+      }
+    })();
+    const trackedRequest = request.finally(() => {
+      if (devicesInFlight === trackedRequest) devicesInFlight = null;
+    });
+    devicesInFlight = trackedRequest;
+    return trackedRequest;
   },
 
   loadSettings: async () => {

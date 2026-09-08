@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "./appStore";
 import { MONITOR_ALERT_UNDO_WINDOW_MS, type MonitorAlert } from "../lib/monitorAlerts";
+import { DeviceService } from "../services/deviceService";
+import type { DeviceInfo } from "../types";
 
 const MONITOR_ALERT_STORAGE_KEY = "rdc.monitorAlerts";
 
@@ -15,6 +17,7 @@ const alertFor = (deviceId: string, id: string): MonitorAlert => ({
 describe("app monitor alert state", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {
@@ -162,5 +165,28 @@ describe("app monitor alert state", () => {
     expect(JSON.parse(localStorage.getItem(MONITOR_ALERT_STORAGE_KEY) ?? "[]")).toEqual([
       alertFor("device-b", "alert-70000"),
     ]);
+  });
+
+  it("shares the completion of an in-flight device refresh", async () => {
+    let resolveList!: (devices: DeviceInfo[]) => void;
+    const pending = new Promise<DeviceInfo[]>((resolve) => {
+      resolveList = resolve;
+    });
+    const listDevices = vi.spyOn(DeviceService, "listDevices").mockReturnValue(pending);
+    const refreshDevices = useAppStore.getState().refreshDevices;
+
+    const first = refreshDevices();
+    const second = refreshDevices();
+    let secondFinished = false;
+    void second.then(() => {
+      secondFinished = true;
+    });
+
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(secondFinished).toBe(false);
+    resolveList([]);
+    await Promise.all([first, second]);
+    expect(useAppStore.getState().devices).toEqual([]);
   });
 });
