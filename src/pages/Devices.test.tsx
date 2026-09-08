@@ -270,6 +270,100 @@ describe("Devices batch controls", () => {
     );
   }, 15_000);
 
+  it("shows a complete batch summary that is independent from the visible filter", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 1\/2 成功/);
+    expect(screen.getByText("共 2 条 · 成功 1 · 失败 1")).toBeTruthy();
+    fireEvent.change(screen.getByRole("combobox", { name: "结果筛选" }), {
+      target: { value: "failed" },
+    });
+
+    expect(screen.getByText("共 2 条 · 成功 1 · 失败 1")).toBeTruthy();
+  }, 15_000);
+
+  it("copies only failed batch results", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 1\/2 成功/);
+    fireEvent.click(screen.getByRole("button", { name: "复制失败项" }));
+
+    await waitFor(() =>
+      expect(copyText).toHaveBeenCalledWith("设备\t结果\t说明\n设备 one\t失败\toffline"),
+    );
+  }, 15_000);
+
+  it("exports only failed batch results as a separate CSV file", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 1\/2 成功/);
+    fireEvent.click(screen.getByRole("button", { name: "导出失败项" }));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith({
+        defaultPath: expect.stringMatching(/^redroid-batch-failed-\d{4}-\d{2}-\d{2}\.csv$/),
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      }),
+    );
+    expect(DeviceService.exportLogs).toHaveBeenCalledWith(
+      "C:\\exports\\batch.csv",
+      '\uFEFF设备,设备 ID,结果,说明\r\n设备 one,one,失败,offline',
+    );
+    expect(DeviceService.revealInFolder).toHaveBeenCalledWith("C:\\exports\\batch.csv");
+  }, 15_000);
+
+  it("hides failed-only result actions when every device succeeds", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 2\/2 成功/);
+    expect(screen.queryByRole("button", { name: "复制失败项" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "导出失败项" })).toBeNull();
+  }, 15_000);
+
   it("filters visible batch rows without changing the complete report actions", async () => {
     vi.mocked(DeviceService.connect)
       .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })

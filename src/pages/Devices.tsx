@@ -441,18 +441,22 @@ export function Devices() {
     void batch(label, action, kind, retryDevices);
   };
 
-  const exportBatchCsv = async () => {
-    if (!batchReport) return;
+  const exportBatchCsv = async (
+    items = batchReport?.items ?? [],
+    defaultName = "redroid-batch-results",
+    successKey = "devices.exportedBatch",
+  ) => {
+    if (!batchReport || items.length === 0) return;
     try {
       const path = await save({
-        defaultPath: `redroid-batch-results-${new Date().toISOString().slice(0, 10)}.csv`,
+        defaultPath: `${defaultName}-${new Date().toISOString().slice(0, 10)}.csv`,
         filters: [{ name: "CSV", extensions: ["csv"] }],
       });
       if (!path) return;
       const saved = await DeviceService.exportLogs(
         path,
         serializeBatchResultsCsv(
-          batchReport.items,
+          items,
           [
             t("devices.table.device"),
             t("devices.table.id"),
@@ -464,7 +468,7 @@ export function Devices() {
         ),
       );
       const outputPath = saved || path;
-      setStatusText(t("devices.exportedBatch", { path: outputPath }));
+      setStatusText(t(successKey, { path: outputPath }));
       if (await askConfirm(t("devices.revealExportConfirm", { path: outputPath }))) {
         await DeviceService.revealInFolder(outputPath);
       }
@@ -473,6 +477,19 @@ export function Devices() {
       setStatusText(t("devices.exportFailed", { error }));
       void alert(error);
     }
+  };
+
+  const copyBatchResults = (items: BatchReportItem[], successKey: string) => {
+    const text = serializeBatchResultsText(
+      items,
+      [t("devices.table.device"), t("devices.table.result"), t("devices.table.detail")],
+      t("devices.success"),
+      t("devices.failed"),
+    );
+    void copyText(text).then(
+      () => setStatusText(t(successKey)),
+      () => setStatusText(t("common.panel.copyFailed")),
+    );
   };
 
   const deleteBatchHistory = async (entry: BatchHistoryItem) => {
@@ -498,6 +515,8 @@ export function Devices() {
         batchFilter === "all" || (batchFilter === "success" ? item.ok : !item.ok),
       )
     : [];
+  const failedBatchItems = batchReport?.items.filter((item) => !item.ok) ?? [];
+  const successfulBatchCount = batchReport?.items.filter((item) => item.ok).length ?? 0;
 
   return (
     <div>
@@ -832,6 +851,29 @@ export function Devices() {
                   </Button>
                 </>
               )}
+              {failedBatchItems.length > 0 && (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      void exportBatchCsv(
+                        failedBatchItems,
+                        "redroid-batch-failed",
+                        "devices.exportedBatchFailed",
+                      )
+                    }
+                  >
+                    {t("devices.exportFailedItems")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => copyBatchResults(failedBatchItems, "devices.copiedBatchFailed")}
+                  >
+                    {t("devices.copyFailed")}
+                  </Button>
+                </>
+              )}
               <Button
                 size="sm"
                 icon={<Download size={14} />}
@@ -842,18 +884,7 @@ export function Devices() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => {
-                  const text = serializeBatchResultsText(
-                    batchReport.items,
-                    [t("devices.table.device"), t("devices.table.result"), t("devices.table.detail")],
-                    t("devices.success"),
-                    t("devices.failed"),
-                  );
-                  void copyText(text).then(
-                    () => setStatusText(t("devices.copiedBatch")),
-                    () => setStatusText(t("common.panel.copyFailed")),
-                  );
-                }}
+                onClick={() => copyBatchResults(batchReport.items, "devices.copiedBatch")}
               >
                 {t("devices.copyResult")}
               </Button>
@@ -864,6 +895,13 @@ export function Devices() {
           }
         >
           <div className="row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("devices.batch.resultSummary", {
+                total: batchReport.items.length,
+                ok: successfulBatchCount,
+                failed: failedBatchItems.length,
+              })}
+            </span>
             <span className="muted" style={{ fontSize: 12 }}>
               {t("devices.batch.visibleCount", {
                 current: visibleBatchItems.length,
