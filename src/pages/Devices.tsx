@@ -25,15 +25,71 @@ import type { DeviceInfo } from "../types";
 const FILTER_KEY = "rdc.devices.filter";
 const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
+const BATCH_HISTORY_KEY = "rdc.devices.batchHistory";
+const MAX_BATCH_HISTORY = 10;
 
 type BatchAction = (device: DeviceInfo) => Promise<unknown>;
 type BatchReportItem = { id: string; name: string; ok: boolean; detail: string };
-type BatchReport = {
+type BatchHistoryItem = {
+  id: string;
   title: string;
   kind: string;
   items: BatchReportItem[];
-  retry: { label: string; kind: string; action: BatchAction };
+  createdAt: number;
 };
+type BatchReport = BatchHistoryItem & {
+  retry?: { label: string; kind: string; action: BatchAction };
+};
+
+type BatchResultFilter = "all" | "success" | "failed";
+
+function isBatchReportItem(value: unknown): value is BatchReportItem {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.id === "string" &&
+    item.id.length > 0 &&
+    typeof item.name === "string" &&
+    typeof item.ok === "boolean" &&
+    typeof item.detail === "string"
+  );
+}
+
+function readBatchHistory(): BatchHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(BATCH_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is BatchHistoryItem => {
+        if (!value || typeof value !== "object") return false;
+        const item = value as Record<string, unknown>;
+        return (
+          typeof item.id === "string" &&
+          item.id.length > 0 &&
+          typeof item.title === "string" &&
+          typeof item.kind === "string" &&
+          typeof item.createdAt === "number" &&
+          Number.isFinite(item.createdAt) &&
+          Array.isArray(item.items) &&
+          item.items.length > 0 &&
+          item.items.every(isBatchReportItem)
+        );
+      })
+      .slice(0, MAX_BATCH_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+function persistBatchHistory(history: BatchHistoryItem[]) {
+  try {
+    localStorage.setItem(BATCH_HISTORY_KEY, JSON.stringify(history.slice(0, MAX_BATCH_HISTORY)));
+  } catch {
+    /* ignore unavailable or full local storage */
+  }
+}
 
 function csvField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
@@ -101,6 +157,9 @@ export function Devices() {
     }
   });
   const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
+  const [batchHistory, setBatchHistory] = useState<BatchHistoryItem[]>(readBatchHistory);
+  const [batchFilter, setBatchFilter] = useState<BatchResultFilter>("all");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{
     label: string;
     current: number;
@@ -176,6 +235,10 @@ export function Devices() {
       /* ignore */
     }
   }, [filter, query, picked]);
+
+  useEffect(() => {
+    persistBatchHistory(batchHistory);
+  }, [batchHistory]);
 
   const run = async (
     id: string,
@@ -324,7 +387,8 @@ export function Devices() {
       await load({ silent: true });
       const okCount = items.filter((x) => x.ok).length;
       const stopped = batchCancelRequested.current;
-      setBatchReport({
+      const historyEntry: BatchHistoryItem = {
+        id: `${Date.now()}-${items.length}`,
         title: t(stopped ? "devices.batch.cancelledTitle" : "devices.batch.resultTitle", {
           label,
           ok: okCount,
@@ -332,8 +396,17 @@ export function Devices() {
         }),
         kind,
         items,
+        createdAt: Date.now(),
+      };
+      setBatchReport({
+        ...historyEntry,
         retry: { label, kind, action: fn },
       });
+      setBatchFilter("all");
+      setBatchHistory((history) => [
+        historyEntry,
+        ...history.filter((entry) => entry.id !== historyEntry.id),
+      ].slice(0, MAX_BATCH_HISTORY));
       setStatusText(
         t(stopped ? "devices.batch.cancelled" : "devices.batch.done", {
           label,
@@ -349,7 +422,7 @@ export function Devices() {
   };
 
   const retryFailedBatch = () => {
-    if (!batchReport || busy === "batch") return;
+    if (!batchReport?.retry || busy === "batch") return;
     const failedIds = new Set(batchReport.items.filter((item) => !item.ok).map((item) => item.id));
     const retryDevices = devices.filter((device) => failedIds.has(device.id));
     if (retryDevices.length === 0) {
@@ -358,6 +431,7 @@ export function Devices() {
     }
     const { label, kind, action } = batchReport.retry;
     setBatchReport(null);
+    setBatchFilter("all");
     void batch(label, action, kind, retryDevices);
   };
 
@@ -402,6 +476,12 @@ export function Devices() {
     setStatusText(t("devices.batch.stopping"));
   };
 
+  const visibleBatchItems = batchReport
+    ? batchReport.items.filter((item) =>
+        batchFilter === "all" || (batchFilter === "success" ? item.ok : !item.ok),
+      )
+    : [];
+
   return (
     <div>
       <div className="page-header">
@@ -409,15 +489,67 @@ export function Devices() {
           <div className="page-title">{t("devices.page.title")}</div>
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
-        <Button
-          variant="secondary"
-          icon={<RefreshCw size={15} />}
-          loading={loading}
-          onClick={() => void load()}
-        >
-          {t("common.refresh")}
-        </Button>
+        <div className="row">
+          {batchHistory.length > 0 && (
+            <Button
+              variant="ghost"
+              aria-expanded={historyOpen}
+              onClick={() => setHistoryOpen((open) => !open)}
+            >
+              {t("devices.batch.history")}
+            </Button>
+          )}
+          <Button
+            variant="secondary"
+            icon={<RefreshCw size={15} />}
+            loading={loading}
+            onClick={() => void load()}
+          >
+            {t("common.refresh")}
+          </Button>
+        </div>
       </div>
+
+      {historyOpen && (
+        <Card
+          title={t("devices.batch.historyTitle")}
+          action={
+            <Button size="sm" variant="ghost" onClick={() => setHistoryOpen(false)}>
+              {t("common.close")}
+            </Button>
+          }
+        >
+          <div style={{ display: "grid", gap: 8 }}>
+            {batchHistory.map((entry) => {
+              const ok = entry.items.filter((item) => item.ok).length;
+              return (
+                <div key={entry.id} className="row" style={{ justifyContent: "space-between" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div>{entry.title}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {t("devices.batch.historySummary", {
+                        ok,
+                        total: entry.items.length,
+                        time: new Date(entry.createdAt).toLocaleString(),
+                      })}
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setBatchReport(entry);
+                      setBatchFilter("all");
+                      setHistoryOpen(false);
+                    }}
+                  >
+                    {t("devices.batch.historyOpen")}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {devices.length > 0 && (
         <div className="row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
@@ -649,7 +781,7 @@ export function Devices() {
                   {t("devices.batchScreenshotDir")}
                 </Button>
               )}
-              {batchReport.items.some((it) => !it.ok) && (
+              {batchReport.retry && batchReport.items.some((it) => !it.ok) && (
                 <>
                   <Button
                     size="sm"
@@ -702,6 +834,24 @@ export function Devices() {
             </div>
           }
         >
+          <div className="row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("devices.batch.visibleCount", {
+                current: visibleBatchItems.length,
+                total: batchReport.items.length,
+              })}
+            </span>
+            <select
+              aria-label={t("devices.batch.resultFilter")}
+              value={batchFilter}
+              onChange={(e) => setBatchFilter(e.target.value as BatchResultFilter)}
+              style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
+            >
+              <option value="all">{t("devices.batch.resultAll")}</option>
+              <option value="success">{t("devices.batch.resultSuccess")}</option>
+              <option value="failed">{t("devices.batch.resultFailed")}</option>
+            </select>
+          </div>
           <table className="table">
             <thead>
               <tr>
@@ -711,34 +861,42 @@ export function Devices() {
               </tr>
             </thead>
             <tbody>
-              {batchReport.items.map((it) => (
-                <tr key={it.id}>
-                  <td>
-                    <button
-                      type="button"
-                      title={t("devices.openDetail")}
-                      style={{
-                        background: "none",
-                        border: 0,
-                        padding: 0,
-                        color: "inherit",
-                        cursor: "pointer",
-                        textDecoration: "underline",
-                      }}
-                      onClick={() => {
-                        setSelected(it.id);
-                        navigate(`/devices/${encodeURIComponent(it.id)}`);
-                      }}
-                    >
-                      {it.name}
-                    </button>
-                  </td>
-                  <td className={it.ok ? "ok" : "bad"}>{it.ok ? t("devices.success") : t("devices.failed")}</td>
-                  <td className="mono" style={{ fontSize: 11, wordBreak: "break-all" }}>
-                    {it.detail}
+              {visibleBatchItems.length > 0 ? (
+                visibleBatchItems.map((it) => (
+                  <tr key={it.id}>
+                    <td>
+                      <button
+                        type="button"
+                        title={t("devices.openDetail")}
+                        style={{
+                          background: "none",
+                          border: 0,
+                          padding: 0,
+                          color: "inherit",
+                          cursor: "pointer",
+                          textDecoration: "underline",
+                        }}
+                        onClick={() => {
+                          setSelected(it.id);
+                          navigate(`/devices/${encodeURIComponent(it.id)}`);
+                        }}
+                      >
+                        {it.name}
+                      </button>
+                    </td>
+                    <td className={it.ok ? "ok" : "bad"}>{it.ok ? t("devices.success") : t("devices.failed")}</td>
+                    <td className="mono" style={{ fontSize: 11, wordBreak: "break-all" }}>
+                      {it.detail}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={3} className="muted">
+                    {t("devices.batch.noMatches")}
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </Card>

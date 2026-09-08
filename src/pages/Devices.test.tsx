@@ -76,6 +76,7 @@ const device = (id: string): DeviceInfo => ({
 describe("Devices batch controls", () => {
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.clear();
     vi.mocked(DeviceService.listDevices).mockReset();
     vi.mocked(DeviceService.connect).mockReset();
     vi.mocked(DeviceService.disconnect).mockReset();
@@ -260,6 +261,93 @@ describe("Devices batch controls", () => {
       ),
     );
   }, 15_000);
+
+  it("filters visible batch rows without changing the complete report actions", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByText(/批量 ADB 连接 · 1\/2 成功/);
+    fireEvent.change(screen.getByRole("combobox", { name: "结果筛选" }), {
+      target: { value: "failed" },
+    });
+
+    expect(screen.getByText("当前显示 1/2 条")).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 one 失败 offline/ })).toBeTruthy();
+    expect(screen.queryByRole("row", { name: /设备 two 成功/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "重试失败" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "导出 CSV" })).toBeTruthy();
+  }, 15_000);
+
+  it("persists completed batch results and restores them without retry controls", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    const firstRender = render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+    await screen.findByText(/批量 ADB 连接 · 1\/2 成功/);
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+
+    const stored = JSON.parse(localStorage.getItem("rdc.devices.batchHistory") ?? "[]") as unknown[];
+    expect(stored).toHaveLength(1);
+
+    firstRender.unmount();
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+    expect(screen.getByText(/批量 ADB 连接 · 1\/2 成功/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+
+    expect(await screen.findByRole("row", { name: /设备 one 失败 offline/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试失败" })).toBeNull();
+  }, 15_000);
+
+  it("loads at most ten valid historical batch results", async () => {
+    const valid = Array.from({ length: 11 }, (_, index) => ({
+      id: `history-${index}`,
+      title: `历史结果 ${index}`,
+      kind: "connect",
+      createdAt: 1_700_000_000_000 + index,
+      items: [{ id: `device-${index}`, name: `设备 ${index}`, ok: true, detail: "成功" }],
+    }));
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([{ id: "broken", title: "损坏记录", kind: "connect", createdAt: "bad", items: [] }, ...valid]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+
+    expect(screen.getAllByRole("button", { name: "查看" })).toHaveLength(10);
+    expect(screen.queryByText("损坏记录")).toBeNull();
+  });
 
   it("disables the refresh button while the device list is loading", async () => {
     render(
