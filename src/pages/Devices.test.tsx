@@ -73,6 +73,14 @@ const device = (id: string): DeviceInfo => ({
   scrcpyPort: 5556,
 });
 
+const historyEntry = (id: string, title: string, createdAt = Date.now()) => ({
+  id,
+  title,
+  kind: "connect",
+  createdAt,
+  items: [{ id: `device-${id}`, name: `设备 ${id}`, ok: true, detail: "成功" }],
+});
+
 describe("Devices batch controls", () => {
   beforeEach(() => {
     sessionStorage.clear();
@@ -329,7 +337,7 @@ describe("Devices batch controls", () => {
       id: `history-${index}`,
       title: `历史结果 ${index}`,
       kind: "connect",
-      createdAt: 1_700_000_000_000 + index,
+      createdAt: Date.now() - index,
       items: [{ id: `device-${index}`, name: `设备 ${index}`, ok: true, detail: "成功" }],
     }));
     localStorage.setItem(
@@ -347,6 +355,98 @@ describe("Devices batch controls", () => {
 
     expect(screen.getAllByRole("button", { name: "查看" })).toHaveLength(10);
     expect(screen.queryByText("损坏记录")).toBeNull();
+  });
+
+  it("deletes one historical result after confirmation", async () => {
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([historyEntry("latest", "最新结果"), historyEntry("older", "较早结果")]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+
+    await waitFor(() => {
+      expect(askConfirm).toHaveBeenCalledWith("删除批量历史“最新结果”？");
+      expect(JSON.parse(localStorage.getItem("rdc.devices.batchHistory") ?? "[]")).toHaveLength(1);
+    });
+    expect(screen.queryByText("最新结果")).toBeNull();
+    expect(screen.getByText("较早结果")).toBeTruthy();
+  });
+
+  it("keeps all historical results when clearing is cancelled", async () => {
+    vi.mocked(askConfirm).mockResolvedValue(false);
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([historyEntry("one", "结果一"), historyEntry("two", "结果二")]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空历史" }));
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("确定清空全部批量历史记录吗？"));
+    expect(JSON.parse(localStorage.getItem("rdc.devices.batchHistory") ?? "[]")).toHaveLength(2);
+    expect(screen.getByText("结果一")).toBeTruthy();
+    expect(screen.getByText("结果二")).toBeTruthy();
+  });
+
+  it("clears historical results after confirmation and closes the history panel", async () => {
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([historyEntry("one", "结果一"), historyEntry("two", "结果二")]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空历史" }));
+
+    await waitFor(() => expect(localStorage.getItem("rdc.devices.batchHistory")).toBe("[]"));
+    expect(screen.queryByText("结果一")).toBeNull();
+    expect(screen.queryByText("结果二")).toBeNull();
+    expect(screen.queryByRole("button", { name: "批量历史" })).toBeNull();
+  });
+
+  it("removes historical results older than thirty days when loading", async () => {
+    const now = Date.now();
+    localStorage.setItem(
+      "rdc.devices.batchHistory",
+      JSON.stringify([
+        historyEntry("old", "过期结果", now - 31 * 24 * 60 * 60 * 1000),
+        historyEntry("recent", "最近结果", now - 24 * 60 * 60 * 1000),
+      ]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    fireEvent.click(screen.getByRole("button", { name: "批量历史" }));
+
+    expect(screen.getAllByRole("button", { name: "查看" })).toHaveLength(1);
+    expect(screen.getByText("最近结果")).toBeTruthy();
+    expect(screen.queryByText("过期结果")).toBeNull();
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("rdc.devices.batchHistory") ?? "[]")).toHaveLength(1),
+    );
   });
 
   it("disables the refresh button while the device list is loading", async () => {

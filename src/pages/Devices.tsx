@@ -27,6 +27,7 @@ const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
 const BATCH_HISTORY_KEY = "rdc.devices.batchHistory";
 const MAX_BATCH_HISTORY = 10;
+const BATCH_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 type BatchAction = (device: DeviceInfo) => Promise<unknown>;
 type BatchReportItem = { id: string; name: string; ok: boolean; detail: string };
@@ -55,14 +56,18 @@ function isBatchReportItem(value: unknown): value is BatchReportItem {
   );
 }
 
+function pruneBatchHistory(history: BatchHistoryItem[], now = Date.now()): BatchHistoryItem[] {
+  const cutoff = now - BATCH_HISTORY_MAX_AGE_MS;
+  return history.filter((entry) => entry.createdAt >= cutoff).slice(0, MAX_BATCH_HISTORY);
+}
+
 function readBatchHistory(): BatchHistoryItem[] {
   try {
     const raw = localStorage.getItem(BATCH_HISTORY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((value): value is BatchHistoryItem => {
+    const valid = parsed.filter((value): value is BatchHistoryItem => {
         if (!value || typeof value !== "object") return false;
         const item = value as Record<string, unknown>;
         return (
@@ -76,8 +81,8 @@ function readBatchHistory(): BatchHistoryItem[] {
           item.items.length > 0 &&
           item.items.every(isBatchReportItem)
         );
-      })
-      .slice(0, MAX_BATCH_HISTORY);
+      });
+    return pruneBatchHistory(valid);
   } catch {
     return [];
   }
@@ -387,8 +392,9 @@ export function Devices() {
       await load({ silent: true });
       const okCount = items.filter((x) => x.ok).length;
       const stopped = batchCancelRequested.current;
+      const createdAt = Date.now();
       const historyEntry: BatchHistoryItem = {
-        id: `${Date.now()}-${items.length}`,
+        id: `${createdAt}-${items.length}`,
         title: t(stopped ? "devices.batch.cancelledTitle" : "devices.batch.resultTitle", {
           label,
           ok: okCount,
@@ -396,7 +402,7 @@ export function Devices() {
         }),
         kind,
         items,
-        createdAt: Date.now(),
+        createdAt,
       };
       setBatchReport({
         ...historyEntry,
@@ -469,6 +475,17 @@ export function Devices() {
     }
   };
 
+  const deleteBatchHistory = async (entry: BatchHistoryItem) => {
+    if (!(await askConfirm(t("devices.batch.confirmDelete", { title: entry.title })))) return;
+    setBatchHistory((history) => history.filter((item) => item.id !== entry.id));
+  };
+
+  const clearBatchHistory = async () => {
+    if (!(await askConfirm(t("devices.batch.confirmClear")))) return;
+    setBatchHistory([]);
+    setHistoryOpen(false);
+  };
+
   const cancelBatch = () => {
     if (busy !== "batch" || batchCancelRequested.current) return;
     batchCancelRequested.current = true;
@@ -514,9 +531,14 @@ export function Devices() {
         <Card
           title={t("devices.batch.historyTitle")}
           action={
-            <Button size="sm" variant="ghost" onClick={() => setHistoryOpen(false)}>
-              {t("common.close")}
-            </Button>
+            <div className="row">
+              <Button size="sm" variant="danger" onClick={() => void clearBatchHistory()}>
+                {t("devices.batch.historyClear")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setHistoryOpen(false)}>
+                {t("common.close")}
+              </Button>
+            </div>
           }
         >
           <div style={{ display: "grid", gap: 8 }}>
@@ -543,6 +565,13 @@ export function Devices() {
                     }}
                   >
                     {t("devices.batch.historyOpen")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void deleteBatchHistory(entry)}
+                  >
+                    {t("devices.batch.historyDelete")}
                   </Button>
                 </div>
               );
