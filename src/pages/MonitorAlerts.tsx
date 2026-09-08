@@ -258,6 +258,9 @@ export function MonitorAlertsPage() {
                     {alert.deviceName || t("monitor.deviceUnknown")}
                   </div>
                   <div className="monitor-alert-history-message">
+                    <span className={`monitor-severity-badge ${alert.severity ?? "warning"}`}>
+                      {t(`monitor.severity.${alert.severity ?? "warning"}`)}
+                    </span>{" "}
                     {t(monitorAlertMessageKey(alert.kind), {
                       threshold: alert.alertThreshold ?? monitorPreferences.alertThreshold,
                     })}

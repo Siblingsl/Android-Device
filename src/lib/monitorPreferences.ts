@@ -1,6 +1,7 @@
 import type {
   DeviceMonitorPreset,
   DeviceMonitorRule,
+  MonitorAlertSeverity,
   MonitorQuietHours,
 } from "../types";
 
@@ -14,6 +15,8 @@ export interface MonitorPreferences {
 export interface ResolvedDeviceMonitorPreferences extends MonitorPreferences {
   preset: DeviceMonitorPreset;
   alertsEnabled: boolean;
+  warningAlertsEnabled: boolean;
+  criticalAlertsEnabled: boolean;
   quietHours: MonitorQuietHours | null;
 }
 
@@ -25,6 +28,11 @@ const DEVICE_MONITOR_PRESETS: Record<
   balanced: { alertThreshold: 80, refreshIntervalSecs: 10 },
   relaxed: { alertThreshold: 90, refreshIntervalSecs: 20 },
 };
+
+export function monitorCriticalThresholdFor(alertThreshold: number): number {
+  const threshold = normalizeMonitorPreferences(alertThreshold, 10).alertThreshold;
+  return Math.min(100, Math.max(90, threshold + 10));
+}
 
 function finiteOr(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -69,10 +77,33 @@ export function isWithinMonitorQuietHours(
 }
 
 export function shouldSuppressMonitorAlert(
-  preferences: Pick<ResolvedDeviceMonitorPreferences, "alertsEnabled" | "quietHours">,
+  preferences: Pick<ResolvedDeviceMonitorPreferences, "alertsEnabled" | "quietHours">
+    & Partial<Pick<ResolvedDeviceMonitorPreferences, "warningAlertsEnabled" | "criticalAlertsEnabled">>,
   at: Date,
+  severity: MonitorAlertSeverity = "warning",
 ): boolean {
-  return !preferences.alertsEnabled || isWithinMonitorQuietHours(at, preferences.quietHours);
+  const levelEnabled = severity === "critical"
+    ? preferences.criticalAlertsEnabled !== false
+    : preferences.warningAlertsEnabled !== false;
+  return !preferences.alertsEnabled || !levelEnabled || isWithinMonitorQuietHours(at, preferences.quietHours);
+}
+
+export function resourceAlertSeverityFor(
+  cpuUsage: number | null | undefined,
+  memoryUsage: number | null | undefined,
+  alertThreshold: number,
+): MonitorAlertSeverity | null {
+  const criticalThreshold = monitorCriticalThresholdFor(alertThreshold);
+  const cpu = typeof cpuUsage === "number" && Number.isFinite(cpuUsage) ? cpuUsage : null;
+  const memory = typeof memoryUsage === "number" && Number.isFinite(memoryUsage) ? memoryUsage : null;
+  if ((cpu !== null && cpu >= criticalThreshold) || (memory !== null && memory >= criticalThreshold)) {
+    return "critical";
+  }
+  const warningThreshold = normalizeMonitorPreferences(alertThreshold, 10).alertThreshold;
+  if ((cpu !== null && cpu >= warningThreshold) || (memory !== null && memory >= warningThreshold)) {
+    return "warning";
+  }
+  return null;
 }
 
 export function normalizeMonitorPreferences(
@@ -93,6 +124,8 @@ export function resolveDeviceMonitorPreferences(
   const global = normalizeMonitorPreferences(globalAlertThreshold, globalRefreshIntervalSecs);
   const notificationPreferences = {
     alertsEnabled: rule?.alertsEnabled !== false,
+    warningAlertsEnabled: rule?.warningAlertsEnabled !== false,
+    criticalAlertsEnabled: rule?.criticalAlertsEnabled !== false,
     quietHours: normalizeMonitorQuietHours(rule?.quietStart, rule?.quietEnd),
   };
   if (
@@ -105,7 +138,14 @@ export function resolveDeviceMonitorPreferences(
       rule.preset === "custom"
     )
   ) {
-    return { preset: "inherit", ...global, alertsEnabled: true, quietHours: null };
+    return {
+      preset: "inherit",
+      ...global,
+      alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
+      quietHours: null,
+    };
   }
   if (rule.preset === "inherit") {
     return { preset: "inherit", ...global, ...notificationPreferences };
@@ -130,13 +170,21 @@ export function applyDeviceMonitorRule(
     preferences.quietHours?.start,
     preferences.quietHours?.end,
   );
-  if (preferences.preset === "inherit" && preferences.alertsEnabled && !quietHours) {
+  if (
+    preferences.preset === "inherit" &&
+    preferences.alertsEnabled &&
+    preferences.warningAlertsEnabled &&
+    preferences.criticalAlertsEnabled &&
+    !quietHours
+  ) {
     delete next[deviceId];
     return next;
   }
   const rule: DeviceMonitorRule = {
     preset: preferences.preset,
     alertsEnabled: preferences.alertsEnabled,
+    warningAlertsEnabled: preferences.warningAlertsEnabled,
+    criticalAlertsEnabled: preferences.criticalAlertsEnabled,
   };
   if (preferences.preset !== "inherit") {
     rule.alertThreshold = preferences.alertThreshold;

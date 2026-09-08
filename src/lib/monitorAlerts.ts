@@ -1,3 +1,4 @@
+import type { MonitorAlertSeverity } from "../types";
 import type { ResourceAlert } from "./monitorPreferences";
 
 export type { ResourceAlert } from "./monitorPreferences";
@@ -21,13 +22,52 @@ export interface ResourceAlertTracker {
   lastEmittedAt: number | null;
 }
 
+export interface MonitorAlertState {
+  kind: MonitorAlertKind;
+  severity: MonitorAlertSeverity;
+}
+
+export interface MonitorAlertTracker {
+  active: MonitorAlertState | null;
+  lastEmittedAt: number | null;
+}
+
 export interface MonitorAlert {
   id: string;
   deviceId: string;
   deviceName: string;
   kind: Exclude<ResourceAlert, null>;
   createdAt: number;
+  severity?: MonitorAlertSeverity;
   alertThreshold?: number;
+}
+
+export function evaluateMonitorAlert(
+  previous: MonitorAlertTracker,
+  current: MonitorAlertState | null,
+  now: number,
+  cooldownMs = MONITOR_ALERT_COOLDOWN_MS,
+): { emit: boolean; tracker: MonitorAlertTracker } {
+  if (!current) {
+    return {
+      emit: false,
+      tracker: { active: null, lastEmittedAt: null },
+    };
+  }
+
+  const changed =
+    previous.active?.kind !== current.kind || previous.active?.severity !== current.severity;
+  const cooldownElapsed =
+    previous.lastEmittedAt === null || now - previous.lastEmittedAt >= Math.max(0, cooldownMs);
+  const emit = changed || cooldownElapsed;
+
+  return {
+    emit,
+    tracker: {
+      active: current,
+      lastEmittedAt: emit ? now : previous.lastEmittedAt,
+    },
+  };
 }
 
 export function evaluateResourceAlert(
@@ -91,12 +131,14 @@ export function parseStoredMonitorAlerts(raw: string | null): MonitorAlert[] {
           typeof item.alertThreshold === "number" && Number.isFinite(item.alertThreshold)
             ? Math.round(Math.min(100, Math.max(50, item.alertThreshold)))
             : undefined;
+        const severity: MonitorAlertSeverity = item.severity === "critical" ? "critical" : "warning";
         return {
           id: item.id,
           deviceId: item.deviceId,
           deviceName: item.deviceName,
           kind: item.kind,
           createdAt: item.createdAt,
+          severity,
           ...(threshold === undefined ? {} : { alertThreshold: threshold }),
         };
       })
@@ -125,12 +167,13 @@ export function serializeMonitorAlertsCsv(alerts: MonitorAlert[]): string {
       alert.deviceName,
       alert.deviceId,
       alert.kind,
+      alert.severity ?? "warning",
       alert.alertThreshold === undefined ? "" : String(alert.alertThreshold),
     ]
       .map(csvField)
       .join(","),
   );
-  return `\uFEFFtimestamp,device_name,device_id,resource,alert_threshold${rows.length ? `\r\n${rows.join("\r\n")}` : ""}`;
+  return `\uFEFFtimestamp,device_name,device_id,resource,severity,alert_threshold${rows.length ? `\r\n${rows.join("\r\n")}` : ""}`;
 }
 
 export async function runConfirmedMonitorAlertCleanup(
@@ -178,6 +221,7 @@ export function hasRecentMonitorAlert(
     return (
       existing.deviceId === alert.deviceId &&
       existing.kind === alert.kind &&
+      (existing.severity ?? "warning") === (alert.severity ?? "warning") &&
       elapsed >= 0 &&
       elapsed < cooldown
     );

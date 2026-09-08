@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   applyDeviceMonitorRule,
   isWithinMonitorQuietHours,
+  monitorCriticalThresholdFor,
   normalizeMonitorPreferences,
   normalizeMonitorQuietHours,
   resolveDeviceMonitorPreferences,
   resourceAlertFor,
+  resourceAlertSeverityFor,
   shouldSuppressMonitorAlert,
 } from "./monitorPreferences";
 
@@ -45,6 +47,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 72,
       refreshIntervalSecs: 12,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
   });
@@ -59,6 +63,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 65,
       refreshIntervalSecs: 5,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
     expect(resolveDeviceMonitorPreferences(80, 10, {
@@ -70,6 +76,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 80,
       refreshIntervalSecs: 10,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
     expect(resolveDeviceMonitorPreferences(80, 10, {
@@ -81,6 +89,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 90,
       refreshIntervalSecs: 20,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
   });
@@ -95,6 +105,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 50,
       refreshIntervalSecs: 60,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
     expect(resolveDeviceMonitorPreferences(74, 16, {
@@ -106,6 +118,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 74,
       refreshIntervalSecs: 16,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
   });
@@ -121,6 +135,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 80,
       refreshIntervalSecs: 10,
       alertsEnabled: false,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: { start: "22:00", end: "06:30" },
     });
   });
@@ -135,6 +151,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       alertThreshold: 76,
       refreshIntervalSecs: 14,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     });
   });
@@ -165,9 +183,39 @@ describe("monitor quiet hours", () => {
 
   it("suppresses alerts when disabled or during configured quiet hours", () => {
     const quietHours = { start: "22:00", end: "06:30" };
-    expect(shouldSuppressMonitorAlert({ alertsEnabled: false, quietHours }, new Date(2026, 8, 8, 12, 0))).toBe(true);
-    expect(shouldSuppressMonitorAlert({ alertsEnabled: true, quietHours }, new Date(2026, 8, 8, 23, 0))).toBe(true);
-    expect(shouldSuppressMonitorAlert({ alertsEnabled: true, quietHours }, new Date(2026, 8, 8, 12, 0))).toBe(false);
+    const preferences = {
+      alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
+      quietHours,
+    };
+    expect(shouldSuppressMonitorAlert({ ...preferences, alertsEnabled: false }, new Date(2026, 8, 8, 12, 0))).toBe(true);
+    expect(shouldSuppressMonitorAlert(preferences, new Date(2026, 8, 8, 23, 0))).toBe(true);
+    expect(shouldSuppressMonitorAlert(preferences, new Date(2026, 8, 8, 12, 0))).toBe(false);
+  });
+
+  it("can suppress warning and critical levels independently", () => {
+    const at = new Date(2026, 8, 8, 12, 0);
+    const preferences = { alertsEnabled: true, quietHours: null };
+    expect(shouldSuppressMonitorAlert({ ...preferences, warningAlertsEnabled: false }, at, "warning")).toBe(true);
+    expect(shouldSuppressMonitorAlert({ ...preferences, criticalAlertsEnabled: false }, at, "critical")).toBe(true);
+    expect(shouldSuppressMonitorAlert({ ...preferences, warningAlertsEnabled: false }, at, "critical")).toBe(false);
+  });
+});
+
+describe("resource alert severity", () => {
+  it("keeps the configured threshold as warning and escalates at the critical threshold", () => {
+    expect(monitorCriticalThresholdFor(80)).toBe(90);
+    expect(resourceAlertSeverityFor(80, 0, 80)).toBe("warning");
+    expect(resourceAlertSeverityFor(89.9, 0, 80)).toBe("warning");
+    expect(resourceAlertSeverityFor(90, 0, 80)).toBe("critical");
+    expect(resourceAlertSeverityFor(80, 90, 80)).toBe("critical");
+  });
+
+  it("caps critical escalation at 100 percent for high warning thresholds", () => {
+    expect(monitorCriticalThresholdFor(95)).toBe(100);
+    expect(resourceAlertSeverityFor(99, 0, 95)).toBe("warning");
+    expect(resourceAlertSeverityFor(100, 0, 95)).toBe("critical");
   });
 });
 
@@ -183,6 +231,8 @@ describe("applyDeviceMonitorRule", () => {
       alertThreshold: 75,
       refreshIntervalSecs: 15,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     })).toEqual({
       "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
@@ -196,6 +246,8 @@ describe("applyDeviceMonitorRule", () => {
       alertThreshold: 73,
       refreshIntervalSecs: 12,
       alertsEnabled: true,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: null,
     })).toEqual({
       "device-a": {
@@ -203,6 +255,8 @@ describe("applyDeviceMonitorRule", () => {
         alertThreshold: 73,
         refreshIntervalSecs: 12,
         alertsEnabled: true,
+        warningAlertsEnabled: true,
+        criticalAlertsEnabled: true,
       },
       "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
     });
@@ -214,13 +268,37 @@ describe("applyDeviceMonitorRule", () => {
       alertThreshold: 80,
       refreshIntervalSecs: 10,
       alertsEnabled: false,
+      warningAlertsEnabled: true,
+      criticalAlertsEnabled: true,
       quietHours: { start: "22:00", end: "06:30" },
     })).toEqual({
       "device-a": {
         preset: "inherit",
         alertsEnabled: false,
+        warningAlertsEnabled: true,
+        criticalAlertsEnabled: true,
         quietStart: "22:00",
         quietEnd: "06:30",
+      },
+      "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
+    });
+  });
+
+  it("stores a level-only override while inheriting global thresholds", () => {
+    expect(applyDeviceMonitorRule(existing, "device-a", {
+      preset: "inherit",
+      alertThreshold: 80,
+      refreshIntervalSecs: 10,
+      alertsEnabled: true,
+      warningAlertsEnabled: false,
+      criticalAlertsEnabled: true,
+      quietHours: null,
+    })).toEqual({
+      "device-a": {
+        preset: "inherit",
+        alertsEnabled: true,
+        warningAlertsEnabled: false,
+        criticalAlertsEnabled: true,
       },
       "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
     });

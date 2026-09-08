@@ -211,6 +211,7 @@ export interface ScreenshotResult {
 }
 
 export type DeviceMonitorPreset = "inherit" | "sensitive" | "balanced" | "relaxed" | "custom";
+export type MonitorAlertSeverity = "warning" | "critical";
 
 export interface MonitorQuietHours {
   start: string;
@@ -222,6 +223,8 @@ export interface DeviceMonitorRule {
   alertThreshold?: number;
   refreshIntervalSecs?: number;
   alertsEnabled?: boolean;
+  warningAlertsEnabled?: boolean;
+  criticalAlertsEnabled?: boolean;
   quietStart?: string;
   quietEnd?: string;
 }

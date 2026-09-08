@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendMonitorAlert,
   clearMonitorAlertsBefore,
+  evaluateMonitorAlert,
   evaluateResourceAlert,
   filterMonitorAlerts,
   hasRecentMonitorAlert,
@@ -10,6 +11,7 @@ import {
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
   type MonitorAlert,
+  type MonitorAlertTracker,
   type ResourceAlertTracker,
 } from "./monitorAlerts";
 
@@ -43,6 +45,40 @@ describe("evaluateResourceAlert", () => {
       tracker: { active: null, lastEmittedAt: null },
     });
     expect(evaluateResourceAlert(active, "memory", 2_000).emit).toBe(true);
+  });
+});
+
+describe("evaluateMonitorAlert", () => {
+  it("emits when an active resource alert escalates from warning to critical", () => {
+    const previous: MonitorAlertTracker = {
+      active: { kind: "cpu", severity: "warning" },
+      lastEmittedAt: 1_000,
+    };
+
+    const result = evaluateMonitorAlert(
+      previous,
+      { kind: "cpu", severity: "critical" },
+      2_000,
+    );
+
+    expect(result.emit).toBe(true);
+    expect(result.tracker).toEqual({
+      active: { kind: "cpu", severity: "critical" },
+      lastEmittedAt: 2_000,
+    });
+  });
+
+  it("keeps the critical alert inside the cooldown window and resets after recovery", () => {
+    const previous: MonitorAlertTracker = {
+      active: { kind: "cpu", severity: "critical" },
+      lastEmittedAt: 1_000,
+    };
+
+    expect(evaluateMonitorAlert(previous, { kind: "cpu", severity: "critical" }, 59_999).emit).toBe(false);
+    expect(evaluateMonitorAlert(previous, null, 2_000)).toEqual({
+      emit: false,
+      tracker: { active: null, lastEmittedAt: null },
+    });
   });
 });
 
@@ -134,6 +170,12 @@ describe("hasRecentMonitorAlert", () => {
         { ...existing, id: "alert-memory", kind: "memory", createdAt: 2_000 },
       ),
     ).toBe(false);
+    expect(
+      hasRecentMonitorAlert(
+        [existing],
+        { ...existing, id: "alert-critical", severity: "critical", createdAt: 2_000 },
+      ),
+    ).toBe(false);
   });
 });
 
@@ -142,15 +184,15 @@ describe("parseStoredMonitorAlerts", () => {
     const result = parseStoredMonitorAlerts(JSON.stringify([
       { id: "older", deviceId: "device-a", deviceName: "Device A", kind: "cpu", createdAt: 1_000 },
       { id: "invalid-kind", deviceId: "device-a", deviceName: "Device A", kind: "disk", createdAt: 2_000 },
-      { id: "newer", deviceId: "device-b", deviceName: "Device B", kind: "memory", createdAt: 3_000, alertThreshold: 75 },
+      { id: "newer", deviceId: "device-b", deviceName: "Device B", kind: "memory", severity: "critical", createdAt: 3_000, alertThreshold: 75 },
       { id: "bad-threshold", deviceId: "device-c", deviceName: "Device C", kind: "both", createdAt: 2_500, alertThreshold: "75" },
       null,
     ]));
 
-    expect(result.map((alert) => [alert.id, alert.alertThreshold])).toEqual([
-      ["newer", 75],
-      ["bad-threshold", undefined],
-      ["older", undefined],
+    expect(result.map((alert) => [alert.id, alert.alertThreshold, alert.severity])).toEqual([
+      ["newer", 75, "critical"],
+      ["bad-threshold", undefined, "warning"],
+      ["older", undefined, "warning"],
     ]);
   });
 
@@ -201,11 +243,12 @@ describe("serializeMonitorAlertsCsv", () => {
         kind: "both",
         createdAt: Date.UTC(2026, 8, 8, 1, 2, 3),
         alertThreshold: 75,
+        severity: "critical",
       },
     ];
 
     expect(serializeMonitorAlertsCsv(alerts)).toBe(
-      '\uFEFFtimestamp,device_name,device_id,resource,alert_threshold\r\n2026-09-08T01:02:03.000Z,"Lab ""A""","device,1",both,75',
+      '\uFEFFtimestamp,device_name,device_id,resource,severity,alert_threshold\r\n2026-09-08T01:02:03.000Z,"Lab ""A""","device,1",both,critical,75',
     );
   });
 });

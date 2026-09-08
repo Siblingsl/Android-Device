@@ -40,12 +40,13 @@ import {
   applyDeviceMonitorRule,
   resolveDeviceMonitorPreferences,
   resourceAlertFor,
+  resourceAlertSeverityFor,
   shouldSuppressMonitorAlert,
 } from "../lib/monitorPreferences";
 import {
-  evaluateResourceAlert,
+  evaluateMonitorAlert,
   MAX_MONITOR_ALERTS,
-  type ResourceAlertTracker,
+  type MonitorAlertTracker,
 } from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
@@ -100,7 +101,7 @@ export function DeviceDetail() {
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
-  const resourceAlertTracker = useRef<ResourceAlertTracker>({ active: null, lastEmittedAt: null });
+  const resourceAlertTracker = useRef<MonitorAlertTracker>({ active: null, lastEmittedAt: null });
   const monitorPreferences = resolveDeviceMonitorPreferences(
     appSettings?.resourceAlertThreshold,
     appSettings?.deviceRefreshIntervalSecs,
@@ -115,6 +116,8 @@ export function DeviceDetail() {
     alertThreshold: number,
     refreshIntervalSecs: number,
     alertsEnabled: boolean,
+    warningAlertsEnabled: boolean,
+    criticalAlertsEnabled: boolean,
     quietHours: MonitorQuietHours | null,
   ): Promise<boolean> => {
     if (!appSettings || monitorRuleSaving) return false;
@@ -123,6 +126,8 @@ export function DeviceDetail() {
       alertThreshold,
       refreshIntervalSecs,
       alertsEnabled,
+      warningAlertsEnabled,
+      criticalAlertsEnabled,
       ...(quietHours ? { quietStart: quietHours.start, quietEnd: quietHours.end } : {}),
     };
     const resolved = resolveDeviceMonitorPreferences(
@@ -250,6 +255,8 @@ export function DeviceDetail() {
   }, [
     monitorPreferences.alertThreshold,
     monitorPreferences.alertsEnabled,
+    monitorPreferences.warningAlertsEnabled,
+    monitorPreferences.criticalAlertsEnabled,
     monitorPreferences.quietHours?.start,
     monitorPreferences.quietHours?.end,
   ]);
@@ -258,14 +265,24 @@ export function DeviceDetail() {
     const cpuUsage = typeof device?.cpuUsage === "number" ? device.cpuUsage : null;
     const memoryUsage = typeof device?.memoryUsage === "number" ? device.memoryUsage : null;
     const current = resourceAlertFor(cpuUsage, memoryUsage, monitorPreferences.alertThreshold);
+    const severity = resourceAlertSeverityFor(
+      cpuUsage,
+      memoryUsage,
+      monitorPreferences.alertThreshold,
+    );
     const now = Date.now();
-    const result = evaluateResourceAlert(resourceAlertTracker.current, current, now);
+    const result = evaluateMonitorAlert(
+      resourceAlertTracker.current,
+      current && severity ? { kind: current, severity } : null,
+      now,
+    );
     resourceAlertTracker.current = result.tracker;
     if (
       !result.emit ||
       !current ||
+      !severity ||
       !device ||
-      shouldSuppressMonitorAlert(monitorPreferences, new Date(now))
+      shouldSuppressMonitorAlert(monitorPreferences, new Date(now), severity)
     ) return;
 
     addMonitorAlert({
@@ -274,6 +291,7 @@ export function DeviceDetail() {
       deviceName: device.name || deviceId,
       kind: current,
       createdAt: now,
+      severity,
       alertThreshold: monitorPreferences.alertThreshold,
     });
   }, [
@@ -283,6 +301,8 @@ export function DeviceDetail() {
     device?.name,
     monitorPreferences.alertThreshold,
     monitorPreferences.alertsEnabled,
+    monitorPreferences.warningAlertsEnabled,
+    monitorPreferences.criticalAlertsEnabled,
     monitorPreferences.quietHours?.start,
     monitorPreferences.quietHours?.end,
   ]);
@@ -481,6 +501,8 @@ export function DeviceDetail() {
             refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
             monitorPreset={monitorPreferences.preset}
             alertsEnabled={monitorPreferences.alertsEnabled}
+            warningAlertsEnabled={monitorPreferences.warningAlertsEnabled}
+            criticalAlertsEnabled={monitorPreferences.criticalAlertsEnabled}
             quietHours={monitorPreferences.quietHours}
             monitorRuleSaving={monitorRuleSaving}
             onMonitorRuleChange={saveMonitorRule}

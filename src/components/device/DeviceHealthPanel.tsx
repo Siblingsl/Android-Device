@@ -37,6 +37,8 @@ interface Props {
   refreshIntervalSecs: number;
   monitorPreset: DeviceMonitorPreset;
   alertsEnabled: boolean;
+  warningAlertsEnabled: boolean;
+  criticalAlertsEnabled: boolean;
   quietHours: MonitorQuietHours | null;
   monitorRuleSaving: boolean;
   onMonitorRuleChange: (
@@ -44,6 +46,8 @@ interface Props {
     alertThreshold: number,
     refreshIntervalSecs: number,
     alertsEnabled: boolean,
+    warningAlertsEnabled: boolean,
+    criticalAlertsEnabled: boolean,
     quietHours: MonitorQuietHours | null,
   ) => Promise<boolean>;
   monitorAlerts: MonitorAlert[];
@@ -71,6 +75,8 @@ export function DeviceHealthPanel({
   refreshIntervalSecs,
   monitorPreset,
   alertsEnabled,
+  warningAlertsEnabled,
+  criticalAlertsEnabled,
   quietHours,
   monitorRuleSaving,
   onMonitorRuleChange,
@@ -87,6 +93,8 @@ export function DeviceHealthPanel({
   const [customThreshold, setCustomThreshold] = useState(alertThreshold);
   const [customRefreshInterval, setCustomRefreshInterval] = useState(refreshIntervalSecs);
   const [draftAlertsEnabled, setDraftAlertsEnabled] = useState(alertsEnabled);
+  const [draftWarningAlertsEnabled, setDraftWarningAlertsEnabled] = useState(warningAlertsEnabled);
+  const [draftCriticalAlertsEnabled, setDraftCriticalAlertsEnabled] = useState(criticalAlertsEnabled);
   const [draftQuietStart, setDraftQuietStart] = useState(quietHours?.start ?? "");
   const [draftQuietEnd, setDraftQuietEnd] = useState(quietHours?.end ?? "");
   const [quietHoursError, setQuietHoursError] = useState<string | null>(null);
@@ -95,10 +103,21 @@ export function DeviceHealthPanel({
     setCustomThreshold(alertThreshold);
     setCustomRefreshInterval(refreshIntervalSecs);
     setDraftAlertsEnabled(alertsEnabled);
+    setDraftWarningAlertsEnabled(warningAlertsEnabled);
+    setDraftCriticalAlertsEnabled(criticalAlertsEnabled);
     setDraftQuietStart(quietHours?.start ?? "");
     setDraftQuietEnd(quietHours?.end ?? "");
     setQuietHoursError(null);
-  }, [alertThreshold, alertsEnabled, monitorPreset, quietHours?.end, quietHours?.start, refreshIntervalSecs]);
+  }, [
+    alertThreshold,
+    alertsEnabled,
+    criticalAlertsEnabled,
+    monitorPreset,
+    quietHours?.end,
+    quietHours?.start,
+    refreshIntervalSecs,
+    warningAlertsEnabled,
+  ]);
 
   const saveDraftPolicy = (
     preset: DeviceMonitorPreset,
@@ -118,6 +137,8 @@ export function DeviceHealthPanel({
       threshold,
       interval,
       draftAlertsEnabled,
+      draftWarningAlertsEnabled,
+      draftCriticalAlertsEnabled,
       nextQuietHours,
     ).then((saved) => {
       if (!saved && resetPresetOnFailure) setDraftPreset(monitorPreset);
@@ -285,6 +306,26 @@ export function DeviceHealthPanel({
                 />
                 <span>{t("detail.monitor.policy.alertsEnabled")}</span>
               </label>
+              <div className="device-monitor-policy-levels">
+                <label className="device-monitor-policy-level-toggle warning">
+                  <input
+                    type="checkbox"
+                    checked={draftWarningAlertsEnabled}
+                    disabled={!draftAlertsEnabled}
+                    onChange={(event) => setDraftWarningAlertsEnabled(event.target.checked)}
+                  />
+                  <span>{t("detail.monitor.policy.severity.warning")}</span>
+                </label>
+                <label className="device-monitor-policy-level-toggle critical">
+                  <input
+                    type="checkbox"
+                    checked={draftCriticalAlertsEnabled}
+                    disabled={!draftAlertsEnabled}
+                    onChange={(event) => setDraftCriticalAlertsEnabled(event.target.checked)}
+                  />
+                  <span>{t("detail.monitor.policy.severity.critical")}</span>
+                </label>
+              </div>
               <div className="device-monitor-policy-quiet">
                 <span className="device-monitor-policy-quiet-label">
                   {t("detail.monitor.policy.quietHours")}
@@ -453,6 +494,9 @@ function MonitorAlertCenter({
               <AlertTriangle size={14} />
               <div className="device-monitor-notification-content">
                 <div className="device-monitor-notification-message">
+                  <span className={`monitor-severity-badge ${alert.severity ?? "warning"}`}>
+                    {t(`detail.monitor.policy.severity.${alert.severity ?? "warning"}`)}
+                  </span>
                   {resourceAlertMessageFor(alert.kind, t, alert.alertThreshold ?? threshold)}
                 </div>
                 <div className="device-monitor-notification-time">
