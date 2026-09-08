@@ -190,4 +190,34 @@ describe("Devices batch controls", () => {
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("停止设备 设备 one？"));
     await waitFor(() => expect(DeviceService.stop).toHaveBeenCalledWith("one"));
   });
+
+  it("does not restart one device when the confirmation is cancelled", async () => {
+    vi.mocked(askConfirm).mockResolvedValue(false);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "restart" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
+    expect(DeviceService.restart).not.toHaveBeenCalled();
+  });
+
+  it("restarts one device only after the confirmation is accepted", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "restart" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
+    await waitFor(() => expect(DeviceService.restart).toHaveBeenCalledWith("one"));
+  });
 });

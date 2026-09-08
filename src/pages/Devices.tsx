@@ -835,7 +835,10 @@ export function Devices() {
                     }
                     if (v === "restart") {
                       if (!canRestart) return;
-                      void run(d.id, () => DeviceService.restart(d.id), t("devices.status.restart", { name: d.name }));
+                      void (async () => {
+                        if (!(await askConfirm(t("devices.confirmRestartOne", { name: d.name })))) return;
+                        await run(d.id, () => DeviceService.restart(d.id), t("devices.status.restart", { name: d.name }));
+                      })();
                     }
                     if (v === "stop") {
                       if (!canStop) return;
