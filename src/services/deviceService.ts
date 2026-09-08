@@ -104,6 +104,12 @@ export const DeviceService = {
     invoke<ShellResult>("upload_file", { serial, local, remote }),
   downloadFile: (serial: string, remote: string, local: string) =>
     invoke<ShellResult>("download_file", { serial, remote, local }),
+  uploadFileTracked: (serial: string, local: string, remote: string, operationId: string) =>
+    invoke<ShellResult>("upload_file_tracked", { serial, local, remote, operationId }),
+  downloadFileTracked: (serial: string, remote: string, local: string, operationId: string) =>
+    invoke<ShellResult>("download_file_tracked", { serial, remote, local, operationId }),
+  cancelFileTransfer: (operationId: string) =>
+    invoke<boolean>("cancel_file_transfer", { operationId }),
   deleteFile: (serial: string, path: string) =>
     invoke<ShellResult>("delete_file", { serial, path }),
   mkdir: (serial: string, path: string) =>

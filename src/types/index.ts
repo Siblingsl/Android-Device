@@ -188,6 +188,19 @@ export interface FileEntry {
   modified: string;
 }
 
+export type FileTransferDirection = "upload" | "download";
+export type FileTransferStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface FileTransferProgress {
+  operationId: string;
+  direction: FileTransferDirection;
+  status: FileTransferStatus;
+  bytesTransferred: number | null;
+  totalBytes: number | null;
+  percent: number | null;
+  message: string;
+}
+
 export interface LogEntry {
   id: string;
   timestamp: string;
