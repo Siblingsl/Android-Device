@@ -36,6 +36,7 @@ import {
   type ControlFeedbackStatus,
 } from "../lib/controlFeedback";
 import { DevicePreview } from "../components/device/DevicePreview";
+import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
 import { useAppStore } from "../stores/appStore";
@@ -70,11 +71,19 @@ export function DeviceDetail() {
   });
   const [device, setDevice] = useState<DeviceInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
+  const refreshInFlight = useRef(false);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (silent = false) => {
+    if (refreshInFlight.current) return device;
+    refreshInFlight.current = true;
+    if (!silent) setLoading(true);
+    setRefreshing(true);
     try {
       let d = await DeviceService.getDevice(deviceId);
       if (!d && deviceId.includes(":")) {
@@ -83,12 +92,18 @@ export function DeviceDetail() {
         if (hit) d = await DeviceService.getDevice(hit.id);
       }
       setDevice(d);
+      setRefreshError(null);
+      setLastUpdatedAt(Date.now());
       return d;
     } catch (e) {
-      setStatusText(e instanceof Error ? t("detail.load.failedWith", { msg: e.message }) : t("detail.load.failed"));
+      const message = e instanceof Error ? e.message : t("detail.load.failed");
+      setRefreshError(message);
+      setStatusText(t("detail.load.failedWith", { msg: message }));
       return null;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      setRefreshing(false);
+      refreshInFlight.current = false;
     }
   };
 
@@ -144,6 +159,12 @@ export function DeviceDetail() {
       }
     });
   }, [deviceId]);
+
+  useEffect(() => {
+    if (!device || !autoRefresh) return;
+    const timer = window.setInterval(() => void load(true), 10000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, deviceId, device !== null]);
 
   if (loading && !device) {
     return (
@@ -244,7 +265,7 @@ export function DeviceDetail() {
               {connecting ? t("detail.connectingShort") : t("detail.adbConnect")}
             </Button>
           )}
-          <Button icon={<RefreshCw size={15} />} onClick={() => void load()} disabled={connecting}>
+          <Button icon={<RefreshCw size={15} />} onClick={() => void load()} loading={refreshing} disabled={connecting}>
             {t("common.refresh")}
           </Button>
           <select
@@ -320,6 +341,15 @@ export function DeviceDetail() {
       )}
       {tab === "overview" && (
         <>
+          <DeviceHealthPanel
+            device={device}
+            refreshing={refreshing}
+            lastUpdatedAt={lastUpdatedAt}
+            refreshError={refreshError}
+            autoRefresh={autoRefresh}
+            onAutoRefreshChange={setAutoRefresh}
+            onRefresh={() => void load()}
+          />
           <Overview device={device} onOpenTab={setTab} />
           <RootPanel device={device} />
         </>

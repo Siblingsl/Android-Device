@@ -556,6 +556,94 @@ a {
 .card-title { font-weight: 600; font-size: 14px; }
 .card-body { padding: 14px 16px 16px; }
 
+.device-monitor { margin-bottom: 16px; }
+.device-monitor-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.device-monitor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.device-monitor-toggle input { accent-color: var(--primary); }
+.device-monitor-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.device-monitor-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.device-monitor-state.healthy {
+  color: var(--success);
+  background: rgba(16, 185, 129, 0.14);
+}
+.device-monitor-state.offline,
+.device-monitor-state.adb {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+}
+.device-monitor-state.container {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.14);
+}
+.device-monitor-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.device-monitor-alert.warn {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.12);
+}
+.device-monitor-alert.error {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+}
+.device-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+.device-monitor-metric {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-hover);
+}
+.device-monitor-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.device-monitor-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+.device-monitor-value.success { color: var(--success); }
+.device-monitor-value.error { color: var(--danger); }
+
 .btn {
   display: inline-flex;
   align-items: center;
