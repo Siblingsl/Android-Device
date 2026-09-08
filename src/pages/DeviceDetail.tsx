@@ -4,13 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft,
-  Camera,
-  Expand,
-  Home,
-  RotateCcw,
   RefreshCw,
-  Keyboard,
-  Clipboard,
   FolderPlus,
   Trash2,
   Upload,
@@ -25,6 +19,19 @@ import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
+import { runDeviceAction, scrcpyStateFromResult } from "../lib/deviceActions";
+import {
+  canRefreshPreview,
+  emptyPreview,
+  failPreviewRequest,
+  finishPreviewRequest,
+  startPreviewRequest,
+  type PreviewState,
+} from "../lib/devicePreview";
+import { shortcutForScreenKey } from "../lib/deviceInput";
+import { DevicePreview } from "../components/device/DevicePreview";
+import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
+import { DeviceShell } from "../components/device/DeviceShell";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -976,47 +983,15 @@ function Control({
   disabled?: boolean;
 }) {
   const { t } = useI18n();
-  const [text, setText] = useState("");
-  const [clipboard, setClipboard] = useState("");
-  const [shellCmd, setShellCmd] = useState("");
-  const [shellOut, setShellOut] = useState("");
-  const [copiedOut, setCopiedOut] = useState(false);
-  const [history, setHistory] = useState<string[]>(() => {
-    try {
-      const raw = sessionStorage.getItem("rdc.shell.history");
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as unknown;
-      return Array.isArray(parsed) && parsed.every((x) => typeof x === "string") ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-  const [favorites, setFavorites] = useState<string[]>(() => {
-    const fallback = [
-      "getprop ro.build.version.release",
-      "wm size",
-      "pm list packages -3",
-      "dumpsys activity activities | head -30",
-    ];
-    try {
-      const raw = localStorage.getItem("rdc.shell.favorites");
-      if (!raw) return fallback;
-      const parsed = JSON.parse(raw) as unknown;
-      return Array.isArray(parsed) && parsed.every((x) => typeof x === "string") && parsed.length
-        ? parsed
-        : fallback;
-    } catch {
-      return fallback;
-    }
-  });
-  const [preview, setPreview] = useState<string | null>(null);
-  const [shotPath, setShotPath] = useState("");
-  const [previewStamp, setPreviewStamp] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
+  const [shellDiagnostic, setShellDiagnostic] = useState<{ id: number; message: string } | null>(null);
+  const [previewState, setPreviewState] = useState<PreviewState>(() => emptyPreview());
   const [previewFlash, setPreviewFlash] = useState(false);
   const [livePreview, setLivePreview] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [hideChrome, setHideChrome] = useState(false);
   const [scrcpyLabel, setScrcpyLabel] = useState("stopped");
+  const [scrcpyBusy, setScrcpyBusy] = useState<"start" | "stop" | "restart" | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const swipedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -1024,26 +999,12 @@ function Control({
   const previewRef = useRef(false);
   const livePreviewRef = useRef(true);
   const refreshTimer = useRef(0);
+  const previewRequesting = useRef(false);
+  const diagnosticId = useRef(0);
   const chromeTimer = useRef(0);
   const { w: screenW, h: screenH } = parseResolution(resolution);
-  previewRef.current = Boolean(preview);
+  previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("rdc.shell.favorites", JSON.stringify(favorites));
-    } catch {
-      /* ignore */
-    }
-  }, [favorites]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem("rdc.shell.history", JSON.stringify(history));
-    } catch {
-      /* ignore */
-    }
-  }, [history]);
 
   useEffect(
     () => () => {
@@ -1095,36 +1056,90 @@ function Control({
     }
   };
 
-  const refreshPreview = () => {
-    if (!previewRef.current || !livePreviewRef.current || disabled) return;
-    window.clearTimeout(refreshTimer.current);
-    refreshTimer.current = window.setTimeout(() => {
-      void DeviceService.screenshot(serial).then((r) => {
-        if (!r.success) return;
-        setPreview(r.base64 ? `data:image/png;base64,${r.base64}` : null);
-        if (r.path) setShotPath(r.path);
-        setPreviewStamp(new Date().toLocaleTimeString());
-        setPreviewFlash(true);
-        window.setTimeout(() => setPreviewFlash(false), 1600);
-      });
-    }, 800);
+  const appendDiagnostic = (message: string) => {
+    const detail = message.trim();
+    if (!detail) return;
+    setShellDiagnostic({ id: ++diagnosticId.current, message: detail });
   };
 
-  const act = async (label: string, fn: () => Promise<unknown>) => {
+  const requestPreview = async (announce: boolean) => {
+    if (!canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })) return;
+    if (previewRequesting.current) return;
+    previewRequesting.current = true;
+    setPreviewState((previous) => startPreviewRequest(previous));
+    if (announce) setStatusText(t("detail.control.shooting"));
+    try {
+      const r = await DeviceService.screenshot(serial);
+      if (r.success) {
+        setPreviewState((previous) => finishPreviewRequest(previous, r, Date.now()));
+        setPreviewFlash(true);
+        window.setTimeout(() => setPreviewFlash(false), 1600);
+        if (announce) setStatusText(t("detail.control.shotSaved", { path: r.path }));
+      } else {
+        const reason = (r.error || t("detail.control.shotFailed")).trim();
+        setPreviewState((previous) => failPreviewRequest(previous, reason));
+        setStatusText(reason);
+        appendDiagnostic(reason);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setPreviewState((previous) => failPreviewRequest(previous, reason));
+      setStatusText(reason || t("detail.control.shotFailed"));
+      appendDiagnostic(reason);
+    } finally {
+      previewRequesting.current = false;
+    }
+  };
+
+  const refreshPreview = () => {
+    if (
+      !previewRef.current ||
+      !livePreviewRef.current ||
+      !canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })
+    ) return;
+    window.clearTimeout(refreshTimer.current);
+    refreshTimer.current = window.setTimeout(() => void requestPreview(false), 800);
+  };
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") {
+        window.clearTimeout(refreshTimer.current);
+        return;
+      }
+      if (previewRef.current && livePreviewRef.current) refreshPreview();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [disabled, livePreview]);
+
+  const act = async (label: string, fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>) => {
     if (disabled) {
       setStatusText(t("detail.status.deviceOffline"));
       return;
     }
+    if (actionBusy) return;
+    setActionBusy(true);
     setStatusText(label);
     try {
-      await fn();
-      refreshPreview();
-    } finally {
+      await runDeviceAction(fn, {
+        fallback: t("detail.control.actionFailed"),
+        onSuccess: () => refreshPreview(),
+        onError: (error) => {
+          setStatusText(error.message);
+          appendDiagnostic(error.message);
+        },
+      });
       setStatusText(t("detail.status.ready"));
+    } catch {
+      // Error feedback is handled by onError; keep the rejected Promise local
+      // so mouse/keyboard handlers do not create an unhandled rejection.
+    } finally {
+      setActionBusy(false);
     }
   };
 
-  const toDevicePoint = (e: React.MouseEvent) => {
+  const toDevicePoint = (e: { clientX: number; clientY: number }) => {
     const el = frameRef.current ?? screenRef.current;
     if (!el) return { x: 0, y: 0 };
     const rect = el.getBoundingClientRect();
@@ -1176,439 +1191,248 @@ function Control({
     }
   };
 
-  const runShell = async (cmd?: string) => {
-    const c = (cmd ?? shellCmd).trim();
-    if (!c) return;
-    setStatusText(t("detail.control.runningShell"));
-    const r = await DeviceService.shell(serial, c);
-    setShellOut((r.stdout || r.stderr || "(empty)") + `\n[exit ${r.exitCode}]`);
-    setHistory((h) => [c, ...h.filter((x) => x !== c)].slice(0, 30));
-    setStatusText(t("detail.status.ready"));
+  const takeShot = () => {
+    void requestPreview(true);
   };
 
-  const takeShot = async () => {
-    setStatusText(t("detail.control.shooting"));
-    const r = await DeviceService.screenshot(serial);
-    if (r.success) {
-      setPreview(r.base64 ? `data:image/png;base64,${r.base64}` : null);
-      setShotPath(r.path);
-      setPreviewStamp(new Date().toLocaleTimeString());
-      setPreviewFlash(true);
-      window.setTimeout(() => setPreviewFlash(false), 1600);
-      setStatusText(t("detail.control.shotSaved", { path: r.path }));
-    } else {
-      const reason = (r.error || t("detail.control.shotFailed")).trim();
-      setStatusText(reason);
-      void alert(reason);
+  const runControlAction = (action: DeviceControlAction, value?: string | boolean) => {
+    if (action === "text") {
+      void act(t("detail.control.inputText"), () => DeviceService.text(serial, String(value ?? "")));
+      return;
     }
+    if (action === "clipboard") {
+      void act(t("detail.control.clipboard"), () =>
+        DeviceService.sendClipboard(serial, String(value ?? "")),
+      );
+      return;
+    }
+    const labels: Record<Exclude<DeviceControlAction, "text" | "clipboard">, string> = {
+      home: "HOME",
+      back: "BACK",
+      recent: "RECENT",
+      power: "POWER",
+      volup: t("detail.control.volUp"),
+      voldown: t("detail.control.volDown"),
+      lock: t("detail.control.lock"),
+      wake: t("detail.control.wake"),
+      rotate: t("detail.control.rotate"),
+      notify: t("detail.control.notify"),
+      settings: t("detail.control.settings"),
+    };
+    const operations: Record<Exclude<DeviceControlAction, "text" | "clipboard">, () => Promise<{
+      success: boolean;
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    }>> = {
+      home: () => DeviceService.home(serial),
+      back: () => DeviceService.back(serial),
+      recent: () => DeviceService.recent(serial),
+      power: () => DeviceService.power(serial),
+      volup: () => DeviceService.volumeUp(serial),
+      voldown: () => DeviceService.volumeDown(serial),
+      lock: () => DeviceService.lock(serial),
+      wake: () => DeviceService.wake(serial),
+      rotate: () => DeviceService.rotate(serial, Boolean(value)),
+      notify: () => DeviceService.openNotifications(serial),
+      settings: () => DeviceService.openSettings(serial),
+    };
+    void act(labels[action], operations[action]);
+  };
+
+  const onScreenKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const shortcut = shortcutForScreenKey(event.nativeEvent);
+    if (!shortcut) return;
+    event.preventDefault();
+    runControlAction(shortcut);
   };
 
   const startScrcpy = async () => {
+    if (disabled || scrcpyBusy) return;
+    setScrcpyBusy("start");
     setStatusText(t("detail.control.startingScrcpy"));
-    // Ensure network devices are connected first
-    if (serial.includes(":")) {
-      const c = await DeviceService.connect(serial);
-      if (!c.success && c.stderr) {
-        setScrcpyLabel("stopped");
-        setStatusText(c.stderr);
-        setShellOut((c.stdout || "") + "\n" + (c.stderr || ""));
-        return;
-      }
-    }
-    let extra = "";
     try {
-      const raw = sessionStorage.getItem(`rdc.settings.draft.${serial}`);
-      extra = raw ? String((JSON.parse(raw) as { scrcpyArgs?: string }).scrcpyArgs || "") : "";
-    } catch {
-      extra = "";
-    }
-    const sizeHit = extra.match(/--max-size[=\s]+(\d+)/);
-    const rateHit = extra.match(/--video-bit-rate[=\s]+(\d+)/);
-    const maxSize = sizeHit ? Number(sizeHit[1]) : 1080;
-    const bitRate = rateHit ? Number(rateHit[1]) : 8;
-    const r = await DeviceService.scrcpyStart(serial, maxSize || 1080, bitRate || 8, extra);
-    setScrcpyLabel(r.success ? "running" : "stopped");
-    if (r.success) {
-      setStatusText(t("detail.control.scrcpyStarted"));
-    } else {
-      setStatusText(r.stderr || r.stdout || t("detail.control.scrcpyStartFailed"));
-      setShellOut((prev) => `${prev}\n[scrcpy]\n${r.stderr || r.stdout || "failed"}`.trim());
+      // Ensure network devices are connected first
+      if (serial.includes(":")) {
+        const c = await DeviceService.connect(serial);
+        if (!c.success) {
+          const reason = c.stderr || c.stdout || t("detail.control.scrcpyStartFailed");
+          setScrcpyLabel("error");
+          setStatusText(reason);
+          appendDiagnostic(`[scrcpy]\n${c.stdout || ""}\n${c.stderr || reason}`);
+          return;
+        }
+      }
+      let extra = "";
+      try {
+        const raw = sessionStorage.getItem(`rdc.settings.draft.${serial}`);
+        extra = raw ? String((JSON.parse(raw) as { scrcpyArgs?: string }).scrcpyArgs || "") : "";
+      } catch {
+        extra = "";
+      }
+      const sizeHit = extra.match(/--max-size[=\s]+(\d+)/);
+      const rateHit = extra.match(/--video-bit-rate[=\s]+(\d+)/);
+      const maxSize = sizeHit ? Number(sizeHit[1]) : 1080;
+      const bitRate = rateHit ? Number(rateHit[1]) : 8;
+      const r = await DeviceService.scrcpyStart(serial, maxSize || 1080, bitRate || 8, extra);
+      const state = scrcpyStateFromResult(r, "start");
+      setScrcpyLabel(state);
+      if (state === "running") {
+        setStatusText(t("detail.control.scrcpyStarted"));
+        void syncScrcpy();
+      } else {
+        const reason = r.stderr || r.stdout || t("detail.control.scrcpyStartFailed");
+        setStatusText(reason);
+        appendDiagnostic(`[scrcpy]\n${reason}`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setScrcpyLabel("error");
+      setStatusText(reason || t("detail.control.scrcpyStartFailed"));
+      appendDiagnostic(`[scrcpy]\n${reason || t("detail.control.scrcpyStartFailed")}`);
+    } finally {
+      setScrcpyBusy(null);
     }
   };
 
   const stopScrcpy = async () => {
-    await DeviceService.scrcpyStop(serial);
-    setScrcpyLabel("stopped");
-    setStatusText(t("detail.control.scrcpyStopped"));
+    if (scrcpyBusy) return;
+    setScrcpyBusy("stop");
+    try {
+      const r = await DeviceService.scrcpyStop(serial);
+      const state = scrcpyStateFromResult(r, "stop");
+      setScrcpyLabel(state);
+      if (state === "stopped") {
+        setStatusText(t("detail.control.scrcpyStopped"));
+      } else {
+        const reason = r.stderr || r.stdout || t("detail.control.scrcpyStopFailed");
+        setStatusText(reason);
+        appendDiagnostic(`[scrcpy stop]\n${reason}`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setScrcpyLabel("error");
+      setStatusText(reason || t("detail.control.scrcpyStopFailed"));
+      appendDiagnostic(`[scrcpy stop]\n${reason || t("detail.control.scrcpyStopFailed")}`);
+    } finally {
+      setScrcpyBusy(null);
+    }
   };
 
   const restartScrcpy = async () => {
+    if (disabled || scrcpyBusy) return;
+    setScrcpyBusy("restart");
     setStatusText(t("detail.control.reconnectingScrcpy"));
-    const r = await DeviceService.scrcpyRestart(serial);
-    setScrcpyLabel(r.success ? "running" : "stopped");
-    if (r.success) {
-      setStatusText(t("detail.control.scrcpyReconnected"));
-    } else {
-      setStatusText(r.stderr || r.stdout || t("detail.control.scrcpyReconnectFailed"));
-      setShellOut((prev) => `${prev}\n[scrcpy restart]\n${r.stderr || r.stdout || "failed"}`.trim());
+    try {
+      const r = await DeviceService.scrcpyRestart(serial);
+      const state = scrcpyStateFromResult(r, "restart");
+      setScrcpyLabel(state);
+      if (state === "running") {
+        setStatusText(t("detail.control.scrcpyReconnected"));
+        void syncScrcpy();
+      } else {
+        const reason = r.stderr || r.stdout || t("detail.control.scrcpyReconnectFailed");
+        setStatusText(reason);
+        appendDiagnostic(`[scrcpy restart]\n${reason}`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setScrcpyLabel("error");
+      setStatusText(reason || t("detail.control.scrcpyReconnectFailed"));
+      appendDiagnostic(`[scrcpy restart]\n${reason || t("detail.control.scrcpyReconnectFailed")}`);
+    } finally {
+      setScrcpyBusy(null);
     }
   };
 
   return (
     <div className="split-control">
-      <div className="screen-area" ref={screenRef}
+      <DevicePreview
+        serial={serial}
+        disabled={disabled}
+        scrcpyStatus={scrcpyLabel}
+        scrcpyBusy={scrcpyBusy}
+        preview={previewState}
+        previewFlash={previewFlash}
+        livePreview={livePreview}
+        fullscreen={fullscreen}
+        hideChrome={hideChrome}
+        screenRef={screenRef}
+        frameRef={frameRef}
         onMouseMove={bumpChrome}
-        onClick={disabled ? undefined : onScreenClick}
-        onDoubleClick={
-          disabled
-            ? undefined
-            : (e) => {
-                const { x, y } = toDevicePoint(e);
-                void act(t("detail.control.doubleClick"), async () => {
-                  await DeviceService.tap(serial, x, y);
-                  await DeviceService.tap(serial, x, y);
-                });
-              }
-        }
-        onContextMenu={disabled ? undefined : onContextMenu}
-        onAuxClick={disabled ? undefined : onAuxClick}
-        onMouseDown={disabled ? undefined : onMouseDown}
-        onMouseUp={disabled ? undefined : onMouseUp}
-        onWheel={
-          disabled
-            ? undefined
-            : (e) => {
-                const { x, y } = toDevicePoint(e as unknown as React.MouseEvent);
-                const dy = e.deltaY > 0 ? 300 : -300;
-                void DeviceService.swipe(serial, x, y, x, y + dy, 200).then(() => refreshPreview());
-              }
-        }
-      >
-        <div
-          className="screen-toolbar"
-          style={{ opacity: hideChrome ? 0 : 1, pointerEvents: hideChrome ? "none" : "auto", transition: "opacity .2s" }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onMouseUp={(e) => e.stopPropagation()}
-        >
-          <div className="row">
-            {scrcpyLabel === "running" ? (
-              <Button size="sm" variant="primary" onClick={() => void stopScrcpy()}>
-                {t("detail.control.mirroringActive")}
-              </Button>
-            ) : (
-              <Button size="sm" variant="secondary" disabled={disabled} onClick={() => void startScrcpy()}>
-                {t("detail.control.startMirroring")}
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={scrcpyLabel !== "running"}
-              onClick={() => void stopScrcpy()}
-            >
-              {t("detail.control.disconnect")}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={disabled || scrcpyLabel !== "running"}
-              onClick={() => void restartScrcpy()}
-            >
-              {t("detail.control.reconnect")}
-            </Button>
-            <Button size="sm" icon={<Camera size={14} />} disabled={disabled} onClick={() => void takeShot()}>
-              {t("detail.control.screenshot")}
-            </Button>
-            {shotPath && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  void DeviceService.revealInFolder(shotPath).catch((e) => void alert(String(e)))
-                }
-              >
-                {t("detail.control.openFolder")}
-              </Button>
-            )}
-          </div>
-          <div className="row">
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Expand size={14} />}
-              onClick={() => {
-                const el = screenRef.current;
-                if (!el) return;
-                if (document.fullscreenElement === el) {
-                  void document.exitFullscreen();
-                } else {
-                  void el.requestFullscreen().catch((e) => void alert(String(e)));
-                }
-              }}
-            >
-              {fullscreen ? t("detail.control.exitFullscreen") : t("detail.control.fullscreen")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<RotateCcw size={14} />}
-              disabled={disabled}
-              onClick={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true))}
-            >
-              {t("detail.control.rotate")}
-            </Button>
-          </div>
-        </div>
-
-        {preview ? (
-          <>
-            <img
-              ref={frameRef as React.Ref<HTMLImageElement>}
-              src={preview}
-              alt="screenshot"
-              style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-            />
-            <div
-              className="row"
-              onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{
-                position: "absolute",
-                top: 52,
-                right: 12,
-                zIndex: 2,
-                gap: 6,
-                opacity: hideChrome ? 0 : 1,
-                pointerEvents: hideChrome ? "none" : "auto",
-                transition: "opacity .2s",
-              }}
-            >
-              {previewStamp && (
-                <span className="badge info" style={{ opacity: previewFlash ? 1 : 0.7 }}>
-                  {previewFlash ? t("detail.control.updated", { time: previewStamp }) : previewStamp}
-                </span>
-              )}
-              <button
-                type="button"
-                className="badge"
-                onClick={() => {
-                  setLivePreview((v) => {
-                    const next = !v;
-                    if (!next) window.clearTimeout(refreshTimer.current);
-                    return next;
-                  });
-                }}
-              >
-                {livePreview ? t("detail.control.stopRefresh") : t("detail.control.resumeRefresh")}
-              </button>
-              <button
-                type="button"
-                className="badge"
-                onClick={() => {
-                  window.clearTimeout(refreshTimer.current);
-                  setPreview(null);
-                  setPreviewStamp("");
-                  setPreviewFlash(false);
-                }}
-              >
-                {t("detail.control.closePreview")}
-              </button>
-            </div>
-          </>
-        ) : (
-          <div ref={frameRef as React.Ref<HTMLDivElement>} className="screen-placeholder">
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{t("detail.control.liveView")}</div>
-            <div style={{ fontSize: 13, opacity: 0.8, maxWidth: 360, lineHeight: 1.6 }}>
-              {t("detail.control.liveViewHint")}
-            </div>
-            <div style={{ marginTop: 12 }} className="badge info">
-              scrcpy: {scrcpyLabel}
-            </div>
-            {shotPath && (
-              <div style={{ marginTop: 12 }}>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    void DeviceService.revealInFolder(shotPath).catch((e) => void alert(String(e)))
-                  }
-                >
-                  {t("detail.control.openLastShotFolder")}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="screen-stats" hidden={fullscreen} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onMouseUp={(e) => e.stopPropagation()}>
-          <span className="badge">{t("detail.control.hint.click")}</span>
-          <span className="badge">{t("detail.control.hint.drag")}</span>
-          <span className="badge">{t("detail.control.hint.wheel")}</span>
-          <span className="badge">{t("detail.control.hint.dblclick")}</span>
-          <span className="badge">{t("detail.control.hint.right")}</span>
-          <span className="badge">{t("detail.control.hint.middle")}</span>
-        </div>
-      </div>
+        onKeyDown={onScreenKeyDown}
+        onClick={onScreenClick}
+        onDoubleClick={(e) => {
+          const { x, y } = toDevicePoint(e);
+          void act(t("detail.control.doubleClick"), async () => {
+            await DeviceService.tap(serial, x, y);
+            return DeviceService.tap(serial, x, y);
+          });
+        }}
+        onContextMenu={onContextMenu}
+        onAuxClick={onAuxClick}
+        onMouseDown={onMouseDown}
+        onMouseUp={onMouseUp}
+        onWheel={(e) => {
+          const { x, y } = toDevicePoint(e);
+          const dy = e.deltaY > 0 ? 300 : -300;
+          void act(t("detail.control.swipe"), () => DeviceService.swipe(serial, x, y, x, y + dy, 200));
+        }}
+        onStartScrcpy={() => void startScrcpy()}
+        onStopScrcpy={() => void stopScrcpy()}
+        onRestartScrcpy={() => void restartScrcpy()}
+        onTakeShot={takeShot}
+        onRefreshPreview={() => void requestPreview(true)}
+        onToggleLivePreview={() => {
+          setLivePreview((value) => {
+            const next = !value;
+            if (next) refreshPreview();
+            else window.clearTimeout(refreshTimer.current);
+            return next;
+          });
+        }}
+        onClosePreview={() => {
+          window.clearTimeout(refreshTimer.current);
+          setPreviewState(emptyPreview());
+          setPreviewFlash(false);
+        }}
+        onOpenFolder={() => {
+          if (previewState.path) {
+            void DeviceService.revealInFolder(previewState.path).catch((e) =>
+              setStatusText(e instanceof Error ? e.message : String(e)),
+            );
+          }
+        }}
+        onFullscreen={() => {
+          const el = screenRef.current;
+          if (!el) return;
+          if (document.fullscreenElement === el) {
+            void document.exitFullscreen();
+          } else {
+            void el.requestFullscreen().catch((e) => setStatusText(String(e)));
+          }
+        }}
+        onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true))}
+      />
 
       <div className="control-panel">
-        <Card title={t("detail.control.panelTitle")} padding>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-            {t("detail.control.panelHint")}
-          </div>
-          <div className="control-group">
-            <Button disabled={disabled} onClick={() => act("HOME", () => DeviceService.home(serial))} icon={<Home size={14} />}>HOME</Button>
-            <Button disabled={disabled} onClick={() => act("BACK", () => DeviceService.back(serial))}>BACK</Button>
-            <Button disabled={disabled} onClick={() => void takeShot()} icon={<Camera size={14} />}>{t("detail.control.screenshot")}</Button>
-            <select
-              disabled={disabled}
-              defaultValue=""
-              style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
-              onChange={(e) => {
-                const v = e.target.value;
-                e.target.value = "";
-                if (v === "recent") void act("RECENT", () => DeviceService.recent(serial));
-                if (v === "power") void act("POWER", () => DeviceService.power(serial));
-                if (v === "volup") void act(t("detail.control.volUp"), () => DeviceService.volumeUp(serial));
-                if (v === "voldown") void act(t("detail.control.volDown"), () => DeviceService.volumeDown(serial));
-                if (v === "lock") void act(t("detail.control.lock"), () => DeviceService.lock(serial));
-                if (v === "wake") void act(t("detail.control.wake"), () => DeviceService.wake(serial));
-                if (v === "rotate") void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true));
-                if (v === "notify") void act(t("detail.control.notify"), () => DeviceService.openNotifications(serial));
-                if (v === "settings") void act(t("detail.control.settings"), () => DeviceService.openSettings(serial));
-              }}
-            >
-              <option value="" disabled>
-                {t("detail.control.moreKeys")}
-              </option>
-              <option value="recent">RECENT</option>
-              <option value="power">POWER</option>
-              <option value="volup">{t("detail.control.volUp")}</option>
-              <option value="voldown">{t("detail.control.volDown")}</option>
-              <option value="lock">{t("detail.control.lock")}</option>
-              <option value="wake">{t("detail.control.wake")}</option>
-              <option value="rotate">{t("detail.control.rotate")}</option>
-              <option value="notify">{t("detail.control.notify")}</option>
-              <option value="settings">{t("detail.control.settings")}</option>
-            </select>
-          </div>
+        <DeviceControlPanel
+          disabled={disabled}
+          busy={actionBusy}
+          onAction={runControlAction}
+          onScreenshot={takeShot}
+          onValidationError={(message) => {
+            setStatusText(message);
+            appendDiagnostic(message);
+          }}
+        />
 
-          <div className="field" style={{ marginTop: 12 }}>
-            <label>{t("detail.control.inputText")}</label>
-            <div className="row">
-              <input style={{ flex: 1 }} value={text} onChange={(e) => setText(e.target.value)} placeholder={t("detail.control.inputPlaceholder")} />
-              <Button disabled={disabled} icon={<Keyboard size={14} />} onClick={() => act(t("detail.control.inputText"), () => DeviceService.text(serial, text))}>
-                {t("detail.control.send")}
-              </Button>
-            </div>
-          </div>
-
-          <div className="field" style={{ marginTop: 10 }}>
-            <label>{t("detail.control.sendClipboard")}</label>
-            <div className="row">
-              <input style={{ flex: 1 }} value={clipboard} onChange={(e) => setClipboard(e.target.value)} />
-              <Button disabled={disabled} icon={<Clipboard size={14} />} onClick={() => act(t("detail.control.clipboard"), () => DeviceService.sendClipboard(serial, clipboard))}>
-                {t("detail.control.send")}
-              </Button>
-            </div>
-          </div>
-        </Card>
-
-        <Card title="ADB Shell">
-          <div className="field">
-            <label>{t("detail.control.command")}</label>
-            <div className="row">
-              <input
-                style={{ flex: 1 }}
-                className="mono"
-                value={shellCmd}
-                onChange={(e) => setShellCmd(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && runShell()}
-                placeholder="shell command..."
-              />
-              <Button variant="primary" disabled={disabled} onClick={() => runShell()}>
-                {t("detail.control.run")}
-              </Button>
-            </div>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-              {t("detail.control.favorites")}
-            </div>
-            <div className="row" style={{ flexWrap: "wrap" }}>
-              {favorites.map((f) => (
-                <span key={f} className="row" style={{ gap: 0 }}>
-                  <Button size="sm" variant="ghost" title={f} onClick={() => { setShellCmd(f); void runShell(f); }}>
-                    {f.length > 28 ? f.slice(0, 28) + "…" : f}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    title={t("detail.control.removeFavorite")}
-                    onClick={() => setFavorites((x) => x.filter((c) => c !== f))}
-                  >
-                    ×
-                  </Button>
-                </span>
-              ))}
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!shellCmd.trim()}
-                onClick={() => {
-                  const cmd = shellCmd.trim();
-                  setFavorites((x) =>
-                    x.includes(cmd) ? x.filter((c) => c !== cmd) : [cmd, ...x].slice(0, 12),
-                  );
-                }}
-              >
-                {favorites.includes(shellCmd.trim()) ? t("detail.control.unfavorite") : t("detail.control.favorite")}
-              </Button>
-            </div>
-          </div>
-          {history.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div className="row-between" style={{ marginBottom: 6 }}>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  {t("detail.control.history")}
-                </div>
-                <Button size="sm" variant="ghost" onClick={() => setHistory([])}>
-                  {t("detail.control.clearHistory")}
-                </Button>
-              </div>
-              <div className="stack">
-                {history.slice(0, 5).map((h) => (
-                  <button key={h} className="mono muted" style={{ textAlign: "left" }} onClick={() => setShellCmd(h)}>
-                    {h}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="shell-output" style={{ marginTop: 12 }}>
-            {shellOut || t("detail.control.outputPlaceholder")}
-          </div>
-          <div className="row" style={{ marginTop: 8 }}>
-            <Button
-              size="sm"
-              disabled={!shellOut}
-              onClick={() => {
-                void navigator.clipboard.writeText(shellOut).then(
-                  () => {
-                    setCopiedOut(true);
-                    window.setTimeout(() => setCopiedOut(false), 1500);
-                  },
-                  () => void alert(t("common.panel.copyFailed")),
-                );
-              }}
-            >
-              {copiedOut ? t("detail.control.copiedOutput") : t("detail.control.copyOutput")}
-            </Button>
-            <Button size="sm" variant="ghost" disabled={!shellOut} onClick={() => setShellOut("")}>
-              {t("detail.control.clearOutput")}
-            </Button>
-          </div>
-        </Card>
+        <DeviceShell
+          serial={serial}
+          disabled={disabled}
+          diagnostic={shellDiagnostic}
+          onStatus={setStatusText}
+        />
       </div>
     </div>
   );
