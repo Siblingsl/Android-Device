@@ -11,6 +11,7 @@ import {
   Moon,
   Sun,
   Languages,
+  BellRing,
 } from "lucide-react";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
@@ -18,6 +19,7 @@ import { useI18n } from "../../i18n";
 const items = [
   { to: "/", icon: LayoutDashboard, key: "common.nav.dashboard" },
   { to: "/devices", icon: Smartphone, key: "common.nav.devices" },
+  { to: "/monitor", icon: BellRing, key: "common.nav.monitor" },
   { to: "/docker", icon: Container, key: "common.nav.docker" },
   { to: "/adb", icon: Cable, key: "common.nav.adb" },
   { to: "/apk", icon: Package, key: "common.nav.apk" },

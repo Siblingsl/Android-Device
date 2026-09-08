@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import type { AppSettings, DeviceInfo, SystemStatus } from "../types";
 import { DeviceService } from "../services/deviceService";
+import {
+  appendMonitorAlert,
+  hasRecentMonitorAlert,
+  MAX_MONITOR_ALERT_HISTORY,
+  type MonitorAlert,
+} from "../lib/monitorAlerts";
 
 interface AppState {
   theme: "light" | "dark";
@@ -8,6 +14,7 @@ interface AppState {
   selectedDeviceId: string | null;
   status: SystemStatus | null;
   devices: DeviceInfo[];
+  monitorAlerts: MonitorAlert[];
   settings: AppSettings | null;
   loading: boolean;
   statusText: string;
@@ -16,6 +23,9 @@ interface AppState {
   setDetailOpen: (open: boolean) => void;
   setSelectedDeviceId: (id: string | null) => void;
   setStatusText: (text: string) => void;
+  addMonitorAlert: (alert: MonitorAlert) => void;
+  dismissMonitorAlert: (id: string) => void;
+  clearMonitorAlerts: (deviceId?: string) => void;
   refreshStatus: () => Promise<void>;
   refreshDevices: () => Promise<void>;
   loadSettings: () => Promise<void>;
@@ -67,6 +77,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   })(),
   status: null,
   devices: [],
+  monitorAlerts: [],
   settings: null,
   loading: false,
   statusText: tStatic("common.status.ready"),
@@ -94,6 +105,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   setStatusText: (statusText) => set({ statusText }),
+  addMonitorAlert: (alert) =>
+    set((state) => {
+      if (hasRecentMonitorAlert(state.monitorAlerts, alert)) return state;
+      return {
+        monitorAlerts: appendMonitorAlert(state.monitorAlerts, alert, MAX_MONITOR_ALERT_HISTORY),
+      };
+    }),
+  dismissMonitorAlert: (id) =>
+    set((state) => ({ monitorAlerts: state.monitorAlerts.filter((alert) => alert.id !== id) })),
+  clearMonitorAlerts: (deviceId) =>
+    set((state) => ({
+      monitorAlerts: deviceId
+        ? state.monitorAlerts.filter((alert) => alert.deviceId !== deviceId)
+        : [],
+    })),
 
   refreshStatus: async () => {
     if (statusInFlight) return;

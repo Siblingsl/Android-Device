@@ -9,6 +9,7 @@ import { ApkPage } from "./pages/Apk";
 import { VolumesPage } from "./pages/Volumes";
 import { LogsPage } from "./pages/Logs";
 import { SettingsPage } from "./pages/Settings";
+import { MonitorAlertsPage } from "./pages/MonitorAlerts";
 import { I18nProvider } from "./i18n";
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="volumes" element={<VolumesPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="monitor" element={<MonitorAlertsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

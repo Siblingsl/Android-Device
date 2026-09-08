@@ -6,7 +6,7 @@ import { Card } from "../ui/Card";
 import { summarizeDeviceHealth, type DeviceHealthState } from "../../lib/deviceMonitor";
 import type { ResourceSample } from "../../lib/resourceMetrics";
 import { resourceAlertFor, type ResourceAlert } from "../../lib/monitorPreferences";
-import type { MonitorAlert } from "../../lib/monitorAlerts";
+import { monitorAlertMessageKey, type MonitorAlert } from "../../lib/monitorAlerts";
 
 interface Props {
   device: DeviceInfo;
@@ -262,10 +262,7 @@ function resourceAlertMessageFor(
   t: (key: string, vars?: Record<string, string | number>) => string,
   threshold: number,
 ) {
-  if (alert === "cpu") return t("detail.monitor.alert.resourceCpu", { threshold });
-  if (alert === "memory") return t("detail.monitor.alert.resourceMemory", { threshold });
-  if (alert === "both") return t("detail.monitor.alert.resourceBoth", { threshold });
-  return null;
+  return alert ? t(monitorAlertMessageKey(alert), { threshold }) : null;
 }
 
 function RuntimeMetric({

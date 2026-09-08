@@ -10,6 +10,7 @@ import { logsZh, logsEn } from "./pages/logs";
 import { settingsZh, settingsEn } from "./pages/settings";
 import { dockerZh, dockerEn } from "./pages/docker";
 import { deviceDetailZh, deviceDetailEn } from "./pages/deviceDetail";
+import { monitorZh, monitorEn } from "./pages/monitor";
 
 export type Lang = "zh-CN" | "en-US";
 
@@ -26,6 +27,7 @@ const zhDict: Dict = {
   ...settingsZh,
   ...dockerZh,
   ...deviceDetailZh,
+  ...monitorZh,
 };
 const enDict: Dict = {
   ...commonEn,
@@ -38,6 +40,7 @@ const enDict: Dict = {
   ...settingsEn,
   ...dockerEn,
   ...deviceDetailEn,
+  ...monitorEn,
 };
 
 const STORAGE_KEY = "rdc.lang";

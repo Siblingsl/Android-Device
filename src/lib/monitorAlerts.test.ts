@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   appendMonitorAlert,
   evaluateResourceAlert,
+  filterMonitorAlerts,
+  hasRecentMonitorAlert,
+  monitorAlertMessageKey,
   type MonitorAlert,
   type ResourceAlertTracker,
 } from "./monitorAlerts";
@@ -43,18 +46,89 @@ describe("appendMonitorAlert", () => {
   it("prepends a new alert and keeps only the newest eight records", () => {
     const existing: MonitorAlert[] = Array.from({ length: 8 }, (_, index) => ({
       id: `alert-${index}`,
+      deviceId: "device-a",
+      deviceName: "Device A",
       kind: "cpu",
       createdAt: index,
     }));
 
     const result = appendMonitorAlert(existing, {
       id: "alert-new",
+      deviceId: "device-b",
+      deviceName: "Device B",
       kind: "memory",
       createdAt: 99,
     });
 
     expect(result).toHaveLength(8);
-    expect(result[0]).toEqual({ id: "alert-new", kind: "memory", createdAt: 99 });
+    expect(result[0]).toEqual({
+      id: "alert-new",
+      deviceId: "device-b",
+      deviceName: "Device B",
+      kind: "memory",
+      createdAt: 99,
+    });
     expect(result[result.length - 1]?.id).toBe("alert-6");
+  });
+});
+
+describe("filterMonitorAlerts", () => {
+  const now = 1_000_000;
+  const alerts: MonitorAlert[] = [
+    { id: "cpu-a", deviceId: "device-a", deviceName: "Device A", kind: "cpu", createdAt: now - 1_000 },
+    { id: "memory-b", deviceId: "device-b", deviceName: "Device B", kind: "memory", createdAt: now - 2 * 86_400_000 },
+    { id: "both-a", deviceId: "device-a", deviceName: "Device A", kind: "both", createdAt: now - 8 * 86_400_000 },
+  ];
+
+  it("filters by device, resource kind, and recent time window", () => {
+    expect(
+      filterMonitorAlerts(alerts, { deviceId: "device-a", kind: "both", timeRange: "all" }, now),
+    ).toEqual([alerts[2]]);
+    expect(
+      filterMonitorAlerts(alerts, { deviceId: "all", kind: "all", timeRange: "24h" }, now),
+    ).toEqual([alerts[0]]);
+  });
+
+  it("keeps newest records first when no filter is applied", () => {
+    expect(
+      filterMonitorAlerts(alerts, { deviceId: "all", kind: "all", timeRange: "all" }, now).map(
+        (alert) => alert.id,
+      ),
+    ).toEqual(["cpu-a", "memory-b", "both-a"]);
+  });
+});
+
+describe("monitorAlertMessageKey", () => {
+  it("maps each resource alert kind to its localized message key", () => {
+    expect(monitorAlertMessageKey("cpu")).toBe("detail.monitor.alert.resourceCpu");
+    expect(monitorAlertMessageKey("memory")).toBe("detail.monitor.alert.resourceMemory");
+    expect(monitorAlertMessageKey("both")).toBe("detail.monitor.alert.resourceBoth");
+  });
+});
+
+describe("hasRecentMonitorAlert", () => {
+  it("detects only the same device and alert kind inside the cooldown window", () => {
+    const existing: MonitorAlert = {
+      id: "alert-1000",
+      deviceId: "device-a",
+      deviceName: "Device A",
+      kind: "cpu",
+      createdAt: 1_000,
+    };
+
+    expect(
+      hasRecentMonitorAlert([existing], { ...existing, id: "alert-2000", createdAt: 2_000 }),
+    ).toBe(true);
+    expect(
+      hasRecentMonitorAlert([
+        existing,
+      ], { ...existing, id: "alert-61000", createdAt: 61_000 }),
+    ).toBe(false);
+    expect(
+      hasRecentMonitorAlert(
+        [existing],
+        { ...existing, id: "alert-memory", kind: "memory", createdAt: 2_000 },
+      ),
+    ).toBe(false);
   });
 });

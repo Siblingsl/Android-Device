@@ -38,9 +38,8 @@ import {
 import { appendResourceSample, type ResourceSample } from "../lib/resourceMetrics";
 import { normalizeMonitorPreferences, resourceAlertFor } from "../lib/monitorPreferences";
 import {
-  appendMonitorAlert,
   evaluateResourceAlert,
-  type MonitorAlert,
+  MAX_MONITOR_ALERTS,
   type ResourceAlertTracker,
 } from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
@@ -68,6 +67,10 @@ export function DeviceDetail() {
   const navigate = useNavigate();
   const setStatusText = useAppStore((s) => s.setStatusText);
   const appSettings = useAppStore((s) => s.settings);
+  const monitorAlerts = useAppStore((s) => s.monitorAlerts);
+  const addMonitorAlert = useAppStore((s) => s.addMonitorAlert);
+  const dismissMonitorAlert = useAppStore((s) => s.dismissMonitorAlert);
+  const clearMonitorAlerts = useAppStore((s) => s.clearMonitorAlerts);
   const { t } = useI18n();
   const tabs: Tab[] = ["overview", "control", "files", "apps", "logs", "settings"];
   const [tab, setTab] = useState<Tab>(() => {
@@ -85,7 +88,6 @@ export function DeviceDetail() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [metricHistory, setMetricHistory] = useState<ResourceSample[]>([]);
-  const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlert[]>([]);
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
@@ -94,6 +96,9 @@ export function DeviceDetail() {
     appSettings?.resourceAlertThreshold,
     appSettings?.deviceRefreshIntervalSecs,
   );
+  const deviceMonitorAlerts = monitorAlerts
+    .filter((alert) => alert.deviceId === deviceId)
+    .slice(0, MAX_MONITOR_ALERTS);
 
   const load = async (silent = false) => {
     if (refreshInFlight.current) return device;
@@ -173,7 +178,6 @@ export function DeviceDetail() {
   useEffect(() => {
     autoTried.current = "";
     setMetricHistory([]);
-    setMonitorAlerts([]);
     resourceAlertTracker.current = { active: null, lastEmittedAt: null };
     setDevice(null);
     void load().then((d) => {
@@ -197,16 +201,16 @@ export function DeviceDetail() {
     const now = Date.now();
     const result = evaluateResourceAlert(resourceAlertTracker.current, current, now);
     resourceAlertTracker.current = result.tracker;
-    if (!result.emit || !current) return;
+    if (!result.emit || !current || !device) return;
 
-    setMonitorAlerts((alerts) =>
-      appendMonitorAlert(alerts, {
-        id: `${deviceId}-${current}-${now}`,
-        kind: current,
-        createdAt: now,
-      }),
-    );
-  }, [device?.cpuUsage, device?.memoryUsage, monitorPreferences.alertThreshold]);
+    addMonitorAlert({
+      id: `${deviceId}-${current}-${now}`,
+      deviceId,
+      deviceName: device.name || deviceId,
+      kind: current,
+      createdAt: now,
+    });
+  }, [addMonitorAlert, device?.cpuUsage, device?.memoryUsage, device?.name, monitorPreferences.alertThreshold]);
 
   useEffect(() => {
     if (!device || !autoRefresh) return;
@@ -399,11 +403,9 @@ export function DeviceDetail() {
             refreshError={refreshError}
             metricHistory={metricHistory}
             alertThreshold={monitorPreferences.alertThreshold}
-            monitorAlerts={monitorAlerts}
-            onDismissMonitorAlert={(alertId) =>
-              setMonitorAlerts((alerts) => alerts.filter((alert) => alert.id !== alertId))
-            }
-            onClearMonitorAlerts={() => setMonitorAlerts([])}
+            monitorAlerts={deviceMonitorAlerts}
+            onDismissMonitorAlert={dismissMonitorAlert}
+            onClearMonitorAlerts={() => clearMonitorAlerts(deviceId)}
             autoRefresh={autoRefresh}
             onAutoRefreshChange={setAutoRefresh}
             onRefresh={() => void load()}
