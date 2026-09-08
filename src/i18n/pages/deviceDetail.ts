@@ -142,6 +142,11 @@ export const deviceDetailZh: Record<string, string> = {
   "detail.monitor.metric.cpu": "CPU 架构",
   "detail.monitor.metric.memory": "内存规格",
   "detail.monitor.metric.uptime": "运行时间",
+  "detail.monitor.runtime.cpu": "实时 CPU",
+  "detail.monitor.runtime.memory": "实时内存",
+  "detail.monitor.source.container": "来源：Docker stats",
+  "detail.monitor.source.android": "来源：Android /proc",
+  "detail.monitor.source.none": "暂无实时采样",
   "detail.monitor.unknown": "未知",
   "detail.monitor.notApplicable": "不适用",
 
@@ -543,6 +548,11 @@ export const deviceDetailEn: Record<string, string> = {
   "detail.monitor.metric.cpu": "CPU ABI",
   "detail.monitor.metric.memory": "Memory",
   "detail.monitor.metric.uptime": "Uptime",
+  "detail.monitor.runtime.cpu": "Live CPU",
+  "detail.monitor.runtime.memory": "Live memory",
+  "detail.monitor.source.container": "Source: Docker stats",
+  "detail.monitor.source.android": "Source: Android /proc",
+  "detail.monitor.source.none": "No live sample",
   "detail.monitor.unknown": "Unknown",
   "detail.monitor.notApplicable": "N/A",
 

@@ -617,6 +617,67 @@ a {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.12);
 }
+.device-monitor-runtime {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.device-monitor-runtime-card {
+  min-width: 0;
+  padding: 10px 11px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-hover);
+}
+.device-monitor-runtime-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.device-monitor-runtime-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.device-monitor-runtime-source {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+.device-monitor-trend {
+  display: flex;
+  align-items: end;
+  gap: 3px;
+  height: 48px;
+  margin-top: 8px;
+  padding: 4px 0 0;
+  border-bottom: 1px solid var(--border);
+}
+.device-monitor-trend-bar {
+  flex: 1;
+  min-width: 3px;
+  max-width: 12px;
+  border-radius: 3px 3px 0 0;
+  background: var(--primary);
+  opacity: 0.78;
+  transition: height 180ms ease;
+}
+.device-monitor-trend-empty {
+  width: 100%;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 12px;
+}
+.device-monitor-trend-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-top: 3px;
+}
 .device-monitor-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
@@ -643,6 +704,10 @@ a {
 }
 .device-monitor-value.success { color: var(--success); }
 .device-monitor-value.error { color: var(--danger); }
+
+@media (max-width: 680px) {
+  .device-monitor-runtime { grid-template-columns: 1fr; }
+}
 
 .btn {
   display: inline-flex;

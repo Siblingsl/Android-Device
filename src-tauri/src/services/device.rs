@@ -79,6 +79,11 @@ pub fn list_devices_cached(force: bool) -> Vec<DeviceInfo> {
             online,
             cpu: String::new(),
             ram: String::new(),
+            cpu_usage: 0.0,
+            memory_usage: 0.0,
+            memory_total_mb: 0,
+            memory_used_mb: 0,
+            resource_source: String::new(),
             fps: 0.0,
             adb_status: d.state.clone(),
             scrcpy_status: scrcpy::status(&serial),
@@ -120,6 +125,11 @@ pub fn list_devices_cached(force: bool) -> Vec<DeviceInfo> {
             online: false,
             cpu: String::new(),
             ram: String::new(),
+            cpu_usage: 0.0,
+            memory_usage: 0.0,
+            memory_total_mb: 0,
+            memory_used_mb: 0,
+            resource_source: String::new(),
             fps: 0.0,
             adb_status: "disconnected".into(),
             scrcpy_status: "stopped".into(),
@@ -151,8 +161,16 @@ pub fn enrich_device(mut d: DeviceInfo) -> DeviceInfo {
     // Single shell batch to cut process spawn cost
     let batch = adb::shell(
         &serial,
-        "echo VER=$(getprop ro.build.version.release); echo MODEL=$(getprop ro.product.model); echo ABI=$(getprop ro.product.cpu.abi); echo SIZE=$(wm size 2>/dev/null | tail -1); echo DPI=$(wm density 2>/dev/null | tail -1); echo MEM=$(grep MemTotal /proc/meminfo 2>/dev/null); echo MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || cat /sys/class/net/eth0/address 2>/dev/null); echo UP=$(cat /proc/uptime 2>/dev/null | awk '{print $1}')",
+        "CPU1=$(awk '/^cpu / {idle=$5+$6; total=$2+$3+$4+$5+$6+$7+$8+$9+$10; print total, idle}' /proc/stat); sleep 0.2; CPU2=$(awk '/^cpu / {idle=$5+$6; total=$2+$3+$4+$5+$6+$7+$8+$9+$10; print total, idle}' /proc/stat); echo CPUUSE=$(awk -v first=\"$CPU1\" -v second=\"$CPU2\" 'BEGIN {split(first,a); split(second,b); total=b[1]-a[1]; idle=b[2]-a[2]; if(total>0) printf \"%.1f\", ((total-idle)*100/total); else print 0}'); echo MEMSTAT=$(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{if(t>0) print t, t-a; else print 0, 0}' /proc/meminfo); echo VER=$(getprop ro.build.version.release); echo MODEL=$(getprop ro.product.model); echo ABI=$(getprop ro.product.cpu.abi); echo SIZE=$(wm size 2>/dev/null | tail -1); echo DPI=$(wm density 2>/dev/null | tail -1); echo MEM=$(grep MemTotal /proc/meminfo 2>/dev/null); echo MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || cat /sys/class/net/eth0/address 2>/dev/null); echo UP=$(cat /proc/uptime 2>/dev/null | awk '{print $1}')",
     );
+    let runtime = parse_android_runtime_metrics(&batch.stdout);
+    d.cpu_usage = runtime.cpu_usage;
+    d.memory_usage = runtime.memory_usage;
+    d.memory_total_mb = runtime.memory_total_mb;
+    d.memory_used_mb = runtime.memory_used_mb;
+    if runtime.memory_total_mb > 0 || runtime.cpu_usage > 0.0 {
+        d.resource_source = "android".into();
+    }
     for line in batch.stdout.lines() {
         if let Some(v) = line.strip_prefix("VER=") {
             d.android_version = v.trim().to_string();
@@ -197,6 +215,13 @@ pub fn enrich_device(mut d: DeviceInfo) -> DeviceInfo {
     let (mem_bytes, _) = docker::container_resource_limits(&d.container_id);
     if mem_bytes > 0 {
         d.ram = format!("{:.1} GB（实例限额）", mem_bytes as f64 / 1024.0 / 1024.0 / 1024.0);
+    }
+    if let Some(stats) = docker::container_stats(&d.container_id) {
+        d.cpu_usage = stats.cpu_usage;
+        d.memory_usage = stats.memory_usage;
+        d.memory_total_mb = stats.memory_total_mb;
+        d.memory_used_mb = stats.memory_used_mb;
+        d.resource_source = "container".into();
     }
     d.scrcpy_status = scrcpy::status(&serial);
     d
@@ -263,6 +288,46 @@ fn format_mem(s: &str) -> String {
         }
     }
     s.lines().next().unwrap_or("").to_string()
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct DeviceRuntimeMetrics {
+    cpu_usage: f64,
+    memory_usage: f64,
+    memory_total_mb: u64,
+    memory_used_mb: u64,
+}
+
+fn parse_android_runtime_metrics(output: &str) -> DeviceRuntimeMetrics {
+    let mut metrics = DeviceRuntimeMetrics::default();
+    let mut memory_total_kb = 0_u64;
+    let mut memory_used_kb = 0_u64;
+
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("CPUUSE=") {
+            metrics.cpu_usage = value
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .map(|v| v.clamp(0.0, 100.0))
+                .unwrap_or(0.0);
+        } else if let Some(value) = line.strip_prefix("MEMSTAT=") {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            memory_total_kb = parts.first().and_then(|v| v.parse().ok()).unwrap_or(0);
+            memory_used_kb = parts.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+        }
+    }
+
+    if memory_total_kb > 0 {
+        memory_used_kb = memory_used_kb.min(memory_total_kb);
+        metrics.memory_total_mb = memory_total_kb / 1024;
+        metrics.memory_used_mb = memory_used_kb / 1024;
+        metrics.memory_usage = (memory_used_kb as f64 / memory_total_kb as f64 * 100.0)
+            .clamp(0.0, 100.0);
+    }
+
+    metrics
 }
 
 pub fn get_device(id: &str) -> Option<DeviceInfo> {
@@ -885,4 +950,31 @@ fn list_dir_recent(path: &str, limit: usize) -> Vec<String> {
 
 pub fn shell_command(serial: &str, command: &str) -> ShellResult {
     adb::shell(serial, command)
+}
+
+#[cfg(test)]
+mod metrics_tests {
+    use super::*;
+
+    #[test]
+    fn parse_android_runtime_metrics_calculates_memory_usage() {
+        let metrics = parse_android_runtime_metrics(
+            "CPUUSE=37.5\nMEMSTAT=2048000 1024000\n",
+        );
+
+        assert!((metrics.cpu_usage - 37.5).abs() < f64::EPSILON);
+        assert!((metrics.memory_usage - 50.0).abs() < f64::EPSILON);
+        assert_eq!(metrics.memory_total_mb, 2000);
+        assert_eq!(metrics.memory_used_mb, 1000);
+    }
+
+    #[test]
+    fn parse_android_runtime_metrics_ignores_invalid_values() {
+        let metrics = parse_android_runtime_metrics("CPUUSE=bad\nMEMSTAT=0 0\n");
+
+        assert_eq!(metrics.cpu_usage, 0.0);
+        assert_eq!(metrics.memory_usage, 0.0);
+        assert_eq!(metrics.memory_total_mb, 0);
+        assert_eq!(metrics.memory_used_mb, 0);
+    }
 }

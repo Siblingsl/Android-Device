@@ -2159,6 +2159,102 @@ pub fn export_config(id_or_name: &str, path: &str) -> Result<String, String> {
     Ok(path.to_string())
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ContainerStats {
+    pub cpu_usage: f64,
+    pub memory_usage: f64,
+    pub memory_total_mb: u64,
+    pub memory_used_mb: u64,
+}
+
+fn parse_stats_percent(value: &str) -> Option<f64> {
+    let parsed = value.trim().trim_end_matches('%').parse::<f64>().ok()?;
+    if parsed.is_finite() && parsed >= 0.0 {
+        Some(parsed)
+    } else {
+        None
+    }
+}
+
+fn parse_stats_bytes(value: &str) -> Option<u64> {
+    let token = value.trim().split_whitespace().next()?;
+    let split = token
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(token.len());
+    let number = token[..split].parse::<f64>().ok()?;
+    if !number.is_finite() || number < 0.0 {
+        return None;
+    }
+    let multiplier = match token[split..].to_ascii_lowercase().as_str() {
+        "" | "b" => 1.0,
+        "kb" | "kib" => 1024.0,
+        "mb" | "mib" => 1024.0 * 1024.0,
+        "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tb" | "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let bytes = number * multiplier;
+    if bytes > u64::MAX as f64 {
+        None
+    } else {
+        Some(bytes.round() as u64)
+    }
+}
+
+fn parse_container_stats_line(line: &str) -> Option<ContainerStats> {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let cpu_usage = parse_stats_percent(parts[0])?;
+    let memory_usage = parse_stats_percent(parts[2])?.clamp(0.0, 100.0);
+    let memory_parts: Vec<&str> = parts[1].split('/').collect();
+    if memory_parts.len() < 2 {
+        return None;
+    }
+    let memory_used_mb = parse_stats_bytes(memory_parts[0])? / 1024 / 1024;
+    let memory_total_mb = parse_stats_bytes(memory_parts[1])? / 1024 / 1024;
+    Some(ContainerStats {
+        cpu_usage,
+        memory_usage,
+        memory_total_mb,
+        memory_used_mb,
+    })
+}
+
+#[allow(dead_code)]
+fn parse_stats_summary_line(line: &str) -> Option<(f64, f64)> {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    Some((
+        parse_stats_percent(parts[0]).unwrap_or(0.0),
+        parse_stats_percent(parts[1]).unwrap_or(0.0),
+    ))
+}
+
+pub fn container_stats(id_or_name: &str) -> Option<ContainerStats> {
+    if id_or_name.trim().is_empty() {
+        return None;
+    }
+    let r = util::run_command_timeout(
+        &docker_bin(),
+        &[
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}",
+            id_or_name,
+        ],
+        Duration::from_secs(8),
+    );
+    if !r.success {
+        return None;
+    }
+    r.stdout.lines().find_map(parse_container_stats_line)
+}
+
 pub fn stats_summary() -> (f64, f64) {
     let r = util::run_command(
         &docker_bin(),
@@ -2176,10 +2272,9 @@ pub fn stats_summary() -> (f64, f64) {
     let mut mem = 0.0;
     let mut count = 0.0;
     for line in r.stdout.lines() {
-        let p: Vec<&str> = line.split('\t').collect();
-        if p.len() >= 2 {
-            cpu += p[0].trim_end_matches('%').parse::<f64>().unwrap_or(0.0);
-            mem += p[1].trim_end_matches('%').parse::<f64>().unwrap_or(0.0);
+        if let Some((cpu_usage, memory_usage)) = parse_stats_summary_line(line) {
+            cpu += cpu_usage;
+            mem += memory_usage;
             count += 1.0;
         }
     }
@@ -2279,6 +2374,32 @@ mod tests {
         let suggested = suggest_free_adb_port(&containers);
         assert!(suggested > 5555, "suggested {suggested}");
         assert!(host_port_in_use(&containers, 5555));
+    }
+
+    #[test]
+    fn parse_container_stats_line_reads_cpu_and_memory_units() {
+        let stats = parse_container_stats_line("12.5%\t128MiB / 2GiB\t6.25%").unwrap();
+
+        assert!((stats.cpu_usage - 12.5).abs() < f64::EPSILON);
+        assert!((stats.memory_usage - 6.25).abs() < f64::EPSILON);
+        assert_eq!(stats.memory_used_mb, 128);
+        assert_eq!(stats.memory_total_mb, 2048);
+    }
+
+    #[test]
+    fn parse_stats_summary_line_keeps_the_legacy_two_column_format() {
+        assert_eq!(parse_stats_summary_line("12.5%\t6.25%"), Some((12.5, 6.25)));
+    }
+
+    #[test]
+    fn parse_container_stats_line_rejects_malformed_output() {
+        assert!(parse_container_stats_line("not stats").is_none());
+        assert!(parse_container_stats_line("1.0%\t2XB / 2GiB\t3.0%").is_none());
+    }
+
+    #[test]
+    fn container_stats_rejects_empty_identifier() {
+        assert!(container_stats(" ").is_none());
     }
 }
 

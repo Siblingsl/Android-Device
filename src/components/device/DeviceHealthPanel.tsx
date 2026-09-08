@@ -4,12 +4,14 @@ import type { DeviceInfo } from "../../types";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { summarizeDeviceHealth, type DeviceHealthState } from "../../lib/deviceMonitor";
+import type { ResourceSample } from "../../lib/resourceMetrics";
 
 interface Props {
   device: DeviceInfo;
   refreshing: boolean;
   lastUpdatedAt: number | null;
   refreshError: string | null;
+  metricHistory: ResourceSample[];
   autoRefresh: boolean;
   onAutoRefreshChange: (enabled: boolean) => void;
   onRefresh: () => void;
@@ -27,6 +29,7 @@ export function DeviceHealthPanel({
   refreshing,
   lastUpdatedAt,
   refreshError,
+  metricHistory,
   autoRefresh,
   onAutoRefreshChange,
   onRefresh,
@@ -38,6 +41,20 @@ export function DeviceHealthPanel({
   const dockerValue = device.containerId
     ? device.dockerStatus || t("detail.monitor.unknown")
     : t("detail.monitor.notApplicable");
+  const cpuUsage = typeof device.cpuUsage === "number" ? device.cpuUsage : null;
+  const memoryUsage = typeof device.memoryUsage === "number" ? device.memoryUsage : null;
+  const memoryValue =
+    memoryUsage === null
+      ? "—"
+      : device.memoryTotalMb
+        ? `${device.memoryUsedMb ?? 0} / ${device.memoryTotalMb} MB (${memoryUsage.toFixed(1)}%)`
+        : `${memoryUsage.toFixed(1)}%`;
+  const resourceSource =
+    device.resourceSource === "container"
+      ? t("detail.monitor.source.container")
+      : device.resourceSource === "android"
+        ? t("detail.monitor.source.android")
+        : t("detail.monitor.source.none");
   const updatedLabel = lastUpdatedAt
     ? t("detail.monitor.updatedAt", { time: new Date(lastUpdatedAt).toLocaleTimeString() })
     : t("detail.monitor.notUpdated");
@@ -93,6 +110,25 @@ export function DeviceHealthPanel({
         </div>
       )}
 
+      <div className="device-monitor-runtime">
+        <RuntimeMetric
+          label={t("detail.monitor.runtime.cpu")}
+          value={cpuUsage === null ? "—" : `${cpuUsage.toFixed(1)}%`}
+          usage={cpuUsage}
+          samples={metricHistory}
+          sampleKey="cpuUsage"
+          source={resourceSource}
+        />
+        <RuntimeMetric
+          label={t("detail.monitor.runtime.memory")}
+          value={memoryValue}
+          usage={memoryUsage}
+          samples={metricHistory}
+          sampleKey="memoryUsage"
+          source={resourceSource}
+        />
+      </div>
+
       <div className="device-monitor-grid">
         <MonitorMetric
           label={t("detail.monitor.metric.adb")}
@@ -126,6 +162,52 @@ export function DeviceHealthPanel({
         />
       </div>
     </Card>
+  );
+}
+
+function RuntimeMetric({
+  label,
+  value,
+  usage,
+  samples,
+  sampleKey,
+  source,
+}: {
+  label: string;
+  value: string;
+  usage: number | null;
+  samples: ResourceSample[];
+  sampleKey: "cpuUsage" | "memoryUsage";
+  source: string;
+}) {
+  const points = samples.slice(-12);
+  return (
+    <div className="device-monitor-runtime-card">
+      <div className="device-monitor-runtime-head">
+        <span className="device-monitor-label">{label}</span>
+        <strong className="device-monitor-runtime-value">{value}</strong>
+      </div>
+      <div className="device-monitor-runtime-source">{source}</div>
+      <div className="device-monitor-trend" aria-label={label}>
+        {points.length > 0 ? (
+          points.map((point) => {
+            const pointValue = point[sampleKey];
+            const height = Math.max(6, Math.min(100, pointValue));
+            return (
+              <span
+                key={`${point.at}-${sampleKey}`}
+                className="device-monitor-trend-bar"
+                style={{ height: `${height}%` }}
+                title={`${pointValue.toFixed(1)}%`}
+              />
+            );
+          })
+        ) : (
+          <span className="device-monitor-trend-empty">—</span>
+        )}
+      </div>
+      {usage !== null && <div className="device-monitor-trend-scale">0% · 100%</div>}
+    </div>
   );
 }
 

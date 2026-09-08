@@ -35,6 +35,7 @@ import {
   type ControlFeedback,
   type ControlFeedbackStatus,
 } from "../lib/controlFeedback";
+import { appendResourceSample, type ResourceSample } from "../lib/resourceMetrics";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
@@ -75,6 +76,7 @@ export function DeviceDetail() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [metricHistory, setMetricHistory] = useState<ResourceSample[]>([]);
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
@@ -93,7 +95,17 @@ export function DeviceDetail() {
       }
       setDevice(d);
       setRefreshError(null);
-      setLastUpdatedAt(Date.now());
+      const updatedAt = Date.now();
+      setLastUpdatedAt(updatedAt);
+      if (d && (typeof d.cpuUsage === "number" || typeof d.memoryUsage === "number")) {
+        setMetricHistory((samples) =>
+          appendResourceSample(samples, {
+            at: updatedAt,
+            cpuUsage: d.cpuUsage ?? 0,
+            memoryUsage: d.memoryUsage ?? 0,
+          }),
+        );
+      }
       return d;
     } catch (e) {
       const message = e instanceof Error ? e.message : t("detail.load.failed");
@@ -146,6 +158,7 @@ export function DeviceDetail() {
 
   useEffect(() => {
     autoTried.current = "";
+    setMetricHistory([]);
     void load().then((d) => {
       if (d) return connectIfNeeded(d);
       if (deviceId.includes(":")) {
@@ -346,6 +359,7 @@ export function DeviceDetail() {
             refreshing={refreshing}
             lastUpdatedAt={lastUpdatedAt}
             refreshError={refreshError}
+            metricHistory={metricHistory}
             autoRefresh={autoRefresh}
             onAutoRefreshChange={setAutoRefresh}
             onRefresh={() => void load()}

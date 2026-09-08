@@ -24,6 +24,16 @@ pub struct DeviceInfo {
     pub online: bool,
     pub cpu: String,
     pub ram: String,
+    #[serde(default)]
+    pub cpu_usage: f64,
+    #[serde(default)]
+    pub memory_usage: f64,
+    #[serde(default)]
+    pub memory_total_mb: u64,
+    #[serde(default)]
+    pub memory_used_mb: u64,
+    #[serde(default)]
+    pub resource_source: String,
     pub fps: f64,
     pub adb_status: String,
     pub scrcpy_status: String,

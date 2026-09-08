@@ -18,6 +18,11 @@ export interface DeviceInfo {
   online: boolean;
   cpu: string;
   ram: string;
+  cpuUsage?: number;
+  memoryUsage?: number;
+  memoryTotalMb?: number;
+  memoryUsedMb?: number;
+  resourceSource?: "container" | "android" | "";
   fps: number;
   adbStatus: string;
   scrcpyStatus: string;
