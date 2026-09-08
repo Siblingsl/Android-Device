@@ -7,6 +7,7 @@ import { useI18n } from "../../i18n";
 interface DevicePreviewProps {
   serial: string;
   disabled?: boolean;
+  controlBusyAction?: string | null;
   scrcpyStatus: string;
   scrcpyBusy?: "start" | "stop" | "restart" | null;
   preview: PreviewState;
@@ -39,6 +40,7 @@ interface DevicePreviewProps {
 
 export function DevicePreview({
   disabled = false,
+  controlBusyAction = null,
   scrcpyStatus,
   scrcpyBusy = null,
   preview,
@@ -119,7 +121,7 @@ export function DevicePreview({
           >
             {t("detail.control.reconnect")}
           </Button>
-          <Button size="sm" icon={<Camera size={14} />} disabled={disabled} onClick={onTakeShot}>
+          <Button size="sm" icon={<Camera size={14} />} loading={controlBusyAction === "screenshot"} disabled={disabled} onClick={onTakeShot}>
             {t("detail.control.screenshot")}
           </Button>
           {preview.path && <Button size="sm" variant="ghost" onClick={onOpenFolder}>{t("detail.control.openFolder")}</Button>}
@@ -128,7 +130,7 @@ export function DevicePreview({
           <Button size="sm" variant="ghost" icon={<Expand size={14} />} onClick={onFullscreen}>
             {fullscreen ? t("detail.control.exitFullscreen") : t("detail.control.fullscreen")}
           </Button>
-          <Button size="sm" variant="ghost" icon={<RotateCcw size={14} />} disabled={disabled} onClick={onRotate}>
+          <Button size="sm" variant="ghost" icon={<RotateCcw size={14} />} loading={controlBusyAction === "rotate"} disabled={disabled} onClick={onRotate}>
             {t("detail.control.rotate")}
           </Button>
         </div>
@@ -181,12 +183,12 @@ export function DevicePreview({
           ) : preview.status === "error" ? (
             <div className="stack" style={{ alignItems: "center", marginTop: 12 }}>
               <span className="badge danger" title={preview.error}>{preview.error}</span>
-              <Button size="sm" variant="secondary" disabled={disabled} onClick={onRefreshPreview}>
+              <Button size="sm" variant="secondary" loading={controlBusyAction === "screenshot"} disabled={disabled} onClick={onRefreshPreview}>
                 {t("detail.control.retryPreview")}
               </Button>
             </div>
           ) : (
-            <Button size="sm" variant="secondary" disabled={disabled} onClick={onRefreshPreview} style={{ marginTop: 12 }}>
+            <Button size="sm" variant="secondary" loading={controlBusyAction === "screenshot"} disabled={disabled} onClick={onRefreshPreview} style={{ marginTop: 12 }}>
               {t("detail.control.refreshPreview")}
             </Button>
           )}

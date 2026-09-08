@@ -3,6 +3,7 @@ import { Camera, Clipboard, Home, Keyboard } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { validateDeviceText } from "../../lib/deviceInput";
+import { controlBusyState, type ControlBusyAction } from "../../lib/controlBusy";
 import { useI18n } from "../../i18n";
 
 export type DeviceControlAction =
@@ -22,7 +23,7 @@ export type DeviceControlAction =
 
 interface DeviceControlPanelProps {
   disabled?: boolean;
-  busy?: boolean;
+  busyAction?: ControlBusyAction | null;
   onAction: (action: DeviceControlAction, value?: string | boolean) => void;
   onScreenshot: () => void;
   onValidationError: (message: string) => void;
@@ -30,7 +31,7 @@ interface DeviceControlPanelProps {
 
 export function DeviceControlPanel({
   disabled = false,
-  busy = false,
+  busyAction = null,
   onAction,
   onScreenshot,
   onValidationError,
@@ -39,7 +40,7 @@ export function DeviceControlPanel({
   const [text, setText] = useState("");
   const [clipboard, setClipboard] = useState("");
   const [landscape, setLandscape] = useState(true);
-  const controlDisabled = disabled || busy;
+  const controlDisabled = disabled || controlBusyState(busyAction, "home").disabled;
 
   const sendText = (kind: "text" | "clipboard", value: string, emptyMessage: string) => {
     const error = validateDeviceText(value, emptyMessage);
@@ -57,30 +58,31 @@ export function DeviceControlPanel({
       </div>
       <div className="control-section-label">{t("detail.control.group.navigation")}</div>
       <div className="control-group">
-        <Button disabled={controlDisabled} onClick={() => onAction("home")} icon={<Home size={14} />}>
+        <Button loading={controlBusyState(busyAction, "home").loading} disabled={controlDisabled} onClick={() => onAction("home")} icon={<Home size={14} />}>
           HOME
         </Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("back")}>BACK</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("recent")}>RECENT</Button>
+        <Button loading={controlBusyState(busyAction, "back").loading} disabled={controlDisabled} onClick={() => onAction("back")}>BACK</Button>
+        <Button loading={controlBusyState(busyAction, "recent").loading} disabled={controlDisabled} onClick={() => onAction("recent")}>RECENT</Button>
       </div>
 
       <div className="control-section-label">{t("detail.control.group.device")}</div>
       <div className="control-group">
-        <Button disabled={controlDisabled} onClick={() => onAction("wake")}>{t("detail.control.wake")}</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("lock")}>{t("detail.control.lock")}</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("power")}>POWER</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("volup")}>{t("detail.control.volUp")}</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("voldown")}>{t("detail.control.volDown")}</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("notify")}>{t("detail.control.notify")}</Button>
-        <Button disabled={controlDisabled} onClick={() => onAction("settings")}>{t("detail.control.settings")}</Button>
+        <Button loading={controlBusyState(busyAction, "wake").loading} disabled={controlDisabled} onClick={() => onAction("wake")}>{t("detail.control.wake")}</Button>
+        <Button loading={controlBusyState(busyAction, "lock").loading} disabled={controlDisabled} onClick={() => onAction("lock")}>{t("detail.control.lock")}</Button>
+        <Button loading={controlBusyState(busyAction, "power").loading} disabled={controlDisabled} onClick={() => onAction("power")}>POWER</Button>
+        <Button loading={controlBusyState(busyAction, "volup").loading} disabled={controlDisabled} onClick={() => onAction("volup")}>{t("detail.control.volUp")}</Button>
+        <Button loading={controlBusyState(busyAction, "voldown").loading} disabled={controlDisabled} onClick={() => onAction("voldown")}>{t("detail.control.volDown")}</Button>
+        <Button loading={controlBusyState(busyAction, "notify").loading} disabled={controlDisabled} onClick={() => onAction("notify")}>{t("detail.control.notify")}</Button>
+        <Button loading={controlBusyState(busyAction, "settings").loading} disabled={controlDisabled} onClick={() => onAction("settings")}>{t("detail.control.settings")}</Button>
       </div>
 
       <div className="control-section-label">{t("detail.control.group.display")}</div>
       <div className="control-group">
-        <Button disabled={controlDisabled} onClick={onScreenshot} icon={<Camera size={14} />}>
+        <Button loading={controlBusyState(busyAction, "screenshot").loading} disabled={controlDisabled} onClick={onScreenshot} icon={<Camera size={14} />}>
           {t("detail.control.screenshot")}
         </Button>
         <Button
+          loading={controlBusyState(busyAction, "rotate").loading}
           disabled={controlDisabled}
           onClick={() => {
             const next = !landscape;
@@ -109,6 +111,7 @@ export function DeviceControlPanel({
             }}
           />
           <Button
+            loading={controlBusyState(busyAction, "text").loading}
             disabled={controlDisabled}
             icon={<Keyboard size={14} />}
             onClick={() => sendText("text", text, t("detail.control.inputRequired"))}
@@ -129,6 +132,7 @@ export function DeviceControlPanel({
             disabled={controlDisabled}
           />
           <Button
+            loading={controlBusyState(busyAction, "clipboard").loading}
             disabled={controlDisabled}
             icon={<Clipboard size={14} />}
             onClick={() => sendText("clipboard", clipboard, t("detail.control.clipboardRequired"))}

@@ -44,6 +44,7 @@ import type {
 } from "../types";
 
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
+type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
 
 export function DeviceDetail() {
   const { id = "" } = useParams();
@@ -983,7 +984,7 @@ function Control({
   disabled?: boolean;
 }) {
   const { t } = useI18n();
-  const [actionBusy, setActionBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState<ControlBusyAction | null>(null);
   const [shellDiagnostic, setShellDiagnostic] = useState<{ id: number; message: string } | null>(null);
   const [previewState, setPreviewState] = useState<PreviewState>(() => emptyPreview());
   const [previewFlash, setPreviewFlash] = useState(false);
@@ -1113,13 +1114,17 @@ function Control({
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [disabled, livePreview]);
 
-  const act = async (label: string, fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>) => {
+  const act = async (
+    label: string,
+    fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>,
+    busyAction: ControlBusyAction = "gesture",
+  ) => {
     if (disabled) {
       setStatusText(t("detail.status.deviceOffline"));
       return;
     }
     if (actionBusy) return;
-    setActionBusy(true);
+    setActionBusy(busyAction);
     setStatusText(label);
     try {
       await runDeviceAction(fn, {
@@ -1135,7 +1140,7 @@ function Control({
       // Error feedback is handled by onError; keep the rejected Promise local
       // so mouse/keyboard handlers do not create an unhandled rejection.
     } finally {
-      setActionBusy(false);
+      setActionBusy(null);
     }
   };
 
@@ -1192,7 +1197,9 @@ function Control({
   };
 
   const takeShot = () => {
-    void requestPreview(true);
+    if (disabled || actionBusy) return;
+    setActionBusy("screenshot");
+    void requestPreview(true).finally(() => setActionBusy(null));
   };
 
   const runControlAction = (action: DeviceControlAction, value?: string | boolean) => {
@@ -1237,7 +1244,7 @@ function Control({
       notify: () => DeviceService.openNotifications(serial),
       settings: () => DeviceService.openSettings(serial),
     };
-    void act(labels[action], operations[action]);
+    void act(labels[action], operations[action], action);
   };
 
   const onScreenKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1350,6 +1357,7 @@ function Control({
       <DevicePreview
         serial={serial}
         disabled={disabled}
+        controlBusyAction={actionBusy}
         scrcpyStatus={scrcpyLabel}
         scrcpyBusy={scrcpyBusy}
         preview={previewState}
@@ -1382,7 +1390,7 @@ function Control({
         onStopScrcpy={() => void stopScrcpy()}
         onRestartScrcpy={() => void restartScrcpy()}
         onTakeShot={takeShot}
-        onRefreshPreview={() => void requestPreview(true)}
+        onRefreshPreview={takeShot}
         onToggleLivePreview={() => {
           setLivePreview((value) => {
             const next = !value;
@@ -1412,13 +1420,13 @@ function Control({
             void el.requestFullscreen().catch((e) => setStatusText(String(e)));
           }
         }}
-        onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true))}
+        onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true), "rotate")}
       />
 
       <div className="control-panel">
         <DeviceControlPanel
           disabled={disabled}
-          busy={actionBusy}
+          busyAction={actionBusy}
           onAction={runControlAction}
           onScreenshot={takeShot}
           onValidationError={(message) => {
