@@ -87,6 +87,12 @@ export const devicesZh: Record<string, string> = {
   "devices.installing": "正在安装到 {name}…",
   "devices.batch.resultTitle": "{label} · {ok}/{total} 成功",
   "devices.batch.progress": "{label}（{i}/{total}）{name}",
+  "devices.batch.counter": "已处理 {current}/{total}",
+  "devices.batch.cancel": "停止后续",
+  "devices.batch.stopping": "正在停止",
+  "devices.batch.skipped": "未执行（用户停止）",
+  "devices.batch.cancelledTitle": "{label} 已停止 · {ok}/{total} 成功",
+  "devices.batch.cancelled": "{label}已停止（{ok}/{total}）",
   "devices.batch.done": "{label}完成（{ok}/{total}）",
 };
 
@@ -178,5 +184,11 @@ export const devicesEn: Record<string, string> = {
   "devices.installing": "Installing to {name}…",
   "devices.batch.resultTitle": "{label} · {ok}/{total} succeeded",
   "devices.batch.progress": "{label} ({i}/{total}) {name}",
+  "devices.batch.counter": "Processed {current}/{total}",
+  "devices.batch.cancel": "Stop after current",
+  "devices.batch.stopping": "Stopping",
+  "devices.batch.skipped": "Not executed (stopped by user)",
+  "devices.batch.cancelledTitle": "{label} stopped · {ok}/{total} succeeded",
+  "devices.batch.cancelled": "{label} stopped ({ok}/{total})",
   "devices.batch.done": "{label} done ({ok}/{total})",
 };

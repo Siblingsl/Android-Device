@@ -62,6 +62,13 @@ export function Devices() {
     kind: string;
     items: { id: string; name: string; ok: boolean; detail: string }[];
   } | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{
+    label: string;
+    current: number;
+    total: number;
+    name: string;
+    stopping: boolean;
+  } | null>(null);
   const navigate = useNavigate();
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
@@ -71,6 +78,7 @@ export function Devices() {
   const loadSequence = useRef(createRequestSequence()).current;
   const localLoadActive = useRef(false);
   const loadingRequest = useRef<number | null>(null);
+  const batchCancelRequested = useRef(false);
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -200,15 +208,32 @@ export function Devices() {
       setStatusText(t("devices.pickFirst"));
       return;
     }
+    batchCancelRequested.current = false;
     setBusy("batch");
+    setBatchProgress({ label, current: 0, total: selectedDevices.length, name: "", stopping: false });
     setStatusText(label);
     const items: { id: string; name: string; ok: boolean; detail: string }[] = [];
     try {
-      let i = 0;
-      for (const d of selectedDevices) {
-        i += 1;
+      for (let i = 0; i < selectedDevices.length; i += 1) {
+        const d = selectedDevices[i];
+        if (batchCancelRequested.current) {
+          items.push({
+            id: d.id,
+            name: d.name,
+            ok: false,
+            detail: t("devices.batch.skipped"),
+          });
+          continue;
+        }
+        setBatchProgress({
+          label,
+          current: i + 1,
+          total: selectedDevices.length,
+          name: d.name,
+          stopping: false,
+        });
         setStatusText(
-          t("devices.batch.progress", { label, i, total: selectedDevices.length, name: d.name }),
+          t("devices.batch.progress", { label, i: i + 1, total: selectedDevices.length, name: d.name }),
         );
         try {
           const r = (await fn(d)) as { success?: boolean; stderr?: string; stdout?: string };
@@ -231,17 +256,35 @@ export function Devices() {
       }
       await load({ silent: true });
       const okCount = items.filter((x) => x.ok).length;
+      const stopped = batchCancelRequested.current;
       setBatchReport({
-        title: t("devices.batch.resultTitle", { label, ok: okCount, total: items.length }),
+        title: t(stopped ? "devices.batch.cancelledTitle" : "devices.batch.resultTitle", {
+          label,
+          ok: okCount,
+          total: items.length,
+        }),
         kind,
         items,
       });
       setStatusText(
-        t("devices.batch.done", { label, ok: okCount, total: items.length }),
+        t(stopped ? "devices.batch.cancelled" : "devices.batch.done", {
+          label,
+          ok: okCount,
+          total: items.length,
+        }),
       );
     } finally {
       setBusy(null);
+      setBatchProgress(null);
+      batchCancelRequested.current = false;
     }
+  };
+
+  const cancelBatch = () => {
+    if (busy !== "batch" || batchCancelRequested.current) return;
+    batchCancelRequested.current = true;
+    setBatchProgress((progress) => progress ? { ...progress, stopping: true } : progress);
+    setStatusText(t("devices.batch.stopping"));
   };
 
   return (
@@ -432,6 +475,40 @@ export function Devices() {
         </div>
       )}
 
+      {batchProgress && (
+        <div
+          className="row"
+          role="status"
+          aria-live="polite"
+          style={{ marginBottom: 12, flexWrap: "wrap", fontSize: 12 }}
+        >
+          <span className="muted">
+            {batchProgress.stopping
+              ? t("devices.batch.stopping")
+              : t("devices.batch.progress", {
+                  label: batchProgress.label,
+                  i: batchProgress.current || 1,
+                  total: batchProgress.total,
+                  name: batchProgress.name,
+                })}
+          </span>
+          <span className="muted">
+            {t("devices.batch.counter", {
+              current: batchProgress.current,
+              total: batchProgress.total,
+            })}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={batchProgress.stopping}
+            onClick={cancelBatch}
+          >
+            {batchProgress.stopping ? t("devices.batch.stopping") : t("devices.batch.cancel")}
+          </Button>
+        </div>
+      )}
+
       {batchReport && (
         <Card
           title={batchReport.title}
@@ -571,7 +648,7 @@ export function Devices() {
             const offline = !online;
             const scrcpyOn = d.scrcpyStatus === "running";
             const hasContainer = Boolean(d.containerId) && d.dockerStatus !== "n/a";
-            const cardBusy = busy === d.id || busy === `${d.id}-screen`;
+            const cardBusy = busy === "batch" || busy === d.id || busy === `${d.id}-screen`;
             // 离线：ADB 连接 + 重启/停止；在线：投屏/关闭投屏 + 断开（重启/停止需先断开）
             const canConnect = offline && Boolean(d.serial) && !cardBusy;
             const canScreen = online && !cardBusy;
