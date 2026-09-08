@@ -212,7 +212,7 @@ export function MonitorAlertsPage() {
                   () => askConfirm(t("monitor.clearConfirm", { n: count })),
                   () => clearMonitorAlerts(),
                 ).then((completed) => {
-                  if (completed) setStatusText(t("monitor.cleanup.done", { n: count }));
+                  if (completed) setStatusText(t("monitor.clearAll.done", { n: count }));
                 });
               }}
             >

@@ -22,6 +22,7 @@ interface AppState {
   devices: DeviceInfo[];
   monitorAlerts: MonitorAlert[];
   lastDismissedMonitorAlerts: MonitorAlert[] | null;
+  monitorAlertUndoKind: MonitorAlertUndoKind | null;
   monitorAlertUndoExpiresAt: number | null;
   settings: AppSettings | null;
   loading: boolean;
@@ -45,6 +46,8 @@ interface AppState {
 }
 
 import { tStatic } from "../i18n";
+
+type MonitorAlertUndoKind = "dismiss" | "clear" | "cleanup";
 
 let statusInFlight = false;
 let devicesInFlight = false;
@@ -107,6 +110,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   devices: [],
   monitorAlerts: readMonitorAlerts(),
   lastDismissedMonitorAlerts: null,
+  monitorAlertUndoKind: null,
   monitorAlertUndoExpiresAt: null,
   settings: null,
   loading: false,
@@ -147,6 +151,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         monitorAlerts,
         lastDismissedMonitorAlerts: null,
+        monitorAlertUndoKind: null,
         monitorAlertUndoExpiresAt: null,
       };
     }),
@@ -158,6 +163,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         monitorAlerts,
         lastDismissedMonitorAlerts: null,
+        monitorAlertUndoKind: null,
         monitorAlertUndoExpiresAt: null,
       };
     }),
@@ -171,6 +177,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         monitorAlerts,
         lastDismissedMonitorAlerts: dismissed,
+        monitorAlertUndoKind: "dismiss",
         monitorAlertUndoExpiresAt: Date.now() + MONITOR_ALERT_UNDO_WINDOW_MS,
       };
     }),
@@ -182,7 +189,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         state.monitorAlertUndoExpiresAt === null ||
         Date.now() >= state.monitorAlertUndoExpiresAt
       ) {
-        return { lastDismissedMonitorAlerts: null, monitorAlertUndoExpiresAt: null };
+        return {
+          lastDismissedMonitorAlerts: null,
+          monitorAlertUndoKind: null,
+          monitorAlertUndoExpiresAt: null,
+        };
       }
       const monitorAlerts = restoreMonitorAlerts(
         state.monitorAlerts,
@@ -194,6 +205,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         monitorAlerts,
         lastDismissedMonitorAlerts: null,
+        monitorAlertUndoKind: null,
         monitorAlertUndoExpiresAt: null,
       };
     });
@@ -202,29 +214,41 @@ export const useAppStore = create<AppState>((set, get) => ({
   expireDismissedMonitorAlertUndo: () =>
     set((state) =>
       state.lastDismissedMonitorAlerts || state.monitorAlertUndoExpiresAt !== null
-        ? { lastDismissedMonitorAlerts: null, monitorAlertUndoExpiresAt: null }
+        ? {
+            lastDismissedMonitorAlerts: null,
+            monitorAlertUndoKind: null,
+            monitorAlertUndoExpiresAt: null,
+          }
         : state,
     ),
   clearMonitorAlerts: (deviceId) =>
     set((state) => {
+      const removed = deviceId
+        ? state.monitorAlerts.filter((alert) => alert.deviceId === deviceId)
+        : state.monitorAlerts;
       const monitorAlerts = deviceId
         ? state.monitorAlerts.filter((alert) => alert.deviceId !== deviceId)
         : [];
       persistMonitorAlerts(monitorAlerts);
       return {
         monitorAlerts,
-        lastDismissedMonitorAlerts: null,
-        monitorAlertUndoExpiresAt: null,
+        lastDismissedMonitorAlerts: removed.length > 0 ? removed : null,
+        monitorAlertUndoKind: removed.length > 0 ? "clear" : null,
+        monitorAlertUndoExpiresAt:
+          removed.length > 0 ? Date.now() + MONITOR_ALERT_UNDO_WINDOW_MS : null,
       };
     }),
   clearMonitorAlertsBefore: (cutoff) =>
     set((state) => {
+      const removed = state.monitorAlerts.filter((alert) => alert.createdAt < cutoff);
       const monitorAlerts = clearMonitorAlertsBefore(state.monitorAlerts, cutoff);
       persistMonitorAlerts(monitorAlerts);
       return {
         monitorAlerts,
-        lastDismissedMonitorAlerts: null,
-        monitorAlertUndoExpiresAt: null,
+        lastDismissedMonitorAlerts: removed.length > 0 ? removed : null,
+        monitorAlertUndoKind: removed.length > 0 ? "cleanup" : null,
+        monitorAlertUndoExpiresAt:
+          removed.length > 0 ? Date.now() + MONITOR_ALERT_UNDO_WINDOW_MS : null,
       };
     }),
 

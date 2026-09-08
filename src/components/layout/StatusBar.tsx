@@ -8,6 +8,7 @@ export function StatusBar() {
   const status = useAppStore((s) => s.status);
   const statusText = useAppStore((s) => s.statusText);
   const lastDismissedMonitorAlerts = useAppStore((s) => s.lastDismissedMonitorAlerts);
+  const monitorAlertUndoKind = useAppStore((s) => s.monitorAlertUndoKind);
   const monitorAlertUndoExpiresAt = useAppStore((s) => s.monitorAlertUndoExpiresAt);
   const restoreDismissedMonitorAlerts = useAppStore((s) => s.restoreDismissedMonitorAlerts);
   const expireDismissedMonitorAlertUndo = useAppStore((s) => s.expireDismissedMonitorAlertUndo);
@@ -24,7 +25,16 @@ export function StatusBar() {
     monitorAlertUndoExpiresAt === null
       ? 0
       : Math.ceil(Math.max(0, monitorAlertUndoExpiresAt - undoNow) / 1_000);
-  const canUndo = Boolean(lastDismissedMonitorAlerts?.length) && undoRemainingSeconds > 0;
+  const canUndo =
+    Boolean(lastDismissedMonitorAlerts?.length) &&
+    monitorAlertUndoKind !== null &&
+    undoRemainingSeconds > 0;
+  const undoLabelKey =
+    monitorAlertUndoKind === "clear"
+      ? "monitor.clearAll.undo"
+      : monitorAlertUndoKind === "cleanup"
+        ? "monitor.cleanup.undo"
+        : "monitor.batchDismiss.undo";
 
   useEffect(() => {
     if (monitorAlertUndoExpiresAt === null) return;
@@ -127,7 +137,7 @@ export function StatusBar() {
               }
             }}
           >
-            {t("monitor.batchDismiss.undo", { seconds: undoRemainingSeconds })}
+            {t(undoLabelKey, { seconds: undoRemainingSeconds })}
           </button>
         ) : null}
       </div>

@@ -112,11 +112,42 @@ describe("app monitor alert state", () => {
     expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual(["alert-2000"]);
   });
 
-  it("invalidates undo after clearing monitor history", () => {
+  it("makes clearing all monitor history reversible", () => {
     useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
-    useAppStore.getState().dismissMonitorAlerts(["alert-1000"]);
+    useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-2000"));
 
     useAppStore.getState().clearMonitorAlerts();
+
+    expect(useAppStore.getState().monitorAlerts).toEqual([]);
+    expect(useAppStore.getState().monitorAlertUndoKind).toBe("clear");
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(true);
+    expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual([
+      "alert-2000",
+      "alert-1000",
+    ]);
+  });
+
+  it("makes cleaning old monitor history reversible", () => {
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+    useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-70000"));
+
+    useAppStore.getState().clearMonitorAlertsBefore(50_000);
+
+    expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual(["alert-70000"]);
+    expect(useAppStore.getState().monitorAlertUndoKind).toBe("cleanup");
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(true);
+    expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual([
+      "alert-70000",
+      "alert-1000",
+    ]);
+  });
+
+  it("invalidates undo after a single alert is dismissed", () => {
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+    useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-2000"));
+    useAppStore.getState().dismissMonitorAlerts(["alert-1000"]);
+
+    useAppStore.getState().dismissMonitorAlert("alert-2000");
 
     expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(false);
   });
