@@ -3,6 +3,7 @@ import { Copy, Download, RefreshCw, Trash2 } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
+import { createRequestSequence } from "../lib/requestSequence";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -42,6 +43,8 @@ export function LogsPage() {
   const resumeTimer = useRef(0);
   const logsRef = useRef<LogEntry[]>([]);
   const loadRef = useRef<(soft?: boolean) => Promise<void>>(async () => {});
+  const loadSequence = useRef(createRequestSequence()).current;
+  const loadingRequest = useRef<number | null>(null);
   const logPath = useAppStore((s) => s.settings?.logPath);
   const setStatusText = useAppStore((s) => s.setStatusText);
 
@@ -60,7 +63,11 @@ export function LogsPage() {
   };
 
   const load = async (soft = false) => {
-    if (!soft) setLoading(true);
+    const token = loadSequence.begin();
+    if (!soft) {
+      loadingRequest.current = token;
+      setLoading(true);
+    }
     try {
       const next = await DeviceService.getLogs({
         source: source === "all" ? undefined : source,
@@ -68,6 +75,7 @@ export function LogsPage() {
         keyword: keyword || undefined,
         limit: 300,
       });
+      if (!loadSequence.isCurrent(token)) return;
       if (soft && pausedRef.current) {
         const seen = new Set(logsRef.current.map((l) => l.id));
         const n = next.filter((l) => !seen.has(l.id)).length;
@@ -78,12 +86,16 @@ export function LogsPage() {
       setPendingCount(0);
       setLogs(next);
     } catch (e) {
-      if (!soft) {
+      if (loadSequence.isCurrent(token) && !soft) {
         const err = e instanceof Error ? e.message : String(e);
         setStatusText(t("logs.refreshFailed", { err }));
       }
     } finally {
-      setLoading(false);
+      if (!loadSequence.isCurrent(token)) return;
+      if (loadingRequest.current !== null) {
+        loadingRequest.current = null;
+        setLoading(false);
+      }
     }
   };
   loadRef.current = load;
@@ -97,7 +109,10 @@ export function LogsPage() {
   useEffect(() => {
     const delay = keyword ? 300 : 0;
     const t = setTimeout(() => void load(false), delay);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      loadSequence.invalidate();
+    };
   }, [source, level, keyword]);
 
   useEffect(() => {
