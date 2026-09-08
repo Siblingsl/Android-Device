@@ -1,11 +1,16 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
+use tauri::AppHandle;
 
 use crate::models::{
     AppInfo, DashboardData, DeviceInfo, FileEntry, ScreenshotResult, ShellResult, SystemStatus,
 };
-use crate::services::{adb, cache, docker, log, scrcpy, settings, util};
+use crate::services::{adb, cache, docker, log, scrcpy, settings, transfer, util};
 
 /// Fast device list — only adb devices -l + docker ps. No per-device shell probes.
 pub fn list_devices() -> Vec<DeviceInfo> {
@@ -716,6 +721,439 @@ pub fn download_file(serial: &str, remote: &str, local: &str) -> ShellResult {
     r
 }
 
+fn sanitize_transfer_id(operation_id: &str) -> String {
+    let sanitized: String = operation_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "operation".into()
+    } else {
+        sanitized
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', ""))
+}
+
+fn tracked_remote_path(remote: &str, operation_id: &str) -> String {
+    format!(
+        "{}.rdc_transfer_{}.part",
+        remote.trim_end_matches('/'),
+        sanitize_transfer_id(operation_id)
+    )
+}
+
+fn tracked_download_temp_path(path: &std::path::Path, operation_id: &str) -> PathBuf {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    parent.join(format!(
+        ".rdc_pull_{}",
+        sanitize_transfer_id(operation_id)
+    ))
+}
+
+fn tracked_status(result: &util::CancellableCommandResult) -> &'static str {
+    match result {
+        util::CancellableCommandResult::Completed(result) if result.success => "completed",
+        util::CancellableCommandResult::Cancelled(_) => "cancelled",
+        util::CancellableCommandResult::Completed(_) | util::CancellableCommandResult::TimedOut(_) => {
+            "failed"
+        }
+    }
+}
+
+fn cancelled_transfer_result() -> ShellResult {
+    ShellResult {
+        success: false,
+        stdout: String::new(),
+        stderr: "command cancelled".into(),
+        exit_code: -1,
+    }
+}
+
+fn emit_transfer_progress(
+    app: &AppHandle,
+    operation_id: &str,
+    direction: &str,
+    status: &str,
+    bytes_transferred: Option<u64>,
+    total_bytes: Option<u64>,
+    percent: Option<u8>,
+    message: impl Into<String>,
+) {
+    let payload = transfer::FileTransferProgress {
+        operation_id: operation_id.into(),
+        direction: direction.into(),
+        status: status.into(),
+        bytes_transferred,
+        total_bytes,
+        percent,
+        message: message.into(),
+    };
+    if let Err(error) = transfer::emit_progress(app, payload) {
+        log::warn("Transfer", &format!("emit progress failed: {error}"));
+    }
+}
+
+fn progress_callback(
+    app: &AppHandle,
+    operation_id: &str,
+    direction: &str,
+    total_bytes: Option<u64>,
+) -> impl Fn(String) + Send + Sync + 'static {
+    let app = app.clone();
+    let operation_id = operation_id.to_string();
+    let direction = direction.to_string();
+    let output = Arc::new(parking_lot::Mutex::new(String::new()));
+    let last_percent = Arc::new(parking_lot::Mutex::new(None::<u8>));
+    move |chunk| {
+        let parsed = {
+            let mut output = output.lock();
+            output.push_str(&chunk);
+            if output.len() > 8192 {
+                let keep_from = output.len() - 4096;
+                output.drain(..keep_from);
+            }
+            transfer::parse_adb_progress(&output, total_bytes)
+        };
+        let Some(parsed) = parsed else { return };
+        let should_emit = {
+            let mut last = last_percent.lock();
+            if last.is_some_and(|previous| parsed.percent < previous) {
+                false
+            } else {
+                *last = Some(parsed.percent);
+                true
+            }
+        };
+        if should_emit {
+            emit_transfer_progress(
+                &app,
+                &operation_id,
+                &direction,
+                "running",
+                parsed.bytes_transferred,
+                parsed.total_bytes,
+                Some(parsed.percent),
+                format!("{direction} {}%", parsed.percent),
+            );
+        }
+    }
+}
+
+fn cleanup_remote_part(serial: &str, path: &str) {
+    let _ = adb::shell(serial, &format!("rm -f {}", shell_quote(path)));
+}
+
+fn remote_file_size(serial: &str, remote: &str) -> Option<u64> {
+    let result = adb::shell(
+        serial,
+        &format!("stat -c %s {} 2>/dev/null", shell_quote(remote)),
+    );
+    result.stdout.trim().parse().ok()
+}
+
+pub fn upload_file_tracked(
+    app: &AppHandle,
+    serial: &str,
+    local: &str,
+    remote: &str,
+    operation_id: &str,
+    cancel: &AtomicBool,
+) -> ShellResult {
+    let total_bytes = std::fs::metadata(local)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len());
+    let staged_remote = tracked_remote_path(remote, operation_id);
+    emit_transfer_progress(
+        app,
+        operation_id,
+        "upload",
+        "queued",
+        None,
+        total_bytes,
+        None,
+        "queued",
+    );
+    emit_transfer_progress(
+        app,
+        operation_id,
+        "upload",
+        "running",
+        None,
+        total_bytes,
+        None,
+        "upload running",
+    );
+
+    let command = adb::push_tracked(
+        serial,
+        local,
+        &staged_remote,
+        cancel,
+        progress_callback(app, operation_id, "upload", total_bytes),
+    );
+    let status = tracked_status(&command);
+    if status != "completed" {
+        cleanup_remote_part(serial, &staged_remote);
+        let message = if status == "cancelled" {
+            "cancelled"
+        } else {
+            "upload failed"
+        };
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "upload",
+            status,
+            None,
+            total_bytes,
+            None,
+            message,
+        );
+        return match command {
+            util::CancellableCommandResult::Completed(result)
+            | util::CancellableCommandResult::Cancelled(result)
+            | util::CancellableCommandResult::TimedOut(result) => result,
+        };
+    }
+    if cancel.load(Ordering::SeqCst) {
+        cleanup_remote_part(serial, &staged_remote);
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "upload",
+            "cancelled",
+            None,
+            total_bytes,
+            None,
+            "cancelled",
+        );
+        return cancelled_transfer_result();
+    }
+
+    let moved = adb::shell(
+        serial,
+        &format!(
+            "mv -f {} {}",
+            shell_quote(&staged_remote),
+            shell_quote(remote)
+        ),
+    );
+    if !moved.success {
+        cleanup_remote_part(serial, &staged_remote);
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "upload",
+            "failed",
+            None,
+            total_bytes,
+            None,
+            "upload finalization failed",
+        );
+        return moved;
+    }
+
+    emit_transfer_progress(
+        app,
+        operation_id,
+        "upload",
+        "completed",
+        total_bytes,
+        total_bytes,
+        total_bytes.map(|_| 100),
+        "completed",
+    );
+    match command {
+        util::CancellableCommandResult::Completed(result) => result,
+        util::CancellableCommandResult::Cancelled(result)
+        | util::CancellableCommandResult::TimedOut(result) => result,
+    }
+}
+
+pub fn download_file_tracked(
+    app: &AppHandle,
+    serial: &str,
+    remote: &str,
+    local: &str,
+    operation_id: &str,
+    cancel: &AtomicBool,
+) -> ShellResult {
+    let path = PathBuf::from(local);
+    let total_bytes = remote_file_size(serial, remote);
+    emit_transfer_progress(
+        app,
+        operation_id,
+        "download",
+        "queued",
+        None,
+        total_bytes,
+        None,
+        "queued",
+    );
+    emit_transfer_progress(
+        app,
+        operation_id,
+        "download",
+        "running",
+        None,
+        total_bytes,
+        None,
+        "download running",
+    );
+
+    if path.is_dir() {
+        let command = adb::pull_tracked(
+            serial,
+            remote,
+            local,
+            cancel,
+            progress_callback(app, operation_id, "download", total_bytes),
+        );
+        let status = tracked_status(&command);
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "download",
+            status,
+            total_bytes.filter(|_| status == "completed"),
+            total_bytes,
+            total_bytes.filter(|_| status == "completed").map(|_| 100),
+            status,
+        );
+        return match command {
+            util::CancellableCommandResult::Completed(result)
+            | util::CancellableCommandResult::Cancelled(result)
+            | util::CancellableCommandResult::TimedOut(result) => result,
+        };
+    }
+
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    if let Err(error) = std::fs::create_dir_all(&parent) {
+        let result = ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: format!("创建目标目录失败: {error}"),
+            exit_code: -1,
+        };
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "download",
+            "failed",
+            None,
+            total_bytes,
+            None,
+            &result.stderr,
+        );
+        return result;
+    }
+
+    let temp = tracked_download_temp_path(&path, operation_id);
+    let command = adb::pull_tracked(
+        serial,
+        remote,
+        &temp.to_string_lossy(),
+        cancel,
+        progress_callback(app, operation_id, "download", total_bytes),
+    );
+    let status = tracked_status(&command);
+    if status != "completed" {
+        let _ = std::fs::remove_dir_all(&temp);
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "download",
+            status,
+            None,
+            total_bytes,
+            None,
+            status,
+        );
+        return match command {
+            util::CancellableCommandResult::Completed(result)
+            | util::CancellableCommandResult::Cancelled(result)
+            | util::CancellableCommandResult::TimedOut(result) => result,
+        };
+    }
+    if cancel.load(Ordering::SeqCst) {
+        let _ = std::fs::remove_dir_all(&temp);
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "download",
+            "cancelled",
+            None,
+            total_bytes,
+            None,
+            "cancelled",
+        );
+        return cancelled_transfer_result();
+    }
+
+    let moved = std::fs::read_dir(&temp)
+        .ok()
+        .and_then(|mut entries| entries.next())
+        .and_then(Result::ok)
+        .map(|entry| {
+            std::fs::rename(entry.path(), &path)
+                .or_else(|_| std::fs::copy(entry.path(), &path).map(|_| ()))
+        })
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
+    let _ = std::fs::remove_dir_all(&temp);
+    if !moved {
+        let result = ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: format!("下载完成但移动到 {} 失败", path.display()),
+            exit_code: -1,
+        };
+        emit_transfer_progress(
+            app,
+            operation_id,
+            "download",
+            "failed",
+            None,
+            total_bytes,
+            None,
+            &result.stderr,
+        );
+        return result;
+    }
+
+    emit_transfer_progress(
+        app,
+        operation_id,
+        "download",
+        "completed",
+        total_bytes,
+        total_bytes,
+        total_bytes.map(|_| 100),
+        "completed",
+    );
+    match command {
+        util::CancellableCommandResult::Completed(result) => result,
+        util::CancellableCommandResult::Cancelled(result)
+        | util::CancellableCommandResult::TimedOut(result) => result,
+    }
+}
+
 pub fn delete_file(serial: &str, path: &str) -> ShellResult {
     adb::shell(serial, &format!("rm -rf '{}'", path.replace('\'', "")))
 }
@@ -955,6 +1393,7 @@ pub fn shell_command(serial: &str, command: &str) -> ShellResult {
 #[cfg(test)]
 mod metrics_tests {
     use super::*;
+    use crate::services::util::CancellableCommandResult;
 
     #[test]
     fn parse_android_runtime_metrics_calculates_memory_usage() {
@@ -976,5 +1415,37 @@ mod metrics_tests {
         assert_eq!(metrics.memory_usage, 0.0);
         assert_eq!(metrics.memory_total_mb, 0);
         assert_eq!(metrics.memory_used_mb, 0);
+    }
+
+    #[test]
+    fn tracked_remote_path_keeps_target_separate_from_partial_upload() {
+        let staged = tracked_remote_path("/sdcard/report.apk", "op-1");
+        assert_eq!(staged, "/sdcard/report.apk.rdc_transfer_op-1.part");
+        assert_ne!(staged, "/sdcard/report.apk");
+    }
+
+    #[test]
+    fn tracked_download_temp_path_is_inside_selected_parent() {
+        let temp = tracked_download_temp_path(std::path::Path::new("exports/report.apk"), "op-1");
+        assert_eq!(temp, std::path::PathBuf::from("exports/.rdc_pull_op-1"));
+    }
+
+    #[test]
+    fn tracked_command_results_map_to_terminal_statuses() {
+        let success = ShellResult {
+            success: true,
+            ..ShellResult::default()
+        };
+        let failure = ShellResult::default();
+        assert_eq!(tracked_status(&CancellableCommandResult::Completed(success)), "completed");
+        assert_eq!(tracked_status(&CancellableCommandResult::Completed(failure)), "failed");
+        assert_eq!(
+            tracked_status(&CancellableCommandResult::Cancelled(ShellResult::default())),
+            "cancelled"
+        );
+        assert_eq!(
+            tracked_status(&CancellableCommandResult::TimedOut(ShellResult::default())),
+            "failed"
+        );
     }
 }
