@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Activity, Box, Cpu, MemoryStick, Smartphone, Wifi } from "lucide-react";
 import { Card } from "../components/ui/Card";
@@ -9,6 +9,7 @@ import { DeviceService } from "../services/deviceService";
 import type { DashboardData } from "../types";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
+import { createRequestSequence } from "../lib/requestSequence";
 
 export function Dashboard() {
   const { t } = useI18n();
@@ -17,18 +18,28 @@ export function Dashboard() {
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
   const navigate = useNavigate();
+  const loadSequence = useRef(createRequestSequence()).current;
+  const loadingRequest = useRef<number | null>(null);
 
   const load = async (soft = false) => {
-    if (!soft) setLoading(true);
+    const token = loadSequence.begin();
+    if (!soft) {
+      loadingRequest.current = token;
+      setLoading(true);
+    }
     try {
       const d = await DeviceService.getDashboard();
+      if (!loadSequence.isCurrent(token)) return;
       setData(d);
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       if (!soft) setData(null);
       setStatusText(
         e instanceof Error ? t("dashboard.refreshFailed", { msg: e.message }) : t("dashboard.refreshFailedShort"),
       );
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
+      if (loadingRequest.current !== null) loadingRequest.current = null;
       setLoading(false);
     }
   };
@@ -47,6 +58,7 @@ export function Dashboard() {
     return () => {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
+      loadSequence.invalidate();
     };
   }, []);
 
