@@ -390,6 +390,7 @@ export function Devices() {
           </Button>
           <Button
             size="sm"
+            loading={busy === "batch"}
             disabled={busy === "batch" || picked.length === 0}
             onClick={() =>
               void batch(t("devices.batch.connect"), (d) => DeviceService.connect(d.serial))
@@ -401,6 +402,7 @@ export function Devices() {
             size="sm"
             variant="primary"
             icon={<Package size={13} />}
+            loading={busy === "batch"}
             disabled={busy === "batch" || picked.length === 0}
             onClick={async () => {
               try {
@@ -428,6 +430,7 @@ export function Devices() {
           <Button
             size="sm"
             icon={<Camera size={13} />}
+            loading={busy === "batch"}
             disabled={busy === "batch" || picked.length === 0}
             onClick={() =>
               void batch(

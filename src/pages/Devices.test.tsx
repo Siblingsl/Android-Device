@@ -143,6 +143,35 @@ describe("Devices batch controls", () => {
     expect(screen.queryByText(/未执行/)).toBeNull();
   }, 15_000);
 
+  it("shows loading feedback on batch action buttons while processing", async () => {
+    const first = deferred<ShellResult>();
+    vi.mocked(DeviceService.connect).mockReturnValueOnce(first.promise);
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    await screen.findByRole("button", { name: "停止后续" });
+    const loadingButtons = screen.getAllByRole("button", { name: "..." });
+    expect(loadingButtons).toHaveLength(3);
+    expect(loadingButtons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("批量 ADB 连接");
+
+    await act(async () => {
+      first.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await first.promise;
+    });
+
+    expect(await screen.findByRole("button", { name: "批量连接" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量安装 APK" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量截图" })).toBeTruthy();
+  }, 15_000);
+
   it("disables the refresh button while the device list is loading", async () => {
     render(
       <MemoryRouter>
