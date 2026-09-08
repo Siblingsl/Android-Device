@@ -3,6 +3,7 @@ import { askConfirm } from "../lib/dialogs";
 import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
+import { createRequestSequence } from "../lib/requestSequence";
 import {
   ArrowLeft,
   RefreshCw,
@@ -102,6 +103,7 @@ export function DeviceDetail() {
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
+  const loadSequence = useRef(createRequestSequence()).current;
   const resourceAlertTracker = useRef<MonitorAlertTracker>({ active: null, lastEmittedAt: null });
   const monitorPreferences = resolveDeviceMonitorPreferences(
     appSettings?.resourceAlertThreshold,
@@ -159,6 +161,7 @@ export function DeviceDetail() {
 
   const load = async (silent = false) => {
     if (refreshInFlight.current) return device;
+    const token = loadSequence.begin();
     refreshInFlight.current = true;
     if (!silent) setLoading(true);
     setRefreshing(true);
@@ -169,6 +172,7 @@ export function DeviceDetail() {
         const hit = list.find((x) => x.serial === deviceId || x.id === deviceId);
         if (hit) d = await DeviceService.getDevice(hit.id);
       }
+      if (!loadSequence.isCurrent(token)) return undefined;
       setDevice(d);
       setRefreshError(null);
       const updatedAt = Date.now();
@@ -184,11 +188,13 @@ export function DeviceDetail() {
       }
       return d;
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return undefined;
       const message = e instanceof Error ? e.message : t("detail.load.failed");
       setRefreshError(message);
       setStatusText(t("detail.load.failedWith", { msg: message }));
       return null;
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
       if (!silent) setLoading(false);
       setRefreshing(false);
       refreshInFlight.current = false;
@@ -233,11 +239,14 @@ export function DeviceDetail() {
   }, [tab]);
 
   useEffect(() => {
+    loadSequence.invalidate();
+    refreshInFlight.current = false;
     autoTried.current = "";
     setMetricHistory([]);
     resourceAlertTracker.current = { active: null, lastEmittedAt: null };
     setDevice(null);
     void load().then((d) => {
+      if (d === undefined) return;
       if (d) return connectIfNeeded(d);
       if (deviceId.includes(":")) {
         return connectIfNeeded({
@@ -249,6 +258,10 @@ export function DeviceDetail() {
         } as DeviceInfo);
       }
     });
+    return () => {
+      loadSequence.invalidate();
+      refreshInFlight.current = false;
+    };
   }, [deviceId]);
 
   useEffect(() => {
@@ -569,54 +582,90 @@ function RootPanel({ device }: { device: DeviceInfo }) {
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState(false);
   const [pkgInput, setPkgInput] = useState("");
+  const statusSequence = useRef(createRequestSequence()).current;
+  const scopeSequence = useRef(createRequestSequence()).current;
+  const suSequence = useRef(createRequestSequence()).current;
   const online = device.online && device.adbStatus === "device";
 
   const loadStatus = async () => {
     if (!online) return;
+    const token = statusSequence.begin();
     setLoading(true);
     try {
-      setStatus(await DeviceService.getRootStatus(device.serial));
+      const nextStatus = await DeviceService.getRootStatus(device.serial);
+      if (!statusSequence.isCurrent(token)) return;
+      setStatus(nextStatus);
     } catch (e) {
+      if (!statusSequence.isCurrent(token)) return;
       setStatusText(e instanceof Error ? t("detail.root.statusFailedWith", { msg: e.message }) : t("detail.root.statusFailed"));
     } finally {
+      if (!statusSequence.isCurrent(token)) return;
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    if (!online) {
+      statusSequence.invalidate();
+      setStatus(null);
+      return;
+    }
     void loadStatus();
+    return () => statusSequence.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [device.serial, online]);
 
   const loadScope = async () => {
+    const token = scopeSequence.begin();
     setScopeLoading(true);
     try {
-      setScope(await DeviceService.getLsposedScope(device.serial));
+      const nextScope = await DeviceService.getLsposedScope(device.serial);
+      if (!scopeSequence.isCurrent(token)) return;
+      setScope(nextScope);
     } catch {
+      if (!scopeSequence.isCurrent(token)) return;
       setScope({ modules: [], message: t("detail.root.scope.loadFailed") });
     } finally {
+      if (!scopeSequence.isCurrent(token)) return;
       setScopeLoading(false);
     }
   };
 
   useEffect(() => {
-    if (status?.lsposedActive) void loadScope();
+    if (!status?.lsposedActive) {
+      scopeSequence.invalidate();
+      setScope(null);
+      return;
+    }
+    void loadScope();
+    return () => scopeSequence.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.lsposedActive, device.serial]);
 
   const loadSuPolicies = async () => {
+    const token = suSequence.begin();
     setSuLoading(true);
     try {
-      setSuPolicies(await DeviceService.getSuPolicies(device.serial));
+      const nextPolicies = await DeviceService.getSuPolicies(device.serial);
+      if (!suSequence.isCurrent(token)) return;
+      setSuPolicies(nextPolicies);
     } catch {
+      if (!suSequence.isCurrent(token)) return;
       setSuPolicies([]);
     } finally {
+      if (!suSequence.isCurrent(token)) return;
       setSuLoading(false);
     }
   };
 
   useEffect(() => {
-    if (status?.magisk) void loadSuPolicies();
+    if (!status?.magisk) {
+      suSequence.invalidate();
+      setSuPolicies(null);
+      return;
+    }
+    void loadSuPolicies();
+    return () => suSequence.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.magisk, device.serial]);
 
@@ -1207,6 +1256,8 @@ function Control({
   const diagnosticId = useRef(0);
   const feedbackId = useRef(0);
   const chromeTimer = useRef(0);
+  const scrcpySequence = useRef(createRequestSequence()).current;
+  const previewSequence = useRef(createRequestSequence()).current;
   const { w: screenW, h: screenH } = parseResolution(resolution);
   previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
@@ -1219,11 +1270,25 @@ function Control({
     [],
   );
 
+  useEffect(() => {
+    previewSequence.invalidate();
+    previewRequesting.current = false;
+    setPreviewState(emptyPreview());
+    setPreviewFlash(false);
+    return () => {
+      previewSequence.invalidate();
+      previewRequesting.current = false;
+    };
+  }, [serial]);
+
   const syncScrcpy = async () => {
+    const token = scrcpySequence.begin();
     try {
       const s = await DeviceService.scrcpyStatus(serial);
+      if (!scrcpySequence.isCurrent(token)) return;
       setScrcpyLabel(s || "stopped");
     } catch {
+      if (!scrcpySequence.isCurrent(token)) return;
       setScrcpyLabel("unknown");
     }
   };
@@ -1231,7 +1296,10 @@ function Control({
   useEffect(() => {
     void syncScrcpy();
     const t = setInterval(() => void syncScrcpy(), 4000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      scrcpySequence.invalidate();
+    };
   }, [serial]);
 
   useEffect(() => {
@@ -1296,10 +1364,12 @@ function Control({
     if (!canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })) return null;
     if (previewRequesting.current) return null;
     previewRequesting.current = true;
+    const token = previewSequence.begin();
     setPreviewState((previous) => startPreviewRequest(previous));
     if (announce) setStatusText(t("detail.control.shooting"));
     try {
       const r = await DeviceService.screenshot(serial);
+      if (!previewSequence.isCurrent(token)) return null;
       if (r.success) {
         setPreviewState((previous) => finishPreviewRequest(previous, r, Date.now()));
         setPreviewFlash(true);
@@ -1315,13 +1385,14 @@ function Control({
         return { success: false, message: reason };
       }
     } catch (e) {
+      if (!previewSequence.isCurrent(token)) return null;
       const reason = e instanceof Error ? e.message : String(e);
       setPreviewState((previous) => failPreviewRequest(previous, reason));
       setStatusText(reason || t("detail.control.shotFailed"));
       appendDiagnostic(reason);
       return { success: false, message: reason || t("detail.control.shotFailed") };
     } finally {
-      previewRequesting.current = false;
+      if (previewSequence.isCurrent(token)) previewRequesting.current = false;
     }
   };
 
@@ -1737,6 +1808,7 @@ function Files({
   const [fileQuery, setFileQuery] = useState("");
   const [sortKey, setSortKey] = useState<"name" | "size" | "modified">("name");
   const [sortAsc, setSortAsc] = useState(true);
+  const loadSequence = useRef(createRequestSequence()).current;
   const visibleFiles = files
     .filter(
       (f) => !fileQuery.trim() || f.name.toLowerCase().includes(fileQuery.trim().toLowerCase()),
@@ -1763,19 +1835,27 @@ function Files({
     sortKey === key ? (sortAsc ? " ↑" : " ↓") : "";
 
   const load = async (p = path) => {
+    const token = loadSequence.begin();
     setLoading(true);
     try {
-      setFiles(await DeviceService.listFiles(serial, p));
-      setStorage(await DeviceService.storageInfo(serial));
+      const nextFiles = await DeviceService.listFiles(serial, p);
+      if (!loadSequence.isCurrent(token)) return;
+      setFiles(nextFiles);
+      const nextStorage = await DeviceService.storageInfo(serial);
+      if (!loadSequence.isCurrent(token)) return;
+      setStorage(nextStorage);
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       setStatusText(e instanceof Error ? t("detail.files.listFailedWith", { msg: e.message }) : t("detail.files.listFailed"));
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
       setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!disabled) void load();
+    return () => loadSequence.invalidate();
   }, [serial, disabled]);
 
   useEffect(() => {
@@ -2108,21 +2188,36 @@ function Apps({
   const [detailBusy, setDetailBusy] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const loadSequence = useRef(createRequestSequence()).current;
+  const detailSequence = useRef(createRequestSequence()).current;
 
   const load = async () => {
+    const token = loadSequence.begin();
     setLoading(true);
     try {
-      setApps(await DeviceService.listApps(serial, includeSystem));
+      const nextApps = await DeviceService.listApps(serial, includeSystem);
+      if (!loadSequence.isCurrent(token)) return;
+      setApps(nextApps);
     } catch (e) {
+      if (!loadSequence.isCurrent(token)) return;
       setStatusText(e instanceof Error ? t("detail.apps.listFailedWith", { msg: e.message }) : t("detail.apps.listFailed"));
     } finally {
+      if (!loadSequence.isCurrent(token)) return;
       setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!disabled) void load();
+    return () => loadSequence.invalidate();
   }, [serial, includeSystem, disabled]);
+
+  useEffect(() => {
+    detailSequence.invalidate();
+    setDetail("");
+    setDetailBusy(null);
+    return () => detailSequence.invalidate();
+  }, [serial]);
 
   useEffect(() => {
     try {
@@ -2310,20 +2405,23 @@ function Apps({
                         loading={detailBusy === a.packageName}
                         disabled={detailBusy !== null}
                         onClick={async () => {
+                          const token = detailSequence.begin();
                           setDetailBusy(a.packageName);
                           setStatusText(t("detail.apps.loadingDetail", { pkg: a.packageName }));
                           try {
                             const d = await DeviceService.getAppDetail(serial, a.packageName);
                             const perm = await DeviceService.getAppPermissions(serial, a.packageName);
                             const act = await DeviceService.getAppActivities(serial, a.packageName);
+                            if (!detailSequence.isCurrent(token)) return;
                             setDetail(
                               `Package: ${d.packageName}\nVersion: ${d.versionName} (${d.versionCode})\nFirst: ${d.firstInstallTime}\nUpdate: ${d.lastUpdateTime}\nPath: ${d.apkPath}\n\nPermissions:\n${perm}\n\nActivities:\n${act}`
                             );
                             setStatusText(t("detail.apps.detailLoaded"));
                           } catch (e) {
+                            if (!detailSequence.isCurrent(token)) return;
                             setStatusText(e instanceof Error ? e.message : t("detail.apps.detailFailed"));
                           } finally {
-                            setDetailBusy(null);
+                            if (detailSequence.isCurrent(token)) setDetailBusy(null);
                           }
                         }}
                       >
@@ -2443,17 +2541,20 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
   const [copiedList, setCopiedList] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const ignoreScroll = useRef(false);
+  const loadSequence = useRef(createRequestSequence()).current;
 
   const nearBottom = (el: HTMLDivElement) =>
     el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 
   const load = async (clear = false) => {
     if (disabled || (paused && !clear)) return;
+    const token = loadSequence.begin();
     try {
       const text = await DeviceService.logcat(serial, 300, clear);
+      if (!loadSequence.isCurrent(token)) return;
       setLogs(text);
     } catch (e) {
-      if (!paused) {
+      if (loadSequence.isCurrent(token) && !paused) {
         const err = e instanceof Error ? e.message : String(e);
         setLogs((prev) => prev || t("detail.logs.readFailed", { msg: err }));
       }
@@ -2483,10 +2584,16 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
   }, [filter, errorOnly, autoScroll]);
 
   useEffect(() => {
-    if (disabled) return;
+    if (disabled) {
+      loadSequence.invalidate();
+      return;
+    }
     void load();
     const t = setInterval(() => void load(), 5000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      loadSequence.invalidate();
+    };
   }, [serial, paused, disabled]);
 
   useEffect(() => {
