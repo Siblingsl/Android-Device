@@ -19,7 +19,7 @@ import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
-import { runDeviceAction, scrcpyStateFromResult } from "../lib/deviceActions";
+import { formatShellOutput, runDeviceAction, scrcpyStateFromResult } from "../lib/deviceActions";
 import {
   canRefreshPreview,
   emptyPreview,
@@ -29,6 +29,12 @@ import {
   type PreviewState,
 } from "../lib/devicePreview";
 import { shortcutForScreenKey } from "../lib/deviceInput";
+import {
+  isRetryableControlAction,
+  prependControlFeedback,
+  type ControlFeedback,
+  type ControlFeedbackStatus,
+} from "../lib/controlFeedback";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
@@ -45,6 +51,7 @@ import type {
 
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
 type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
+type PreviewOutcome = { success: boolean; message: string };
 
 export function DeviceDetail() {
   const { id = "" } = useParams();
@@ -985,6 +992,8 @@ function Control({
 }) {
   const { t } = useI18n();
   const [actionBusy, setActionBusy] = useState<ControlBusyAction | null>(null);
+  const [feedback, setFeedback] = useState<ControlFeedback[]>([]);
+  const [retryingFeedbackId, setRetryingFeedbackId] = useState<number | null>(null);
   const [shellDiagnostic, setShellDiagnostic] = useState<{ id: number; message: string } | null>(null);
   const [previewState, setPreviewState] = useState<PreviewState>(() => emptyPreview());
   const [previewFlash, setPreviewFlash] = useState(false);
@@ -1002,6 +1011,7 @@ function Control({
   const refreshTimer = useRef(0);
   const previewRequesting = useRef(false);
   const diagnosticId = useRef(0);
+  const feedbackId = useRef(0);
   const chromeTimer = useRef(0);
   const { w: screenW, h: screenH } = parseResolution(resolution);
   previewRef.current = Boolean(previewState.image);
@@ -1063,9 +1073,34 @@ function Control({
     setShellDiagnostic({ id: ++diagnosticId.current, message: detail });
   };
 
-  const requestPreview = async (announce: boolean) => {
-    if (!canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })) return;
-    if (previewRequesting.current) return;
+  const recordFeedback = (
+    action: ControlBusyAction,
+    label: string,
+    status: ControlFeedbackStatus,
+    message: string,
+    retry?: () => void | Promise<void>,
+  ) => {
+    const item: ControlFeedback = {
+      id: ++feedbackId.current,
+      action: label,
+      status,
+      message: message.trim() || label,
+      at: Date.now(),
+      retryable: isRetryableControlAction(action),
+      retry,
+    };
+    setFeedback((items) => prependControlFeedback(items, item));
+  };
+
+  const retryFeedback = (item: ControlFeedback) => {
+    if (!item.retry || actionBusy) return;
+    setRetryingFeedbackId(item.id);
+    void Promise.resolve(item.retry()).finally(() => setRetryingFeedbackId(null));
+  };
+
+  const requestPreview = async (announce: boolean): Promise<PreviewOutcome | null> => {
+    if (!canRefreshPreview({ disabled, visible: document.visibilityState === "visible" })) return null;
+    if (previewRequesting.current) return null;
     previewRequesting.current = true;
     setPreviewState((previous) => startPreviewRequest(previous));
     if (announce) setStatusText(t("detail.control.shooting"));
@@ -1075,18 +1110,22 @@ function Control({
         setPreviewState((previous) => finishPreviewRequest(previous, r, Date.now()));
         setPreviewFlash(true);
         window.setTimeout(() => setPreviewFlash(false), 1600);
-        if (announce) setStatusText(t("detail.control.shotSaved", { path: r.path }));
+        const message = t("detail.control.shotSaved", { path: r.path });
+        if (announce) setStatusText(message);
+        return { success: true, message };
       } else {
         const reason = (r.error || t("detail.control.shotFailed")).trim();
         setPreviewState((previous) => failPreviewRequest(previous, reason));
         setStatusText(reason);
         appendDiagnostic(reason);
+        return { success: false, message: reason };
       }
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       setPreviewState((previous) => failPreviewRequest(previous, reason));
       setStatusText(reason || t("detail.control.shotFailed"));
       appendDiagnostic(reason);
+      return { success: false, message: reason || t("detail.control.shotFailed") };
     } finally {
       previewRequesting.current = false;
     }
@@ -1129,8 +1168,13 @@ function Control({
     try {
       await runDeviceAction(fn, {
         fallback: t("detail.control.actionFailed"),
-        onSuccess: () => refreshPreview(),
+        onSuccess: (result) => {
+          const output = formatShellOutput(result.stdout || "", result.stderr || "", result.exitCode);
+          recordFeedback(busyAction, label, "success", output || t("detail.control.actionCompleted"));
+          refreshPreview();
+        },
         onError: (error) => {
+          recordFeedback(busyAction, label, "error", error.message, () => act(label, fn, busyAction));
           setStatusText(error.message);
           appendDiagnostic(error.message);
         },
@@ -1167,13 +1211,13 @@ function Control({
 
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    void act(t("detail.control.back"), () => DeviceService.back(serial));
+    void act(t("detail.control.back"), () => DeviceService.back(serial), "back");
   };
 
   const onAuxClick = (e: React.MouseEvent) => {
     if (e.button === 1) {
       e.preventDefault();
-      void act("HOME", () => DeviceService.home(serial));
+      void act("HOME", () => DeviceService.home(serial), "home");
     }
   };
 
@@ -1196,20 +1240,34 @@ function Control({
     }
   };
 
-  const takeShot = () => {
+  const takeShot = async () => {
     if (disabled || actionBusy) return;
     setActionBusy("screenshot");
-    void requestPreview(true).finally(() => setActionBusy(null));
+    try {
+      const outcome = await requestPreview(true);
+      if (outcome) {
+        recordFeedback(
+          "screenshot",
+          t("detail.control.screenshot"),
+          outcome.success ? "success" : "error",
+          outcome.message,
+          outcome.success ? undefined : () => takeShot(),
+        );
+      }
+    } finally {
+      setActionBusy(null);
+    }
   };
 
   const runControlAction = (action: DeviceControlAction, value?: string | boolean) => {
     if (action === "text") {
-      void act(t("detail.control.inputText"), () => DeviceService.text(serial, String(value ?? "")));
+      void act(t("detail.control.inputText"), () => DeviceService.text(serial, String(value ?? "")), "text");
       return;
     }
     if (action === "clipboard") {
       void act(t("detail.control.clipboard"), () =>
         DeviceService.sendClipboard(serial, String(value ?? "")),
+        "clipboard",
       );
       return;
     }
@@ -1427,6 +1485,9 @@ function Control({
         <DeviceControlPanel
           disabled={disabled}
           busyAction={actionBusy}
+          feedback={feedback}
+          retryingFeedbackId={retryingFeedbackId}
+          onRetryFeedback={retryFeedback}
           onAction={runControlAction}
           onScreenshot={takeShot}
           onValidationError={(message) => {

@@ -4,6 +4,7 @@ import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { validateDeviceText } from "../../lib/deviceInput";
 import { controlBusyState, type ControlBusyAction } from "../../lib/controlBusy";
+import type { ControlFeedback } from "../../lib/controlFeedback";
 import { useI18n } from "../../i18n";
 
 export type DeviceControlAction =
@@ -24,6 +25,9 @@ export type DeviceControlAction =
 interface DeviceControlPanelProps {
   disabled?: boolean;
   busyAction?: ControlBusyAction | null;
+  feedback?: ControlFeedback[];
+  retryingFeedbackId?: number | null;
+  onRetryFeedback?: (feedback: ControlFeedback) => void;
   onAction: (action: DeviceControlAction, value?: string | boolean) => void;
   onScreenshot: () => void;
   onValidationError: (message: string) => void;
@@ -32,6 +36,9 @@ interface DeviceControlPanelProps {
 export function DeviceControlPanel({
   disabled = false,
   busyAction = null,
+  feedback = [],
+  retryingFeedbackId = null,
+  onRetryFeedback,
   onAction,
   onScreenshot,
   onValidationError,
@@ -56,6 +63,42 @@ export function DeviceControlPanel({
       <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
         {t("detail.control.panelHint")}
       </div>
+      {feedback.length > 0 && (
+        <div className="control-feedback">
+          <div className="row-between">
+            <div className="muted" style={{ fontSize: 12 }}>{t("detail.control.recentActions")}</div>
+            <span className="muted" style={{ fontSize: 11 }}>{feedback.length}</span>
+          </div>
+          <div className="control-feedback-list">
+            {feedback.map((item) => (
+              <div key={item.id} className={`control-feedback-item ${item.status}`}>
+                <div className="row-between">
+                  <div className="row" style={{ gap: 6 }}>
+                    <span className={`badge ${item.status === "success" ? "success" : "danger"}`}>
+                      {t(item.status === "success" ? "detail.control.feedbackSuccess" : "detail.control.feedbackError")}
+                    </span>
+                    <span>{item.action}</span>
+                  </div>
+                  <span className="muted" style={{ fontSize: 11 }}>{new Date(item.at).toLocaleTimeString()}</span>
+                </div>
+                <div className="control-feedback-message muted" title={item.message}>{item.message}</div>
+                {item.status === "error" && item.retryable && item.retry && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={retryingFeedbackId === item.id}
+                    disabled={controlDisabled}
+                    onClick={() => onRetryFeedback?.(item)}
+                    style={{ marginTop: 6 }}
+                  >
+                    {t("detail.control.retry")}
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="control-section-label">{t("detail.control.group.navigation")}</div>
       <div className="control-group">
         <Button loading={controlBusyState(busyAction, "home").loading} disabled={controlDisabled} onClick={() => onAction("home")} icon={<Home size={14} />}>

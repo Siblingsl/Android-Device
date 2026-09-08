@@ -463,6 +463,42 @@ a {
   margin-top: 0;
 }
 
+.control-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.control-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.control-feedback-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.control-feedback-item.error {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.control-feedback-message {
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .screen-area:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
