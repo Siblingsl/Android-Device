@@ -3,6 +3,7 @@ import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { DeviceService } from "../../services/deviceService";
 import { formatShellOutput, runDeviceAction, type ShellResultLike } from "../../lib/deviceActions";
+import { navigateShellHistory } from "../../lib/shellHistory";
 import { useI18n } from "../../i18n";
 
 interface DeviceShellProps {
@@ -18,6 +19,8 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
   const [shellOut, setShellOut] = useState("");
   const [copiedOut, setCopiedOut] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const historyDraft = useRef("");
   const [history, setHistory] = useState<string[]>(() => {
     try {
       const raw = sessionStorage.getItem("rdc.shell.history");
@@ -88,6 +91,8 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
           onSuccess: (result) => {
             setShellOut(formatShellOutput(result.stdout || "", result.stderr || "", result.exitCode) || "(empty)");
             setHistory((items) => [current, ...items.filter((item) => item !== current)].slice(0, 30));
+            setHistoryIndex(-1);
+            historyDraft.current = current;
             onStatus(t("detail.status.ready"));
           },
           onError: (error) => {
@@ -109,14 +114,38 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
   return (
     <Card title="ADB Shell">
       <div className="field">
-        <label>{t("detail.control.command")}</label>
+        <div className="row-between">
+          <label>{t("detail.control.command")}</label>
+          <span className="muted" style={{ fontSize: 12 }}>{t("detail.control.historyHint")}</span>
+        </div>
         <div className="row">
           <input
             style={{ flex: 1 }}
             className="mono"
             value={shellCmd}
-            onChange={(event) => setShellCmd(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              setShellCmd(value);
+              setHistoryIndex(-1);
+              historyDraft.current = value;
+            }}
             onKeyDown={(event) => {
+              if (
+                (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+                !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+              ) {
+                event.preventDefault();
+                if (historyIndex < 0) historyDraft.current = shellCmd;
+                const next = navigateShellHistory(
+                  history,
+                  historyIndex,
+                  historyDraft.current,
+                  event.key === "ArrowUp" ? "up" : "down",
+                );
+                setHistoryIndex(next.index);
+                setShellCmd(next.value);
+                return;
+              }
               if (event.key === "Enter") void runShell();
             }}
             placeholder="shell command..."
@@ -141,6 +170,8 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
                 disabled={disabled || busy}
                 onClick={() => {
                   setShellCmd(favorite);
+                  setHistoryIndex(-1);
+                  historyDraft.current = favorite;
                   void runShell(favorite);
                 }}
               >
@@ -176,13 +207,30 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
         <div style={{ marginTop: 10 }}>
           <div className="row-between" style={{ marginBottom: 6 }}>
             <div className="muted" style={{ fontSize: 12 }}>{t("detail.control.history")}</div>
-            <Button size="sm" variant="ghost" onClick={() => setHistory([])}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setHistory([]);
+                setHistoryIndex(-1);
+                historyDraft.current = shellCmd;
+              }}
+            >
               {t("detail.control.clearHistory")}
             </Button>
           </div>
           <div className="stack">
             {history.slice(0, 5).map((item) => (
-              <button key={item} className="mono muted" style={{ textAlign: "left" }} onClick={() => setShellCmd(item)}>
+              <button
+                key={item}
+                className="mono muted"
+                style={{ textAlign: "left" }}
+                onClick={() => {
+                  setShellCmd(item);
+                  setHistoryIndex(-1);
+                  historyDraft.current = item;
+                }}
+              >
                 {item}
               </button>
             ))}
