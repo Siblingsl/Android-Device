@@ -212,10 +212,18 @@ export interface ScreenshotResult {
 
 export type DeviceMonitorPreset = "inherit" | "sensitive" | "balanced" | "relaxed" | "custom";
 
+export interface MonitorQuietHours {
+  start: string;
+  end: string;
+}
+
 export interface DeviceMonitorRule {
-  preset: Exclude<DeviceMonitorPreset, "inherit">;
+  preset: DeviceMonitorPreset;
   alertThreshold?: number;
   refreshIntervalSecs?: number;
+  alertsEnabled?: boolean;
+  quietStart?: string;
+  quietEnd?: string;
 }
 
 export interface AppSettings {

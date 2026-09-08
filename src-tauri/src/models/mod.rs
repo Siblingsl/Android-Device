@@ -223,6 +223,12 @@ pub struct DeviceMonitorRule {
     pub alert_threshold: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_interval_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alerts_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_end: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,6 +497,9 @@ mod app_settings_tests {
                 preset: "custom".into(),
                 alert_threshold: Some(73.0),
                 refresh_interval_secs: Some(12),
+                alerts_enabled: Some(false),
+                quiet_start: Some("22:00".into()),
+                quiet_end: Some("06:30".into()),
             },
         );
 
@@ -501,6 +510,9 @@ mod app_settings_tests {
         assert_eq!(rule.preset, "custom");
         assert_eq!(rule.alert_threshold, Some(73.0));
         assert_eq!(rule.refresh_interval_secs, Some(12));
+        assert_eq!(rule.alerts_enabled, Some(false));
+        assert_eq!(rule.quiet_start.as_deref(), Some("22:00"));
+        assert_eq!(rule.quiet_end.as_deref(), Some("06:30"));
     }
 
     #[test]
@@ -516,5 +528,8 @@ mod app_settings_tests {
         assert_eq!(rule.preset, "");
         assert_eq!(rule.alert_threshold, None);
         assert_eq!(rule.refresh_interval_secs, None);
+        assert_eq!(rule.alerts_enabled, None);
+        assert_eq!(rule.quiet_start, None);
+        assert_eq!(rule.quiet_end, None);
     }
 }

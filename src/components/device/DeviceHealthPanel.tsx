@@ -11,12 +11,20 @@ import {
   X,
 } from "lucide-react";
 import { useI18n } from "../../i18n";
-import type { DeviceInfo, DeviceMonitorPreset } from "../../types";
+import type {
+  DeviceInfo,
+  DeviceMonitorPreset,
+  MonitorQuietHours,
+} from "../../types";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { summarizeDeviceHealth, type DeviceHealthState } from "../../lib/deviceMonitor";
 import type { ResourceSample } from "../../lib/resourceMetrics";
-import { resourceAlertFor, type ResourceAlert } from "../../lib/monitorPreferences";
+import {
+  normalizeMonitorQuietHours,
+  resourceAlertFor,
+  type ResourceAlert,
+} from "../../lib/monitorPreferences";
 import { monitorAlertMessageKey, type MonitorAlert } from "../../lib/monitorAlerts";
 
 interface Props {
@@ -28,11 +36,15 @@ interface Props {
   alertThreshold: number;
   refreshIntervalSecs: number;
   monitorPreset: DeviceMonitorPreset;
+  alertsEnabled: boolean;
+  quietHours: MonitorQuietHours | null;
   monitorRuleSaving: boolean;
   onMonitorRuleChange: (
     preset: DeviceMonitorPreset,
     alertThreshold: number,
     refreshIntervalSecs: number,
+    alertsEnabled: boolean,
+    quietHours: MonitorQuietHours | null,
   ) => Promise<boolean>;
   monitorAlerts: MonitorAlert[];
   onDismissMonitorAlert: (id: string) => void;
@@ -58,6 +70,8 @@ export function DeviceHealthPanel({
   alertThreshold,
   refreshIntervalSecs,
   monitorPreset,
+  alertsEnabled,
+  quietHours,
   monitorRuleSaving,
   onMonitorRuleChange,
   monitorAlerts,
@@ -72,11 +86,43 @@ export function DeviceHealthPanel({
   const [draftPreset, setDraftPreset] = useState<DeviceMonitorPreset>(monitorPreset);
   const [customThreshold, setCustomThreshold] = useState(alertThreshold);
   const [customRefreshInterval, setCustomRefreshInterval] = useState(refreshIntervalSecs);
+  const [draftAlertsEnabled, setDraftAlertsEnabled] = useState(alertsEnabled);
+  const [draftQuietStart, setDraftQuietStart] = useState(quietHours?.start ?? "");
+  const [draftQuietEnd, setDraftQuietEnd] = useState(quietHours?.end ?? "");
+  const [quietHoursError, setQuietHoursError] = useState<string | null>(null);
   useEffect(() => {
     setDraftPreset(monitorPreset);
     setCustomThreshold(alertThreshold);
     setCustomRefreshInterval(refreshIntervalSecs);
-  }, [alertThreshold, monitorPreset, refreshIntervalSecs]);
+    setDraftAlertsEnabled(alertsEnabled);
+    setDraftQuietStart(quietHours?.start ?? "");
+    setDraftQuietEnd(quietHours?.end ?? "");
+    setQuietHoursError(null);
+  }, [alertThreshold, alertsEnabled, monitorPreset, quietHours?.end, quietHours?.start, refreshIntervalSecs]);
+
+  const saveDraftPolicy = (
+    preset: DeviceMonitorPreset,
+    threshold: number,
+    interval: number,
+    resetPresetOnFailure = false,
+  ) => {
+    const hasQuietHoursInput = Boolean(draftQuietStart || draftQuietEnd);
+    const nextQuietHours = normalizeMonitorQuietHours(draftQuietStart, draftQuietEnd);
+    if (hasQuietHoursInput && !nextQuietHours) {
+      setQuietHoursError(t("detail.monitor.policy.quietHoursInvalid"));
+      return;
+    }
+    setQuietHoursError(null);
+    void onMonitorRuleChange(
+      preset,
+      threshold,
+      interval,
+      draftAlertsEnabled,
+      nextQuietHours,
+    ).then((saved) => {
+      if (!saved && resetPresetOnFailure) setDraftPreset(monitorPreset);
+    });
+  };
   const health = summarizeDeviceHealth(device);
   const stateLabel = t(`detail.monitor.state.${health.state}`);
   const dockerReady = health.containerReady;
@@ -160,7 +206,9 @@ export function DeviceHealthPanel({
           </span>
           <span className="device-monitor-policy-current">
             {t(`detail.monitor.policy.preset.${monitorPreset}`)} · {alertThreshold}% /{" "}
-            {refreshIntervalSecs}s
+            {refreshIntervalSecs}s · {alertsEnabled
+              ? t("detail.monitor.policy.alertsEnabled")
+              : t("detail.monitor.policy.alertsDisabled")}
           </span>
           <span className="device-monitor-policy-action">
             {t(policyOpen ? "detail.monitor.policy.close" : "detail.monitor.policy.configure")}
@@ -177,11 +225,7 @@ export function DeviceHealthPanel({
                   const preset = event.target.value as DeviceMonitorPreset;
                   setDraftPreset(preset);
                   if (preset !== "custom") {
-                    void onMonitorRuleChange(preset, alertThreshold, refreshIntervalSecs).then(
-                      (saved) => {
-                        if (!saved) setDraftPreset(monitorPreset);
-                      },
-                    );
+                    saveDraftPolicy(preset, alertThreshold, refreshIntervalSecs, true);
                   }
                 }}
               >
@@ -225,14 +269,63 @@ export function DeviceHealthPanel({
                   variant="primary"
                   loading={monitorRuleSaving}
                   onClick={() =>
-                    void onMonitorRuleChange(
-                      "custom",
-                      customThreshold,
-                      customRefreshInterval,
-                    )
+                    saveDraftPolicy("custom", customThreshold, customRefreshInterval)
                   }
                 >
                   {t("detail.monitor.policy.save")}
+                </Button>
+              </div>
+            )}
+            <div className="device-monitor-policy-notifications">
+              <label className="device-monitor-policy-alert-toggle">
+                <input
+                  type="checkbox"
+                  checked={draftAlertsEnabled}
+                  onChange={(event) => setDraftAlertsEnabled(event.target.checked)}
+                />
+                <span>{t("detail.monitor.policy.alertsEnabled")}</span>
+              </label>
+              <div className="device-monitor-policy-quiet">
+                <span className="device-monitor-policy-quiet-label">
+                  {t("detail.monitor.policy.quietHours")}
+                </span>
+                <div className="device-monitor-policy-quiet-inputs">
+                  <label className="field">
+                    <span>{t("detail.monitor.policy.quietStart")}</span>
+                    <input
+                      type="time"
+                      value={draftQuietStart}
+                      onChange={(event) => setDraftQuietStart(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("detail.monitor.policy.quietEnd")}</span>
+                    <input
+                      type="time"
+                      value={draftQuietEnd}
+                      onChange={(event) => setDraftQuietEnd(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="device-monitor-policy-quiet-hint">
+                  {t("detail.monitor.policy.quietHoursHint")}
+                </div>
+              </div>
+            </div>
+            {quietHoursError && (
+              <div className="device-monitor-policy-error" role="alert">
+                {quietHoursError}
+              </div>
+            )}
+            {draftPreset !== "custom" && (
+              <div className="device-monitor-policy-notification-actions">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={monitorRuleSaving}
+                  onClick={() => saveDraftPolicy(draftPreset, alertThreshold, refreshIntervalSecs)}
+                >
+                  {t("detail.monitor.policy.saveNotifications")}
                 </Button>
               </div>
             )}

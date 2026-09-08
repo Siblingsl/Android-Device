@@ -710,6 +710,65 @@ a {
   color: var(--text-muted);
   font-size: 10px;
 }
+.device-monitor-policy-notifications {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+.device-monitor-policy-alert-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.device-monitor-policy-alert-toggle input { accent-color: var(--primary); }
+.device-monitor-policy-quiet {
+  display: grid;
+  gap: 8px;
+}
+.device-monitor-policy-quiet-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.device-monitor-policy-quiet-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.device-monitor-policy-quiet-inputs input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  outline: none;
+  color: var(--text);
+  background: var(--bg);
+}
+.device-monitor-policy-quiet-inputs input:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+.device-monitor-policy-quiet-hint {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.device-monitor-policy-error {
+  margin-top: 9px;
+  color: var(--danger);
+  font-size: 11px;
+}
+.device-monitor-policy-notification-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
 .device-monitor-notifications {
   margin-bottom: 12px;
   padding: 10px 11px;
@@ -881,6 +940,8 @@ a {
   .device-monitor-policy-current { grid-column: 1 / -1; grid-row: 2; }
   .device-monitor-policy-custom { grid-template-columns: 1fr; }
   .device-monitor-policy-custom .btn { width: 100%; }
+  .device-monitor-policy-quiet-inputs { grid-template-columns: 1fr; }
+  .device-monitor-policy-notification-actions .btn { width: 100%; }
 }
 
 .btn {

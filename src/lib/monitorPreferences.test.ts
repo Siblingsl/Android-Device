@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   applyDeviceMonitorRule,
+  isWithinMonitorQuietHours,
   normalizeMonitorPreferences,
+  normalizeMonitorQuietHours,
   resolveDeviceMonitorPreferences,
   resourceAlertFor,
+  shouldSuppressMonitorAlert,
 } from "./monitorPreferences";
 
 describe("normalizeMonitorPreferences", () => {
@@ -41,6 +44,8 @@ describe("resolveDeviceMonitorPreferences", () => {
       preset: "inherit",
       alertThreshold: 72,
       refreshIntervalSecs: 12,
+      alertsEnabled: true,
+      quietHours: null,
     });
   });
 
@@ -49,17 +54,35 @@ describe("resolveDeviceMonitorPreferences", () => {
       preset: "sensitive",
       alertThreshold: 99,
       refreshIntervalSecs: 59,
-    })).toEqual({ preset: "sensitive", alertThreshold: 65, refreshIntervalSecs: 5 });
+    })).toEqual({
+      preset: "sensitive",
+      alertThreshold: 65,
+      refreshIntervalSecs: 5,
+      alertsEnabled: true,
+      quietHours: null,
+    });
     expect(resolveDeviceMonitorPreferences(80, 10, {
       preset: "balanced",
       alertThreshold: 50,
       refreshIntervalSecs: 60,
-    })).toEqual({ preset: "balanced", alertThreshold: 80, refreshIntervalSecs: 10 });
+    })).toEqual({
+      preset: "balanced",
+      alertThreshold: 80,
+      refreshIntervalSecs: 10,
+      alertsEnabled: true,
+      quietHours: null,
+    });
     expect(resolveDeviceMonitorPreferences(80, 10, {
       preset: "relaxed",
       alertThreshold: 50,
       refreshIntervalSecs: 5,
-    })).toEqual({ preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 });
+    })).toEqual({
+      preset: "relaxed",
+      alertThreshold: 90,
+      refreshIntervalSecs: 20,
+      alertsEnabled: true,
+      quietHours: null,
+    });
   });
 
   it("clamps custom device values and falls back to globals for invalid numbers", () => {
@@ -67,12 +90,39 @@ describe("resolveDeviceMonitorPreferences", () => {
       preset: "custom",
       alertThreshold: 40,
       refreshIntervalSecs: 90,
-    })).toEqual({ preset: "custom", alertThreshold: 50, refreshIntervalSecs: 60 });
+    })).toEqual({
+      preset: "custom",
+      alertThreshold: 50,
+      refreshIntervalSecs: 60,
+      alertsEnabled: true,
+      quietHours: null,
+    });
     expect(resolveDeviceMonitorPreferences(74, 16, {
       preset: "custom",
       alertThreshold: Number.NaN,
       refreshIntervalSecs: Number.NaN,
-    })).toEqual({ preset: "custom", alertThreshold: 74, refreshIntervalSecs: 16 });
+    })).toEqual({
+      preset: "custom",
+      alertThreshold: 74,
+      refreshIntervalSecs: 16,
+      alertsEnabled: true,
+      quietHours: null,
+    });
+  });
+
+  it("preserves notification overrides while inheriting global thresholds", () => {
+    expect(resolveDeviceMonitorPreferences(80, 10, {
+      preset: "inherit",
+      alertsEnabled: false,
+      quietStart: "22:00",
+      quietEnd: "06:30",
+    })).toEqual({
+      preset: "inherit",
+      alertThreshold: 80,
+      refreshIntervalSecs: 10,
+      alertsEnabled: false,
+      quietHours: { start: "22:00", end: "06:30" },
+    });
   });
 
   it("falls back to inheritance for an unknown persisted preset", () => {
@@ -80,7 +130,44 @@ describe("resolveDeviceMonitorPreferences", () => {
       preset: "unknown",
       alertThreshold: 60,
       refreshIntervalSecs: 5,
-    } as never)).toEqual({ preset: "inherit", alertThreshold: 76, refreshIntervalSecs: 14 });
+    } as never)).toEqual({
+      preset: "inherit",
+      alertThreshold: 76,
+      refreshIntervalSecs: 14,
+      alertsEnabled: true,
+      quietHours: null,
+    });
+  });
+});
+
+describe("monitor quiet hours", () => {
+  it("accepts valid times and rejects incomplete or unsafe ranges", () => {
+    expect(normalizeMonitorQuietHours("22:00", "06:30")).toEqual({
+      start: "22:00",
+      end: "06:30",
+    });
+    expect(normalizeMonitorQuietHours("22:00", "22:00")).toBeNull();
+    expect(normalizeMonitorQuietHours("22:00", "bad")).toBeNull();
+    expect(normalizeMonitorQuietHours("", "06:30")).toBeNull();
+  });
+
+  it("handles both same-day and cross-midnight ranges", () => {
+    const daytime = normalizeMonitorQuietHours("09:00", "18:00");
+    expect(isWithinMonitorQuietHours(new Date(2026, 8, 8, 12, 0), daytime)).toBe(true);
+    expect(isWithinMonitorQuietHours(new Date(2026, 8, 8, 18, 0), daytime)).toBe(false);
+
+    const overnight = normalizeMonitorQuietHours("22:00", "06:30");
+    expect(isWithinMonitorQuietHours(new Date(2026, 8, 8, 23, 0), overnight)).toBe(true);
+    expect(isWithinMonitorQuietHours(new Date(2026, 8, 9, 6, 29), overnight)).toBe(true);
+    expect(isWithinMonitorQuietHours(new Date(2026, 8, 9, 6, 30), overnight)).toBe(false);
+    expect(isWithinMonitorQuietHours(new Date(2026, 8, 9, 12, 0), overnight)).toBe(false);
+  });
+
+  it("suppresses alerts when disabled or during configured quiet hours", () => {
+    const quietHours = { start: "22:00", end: "06:30" };
+    expect(shouldSuppressMonitorAlert({ alertsEnabled: false, quietHours }, new Date(2026, 8, 8, 12, 0))).toBe(true);
+    expect(shouldSuppressMonitorAlert({ alertsEnabled: true, quietHours }, new Date(2026, 8, 8, 23, 0))).toBe(true);
+    expect(shouldSuppressMonitorAlert({ alertsEnabled: true, quietHours }, new Date(2026, 8, 8, 12, 0))).toBe(false);
   });
 });
 
@@ -95,6 +182,8 @@ describe("applyDeviceMonitorRule", () => {
       preset: "inherit",
       alertThreshold: 75,
       refreshIntervalSecs: 15,
+      alertsEnabled: true,
+      quietHours: null,
     })).toEqual({
       "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
     });
@@ -106,8 +195,33 @@ describe("applyDeviceMonitorRule", () => {
       preset: "custom",
       alertThreshold: 73,
       refreshIntervalSecs: 12,
+      alertsEnabled: true,
+      quietHours: null,
     })).toEqual({
-      "device-a": { preset: "custom", alertThreshold: 73, refreshIntervalSecs: 12 },
+      "device-a": {
+        preset: "custom",
+        alertThreshold: 73,
+        refreshIntervalSecs: 12,
+        alertsEnabled: true,
+      },
+      "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
+    });
+  });
+
+  it("stores notification-only overrides while inheriting global thresholds", () => {
+    expect(applyDeviceMonitorRule(existing, "device-a", {
+      preset: "inherit",
+      alertThreshold: 80,
+      refreshIntervalSecs: 10,
+      alertsEnabled: false,
+      quietHours: { start: "22:00", end: "06:30" },
+    })).toEqual({
+      "device-a": {
+        preset: "inherit",
+        alertsEnabled: false,
+        quietStart: "22:00",
+        quietEnd: "06:30",
+      },
       "device-b": { preset: "relaxed", alertThreshold: 90, refreshIntervalSecs: 20 },
     });
   });

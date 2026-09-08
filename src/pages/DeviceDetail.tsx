@@ -40,6 +40,7 @@ import {
   applyDeviceMonitorRule,
   resolveDeviceMonitorPreferences,
   resourceAlertFor,
+  shouldSuppressMonitorAlert,
 } from "../lib/monitorPreferences";
 import {
   evaluateResourceAlert,
@@ -58,6 +59,7 @@ import type {
   DeviceInfo,
   FileEntry,
   LsposedScopeReport,
+  MonitorQuietHours,
   RootStatus,
   SuPolicyEntry,
 } from "../types";
@@ -112,11 +114,17 @@ export function DeviceDetail() {
     preset: DeviceMonitorPreset,
     alertThreshold: number,
     refreshIntervalSecs: number,
+    alertsEnabled: boolean,
+    quietHours: MonitorQuietHours | null,
   ): Promise<boolean> => {
     if (!appSettings || monitorRuleSaving) return false;
-    const rule = preset === "inherit"
-      ? undefined
-      : { preset, alertThreshold, refreshIntervalSecs };
+    const rule = {
+      preset,
+      alertThreshold,
+      refreshIntervalSecs,
+      alertsEnabled,
+      ...(quietHours ? { quietStart: quietHours.start, quietEnd: quietHours.end } : {}),
+    };
     const resolved = resolveDeviceMonitorPreferences(
       appSettings.resourceAlertThreshold,
       appSettings.deviceRefreshIntervalSecs,
@@ -238,13 +246,27 @@ export function DeviceDetail() {
   }, [deviceId]);
 
   useEffect(() => {
+    resourceAlertTracker.current = { active: null, lastEmittedAt: null };
+  }, [
+    monitorPreferences.alertThreshold,
+    monitorPreferences.alertsEnabled,
+    monitorPreferences.quietHours?.start,
+    monitorPreferences.quietHours?.end,
+  ]);
+
+  useEffect(() => {
     const cpuUsage = typeof device?.cpuUsage === "number" ? device.cpuUsage : null;
     const memoryUsage = typeof device?.memoryUsage === "number" ? device.memoryUsage : null;
     const current = resourceAlertFor(cpuUsage, memoryUsage, monitorPreferences.alertThreshold);
     const now = Date.now();
     const result = evaluateResourceAlert(resourceAlertTracker.current, current, now);
     resourceAlertTracker.current = result.tracker;
-    if (!result.emit || !current || !device) return;
+    if (
+      !result.emit ||
+      !current ||
+      !device ||
+      shouldSuppressMonitorAlert(monitorPreferences, new Date(now))
+    ) return;
 
     addMonitorAlert({
       id: `${deviceId}-${current}-${now}`,
@@ -254,7 +276,16 @@ export function DeviceDetail() {
       createdAt: now,
       alertThreshold: monitorPreferences.alertThreshold,
     });
-  }, [addMonitorAlert, device?.cpuUsage, device?.memoryUsage, device?.name, monitorPreferences.alertThreshold]);
+  }, [
+    addMonitorAlert,
+    device?.cpuUsage,
+    device?.memoryUsage,
+    device?.name,
+    monitorPreferences.alertThreshold,
+    monitorPreferences.alertsEnabled,
+    monitorPreferences.quietHours?.start,
+    monitorPreferences.quietHours?.end,
+  ]);
 
   useEffect(() => {
     if (!device || !autoRefresh) return;
@@ -449,6 +480,8 @@ export function DeviceDetail() {
             alertThreshold={monitorPreferences.alertThreshold}
             refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
             monitorPreset={monitorPreferences.preset}
+            alertsEnabled={monitorPreferences.alertsEnabled}
+            quietHours={monitorPreferences.quietHours}
             monitorRuleSaving={monitorRuleSaving}
             onMonitorRuleChange={saveMonitorRule}
             monitorAlerts={deviceMonitorAlerts}
