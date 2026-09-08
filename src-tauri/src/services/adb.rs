@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::sync::atomic::AtomicBool;
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -401,6 +402,40 @@ pub fn pull(serial: &str, remote: &str, local: &str) -> ShellResult {
         &adb_bin(),
         &["-s", serial, "pull", remote, local],
         Duration::from_secs(120),
+    )
+}
+
+pub fn push_tracked(
+    serial: &str,
+    local: &str,
+    remote: &str,
+    cancel: &AtomicBool,
+    on_output: impl Fn(String) + Send + Sync + 'static,
+) -> util::CancellableCommandResult {
+    log::info("ADB", &format!("Tracked push {} -> {}", local, remote));
+    util::run_command_cancellable(
+        &adb_bin(),
+        &["-s", serial, "push", local, remote],
+        Duration::from_secs(120),
+        cancel,
+        on_output,
+    )
+}
+
+pub fn pull_tracked(
+    serial: &str,
+    remote: &str,
+    local: &str,
+    cancel: &AtomicBool,
+    on_output: impl Fn(String) + Send + Sync + 'static,
+) -> util::CancellableCommandResult {
+    log::info("ADB", &format!("Tracked pull {} -> {}", remote, local));
+    util::run_command_cancellable(
+        &adb_bin(),
+        &["-s", serial, "pull", remote, local],
+        Duration::from_secs(120),
+        cancel,
+        on_output,
     )
 }
 
