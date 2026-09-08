@@ -9,6 +9,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -282,7 +283,7 @@ export function Devices() {
                 setStatusText(t("devices.nothingToCopy"));
                 return;
               }
-              void navigator.clipboard.writeText(text).then(
+              void copyText(text).then(
                 () => setStatusText(t("devices.copiedSerials", { n: selectedDevices.length })),
                 () => void alert(t("common.panel.copyFailed")),
               );
@@ -447,7 +448,7 @@ export function Devices() {
                   const text = batchReport.items
                     .map((it) => `${it.name}\t${it.ok ? t("devices.success") : t("devices.failed")}\t${it.detail}`)
                     .join("\n");
-                  void navigator.clipboard.writeText(text).then(
+                  void copyText(text).then(
                     () => setStatusText(t("devices.copiedBatch")),
                     () => setStatusText(t("common.panel.copyFailed")),
                   );
@@ -731,7 +732,7 @@ export function Devices() {
                       void run(d.id, () => DeviceService.stop(d.id), t("devices.status.stop", { name: d.name }));
                     }
                     if (v === "copy" && d.serial) {
-                      void navigator.clipboard.writeText(d.serial).then(
+                      void copyText(d.serial).then(
                         () => setStatusText(t("common.panel.copied", { value: d.serial })),
                         () => void alert(t("common.panel.copyFailed")),
                       );

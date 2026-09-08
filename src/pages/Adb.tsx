@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Cable, Link2, RefreshCw, Unplug, Wrench } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -416,7 +417,7 @@ export function AdbPage() {
                           cursor: "pointer",
                         }}
                         onClick={() => {
-                          void navigator.clipboard.writeText(d.serial).then(
+                          void copyText(d.serial).then(
                             () => setStatusText(t("common.panel.copied", { value: d.serial })),
                             () => setStatusText(t("common.panel.copyFailed")),
                           );

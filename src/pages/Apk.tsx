@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Package, Upload } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { open } from "@tauri-apps/plugin-dialog";
 import { askConfirm } from "../lib/dialogs";
 import { Card } from "../components/ui/Card";
@@ -156,7 +157,7 @@ export function ApkPage() {
   const copyOutput = async () => {
     if (!output.length) return;
     try {
-      await navigator.clipboard.writeText(
+      await copyText(
         output.map((l) => `[${l.name}] ${l.ok ? t("devices.success") : t("devices.failed")} ${l.detail}`.trim()).join("\n"),
       );
       setStatusText(t("apk.copiedResult"));

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, Download, RefreshCw, Trash2 } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -297,7 +298,7 @@ export function LogsPage() {
               const text = logs
                 .map((l) => `[${l.timestamp}] [${l.level}] [${l.source}] ${l.message}`)
                 .join("\n");
-              void navigator.clipboard.writeText(text).then(
+              void copyText(text).then(
                 () => {
                   setCopiedList(true);
                   window.setTimeout(() => setCopiedList(false), 1500);
@@ -351,7 +352,7 @@ export function LogsPage() {
                   title={t("logs.clickToCopy")}
                   onClick={() => {
                     bumpPause();
-                    void navigator.clipboard.writeText(text).then(
+                    void copyText(text).then(
                       () => {
                         setCopiedId(l.id);
                         window.setTimeout(() => setCopiedId((cur) => (cur === l.id ? null : cur)), 1500);

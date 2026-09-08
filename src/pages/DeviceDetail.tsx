@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { askConfirm } from "../lib/dialogs";
 import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { copyText } from "../lib/clipboard";
 import {
   ArrowLeft,
   RefreshCw,
@@ -1057,7 +1058,7 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
             <Button
               size="sm"
               onClick={() => {
-                void navigator.clipboard.writeText(device.serial).then(
+                void copyText(device.serial).then(
                   () => setStatusText(t("common.panel.copied", { value: device.serial })),
                   () => void alert(t("common.panel.copyFailed")),
                 );
@@ -1071,7 +1072,7 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
             variant="ghost"
             onClick={() => {
               const text = items.map(([k, v]) => `${k}: ${v}`).join("\n");
-              void navigator.clipboard.writeText(text).then(
+              void copyText(text).then(
                 () => setStatusText(t("detail.overview.copiedAll")),
                 () => void alert(t("common.panel.copyFailed")),
               );
@@ -1823,7 +1824,7 @@ function Files({
               variant="ghost"
               disabled={!path}
               onClick={() => {
-                void navigator.clipboard.writeText(path).then(
+                void copyText(path).then(
                   () => setStatusText(t("common.panel.copied", { value: path })),
                   () => void alert(t("common.panel.copyFailed")),
                 );
@@ -2012,7 +2013,7 @@ function Files({
                         variant="ghost"
                         title={t("detail.files.copyPath")}
                         onClick={() => {
-                          void navigator.clipboard.writeText(f.path).then(
+                          void copyText(f.path).then(
                             () => setStatusText(t("common.panel.copied", { value: f.path })),
                             () => void alert(t("common.panel.copyFailed")),
                           );
@@ -2244,7 +2245,7 @@ function Apps({
                       title={t("detail.apps.clickCopyPkg")}
                       style={{ fontSize: 11 }}
                       onClick={() => {
-                        void navigator.clipboard.writeText(a.packageName).then(
+                        void copyText(a.packageName).then(
                           () => setStatusText(t("common.panel.copied", { value: a.packageName })),
                           () => void alert(t("common.panel.copyFailed")),
                         );
@@ -2346,7 +2347,7 @@ function Apps({
                             });
                           }
                           if (v === "copy") {
-                            void navigator.clipboard.writeText(a.packageName).then(
+                            void copyText(a.packageName).then(
                               () => setStatusText(t("common.panel.copied", { value: a.packageName })),
                               () => void alert(t("common.panel.copyFailed")),
                             );
@@ -2390,7 +2391,7 @@ function Apps({
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  void navigator.clipboard.writeText(detail).then(
+                  void copyText(detail).then(
                     () => setStatusText(t("detail.apps.copiedDetail")),
                     () => void alert(t("common.panel.copyFailed")),
                   );
@@ -2557,7 +2558,7 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
                 })();
               }
               if (v === "copy" && lines.length > 0) {
-                void navigator.clipboard.writeText(lines.join("\n")).then(
+                void copyText(lines.join("\n")).then(
                   () => {
                     setCopiedList(true);
                     window.setTimeout(() => setCopiedList(false), 1500);
@@ -2628,7 +2629,7 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
               style={{ display: "block", width: "100%", textAlign: "left" }}
               title={t("detail.logs.clickCopy")}
               onClick={() => {
-                void navigator.clipboard.writeText(l).then(
+                void copyText(l).then(
                   () => {
                     setCopiedAt(i);
                     window.setTimeout(() => setCopiedAt((cur) => (cur === i ? null : cur)), 1500);

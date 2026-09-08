@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { DeviceService } from "../../services/deviceService";
+import { copyText } from "../../lib/clipboard";
 import { formatShellOutput, runDeviceAction, type ShellResultLike } from "../../lib/deviceActions";
 import { navigateShellHistory } from "../../lib/shellHistory";
 import { useI18n } from "../../i18n";
@@ -245,7 +246,7 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
           size="sm"
           disabled={!shellOut}
           onClick={() => {
-            void navigator.clipboard.writeText(shellOut).then(
+            void copyText(shellOut).then(
               () => {
                 setCopiedOut(true);
                 window.setTimeout(() => setCopiedOut(false), 1500);

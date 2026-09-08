@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Play, Square, RefreshCw, Trash2, Shield, FolderOpen, Smartphone, Database } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -1723,7 +1724,7 @@ function InstanceRow({
                 setStatusText(t("docker.noAdbPort"));
                 return;
               }
-              void navigator.clipboard.writeText(serial).then(
+              void copyText(serial).then(
                 () => setStatusText(t("common.panel.copied", { value: serial })),
                 () => setStatusText(t("common.panel.copyFailed")),
               );
@@ -1822,7 +1823,7 @@ function InstanceRow({
               variant="ghost"
               disabled={panel.loading || !panel.text}
               onClick={() => {
-                void navigator.clipboard.writeText(panel.text).then(
+                void copyText(panel.text).then(
                   () => setStatusText(t("docker.copied")),
                   () => setStatusText(t("common.panel.copyFailed")),
                 );

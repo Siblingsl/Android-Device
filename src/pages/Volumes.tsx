@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Database, RefreshCw, Smartphone, Trash2 } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { Card } from "../components/ui/Card";
 import { askConfirm } from "../lib/dialogs";
 import { Button } from "../components/ui/Button";
@@ -244,7 +245,7 @@ export function VolumesPage() {
                         cursor: "pointer",
                       }}
                       onClick={() => {
-                        void navigator.clipboard.writeText(v.name).then(
+                        void copyText(v.name).then(
                           () => setStatusText(t("common.panel.copied", { value: v.name })),
                           () => setStatusText(t("common.panel.copyFailed")),
                         );

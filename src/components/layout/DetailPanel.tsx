@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, ChevronLeft } from "lucide-react";
+import { copyText } from "../../lib/clipboard";
 import { useAppStore } from "../../stores/appStore";
 import { StatusDot } from "../ui/StatusDot";
 import { Button } from "../ui/Button";
@@ -65,7 +66,7 @@ export function DetailPanel() {
                 onClick={
                   device.serial
                     ? () => {
-                        void navigator.clipboard.writeText(device.serial).then(
+                        void copyText(device.serial).then(
                           () => useAppStore.getState().setStatusText(t("common.panel.copied", { value: device.serial })),
                           () => useAppStore.getState().setStatusText(t("common.panel.copyFailed")),
                         );
