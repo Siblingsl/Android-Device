@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleOff, RefreshCw, ServerCrash, WifiOff } from "lucide-react";
+import { AlertTriangle, Bell, CheckCircle2, CircleOff, RefreshCw, ServerCrash, WifiOff, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import type { DeviceInfo } from "../../types";
 import { Button } from "../ui/Button";
@@ -6,6 +6,7 @@ import { Card } from "../ui/Card";
 import { summarizeDeviceHealth, type DeviceHealthState } from "../../lib/deviceMonitor";
 import type { ResourceSample } from "../../lib/resourceMetrics";
 import { resourceAlertFor, type ResourceAlert } from "../../lib/monitorPreferences";
+import type { MonitorAlert } from "../../lib/monitorAlerts";
 
 interface Props {
   device: DeviceInfo;
@@ -14,6 +15,9 @@ interface Props {
   refreshError: string | null;
   metricHistory: ResourceSample[];
   alertThreshold: number;
+  monitorAlerts: MonitorAlert[];
+  onDismissMonitorAlert: (id: string) => void;
+  onClearMonitorAlerts: () => void;
   autoRefresh: boolean;
   onAutoRefreshChange: (enabled: boolean) => void;
   onRefresh: () => void;
@@ -33,6 +37,9 @@ export function DeviceHealthPanel({
   refreshError,
   metricHistory,
   alertThreshold,
+  monitorAlerts,
+  onDismissMonitorAlert,
+  onClearMonitorAlerts,
   autoRefresh,
   onAutoRefreshChange,
   onRefresh,
@@ -122,6 +129,13 @@ export function DeviceHealthPanel({
         </div>
       )}
 
+      <MonitorAlertCenter
+        alerts={monitorAlerts}
+        threshold={alertThreshold}
+        onDismiss={onDismissMonitorAlert}
+        onClear={onClearMonitorAlerts}
+      />
+
       <div className="device-monitor-runtime">
         <RuntimeMetric
           label={t("detail.monitor.runtime.cpu")}
@@ -176,6 +190,70 @@ export function DeviceHealthPanel({
         />
       </div>
     </Card>
+  );
+}
+
+function MonitorAlertCenter({
+  alerts,
+  threshold,
+  onDismiss,
+  onClear,
+}: {
+  alerts: MonitorAlert[];
+  threshold: number;
+  onDismiss: (id: string) => void;
+  onClear: () => void;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <div className="device-monitor-notifications" aria-live="polite">
+      <div className="device-monitor-notifications-head">
+        <div className="device-monitor-notifications-title">
+          <Bell size={14} />
+          <span>{t("detail.monitor.notifications.title")}</span>
+          <span className="badge warn">{alerts.length}</span>
+        </div>
+        {alerts.length > 0 && (
+          <Button size="sm" variant="ghost" onClick={onClear}>
+            {t("detail.monitor.notifications.clear")}
+          </Button>
+        )}
+      </div>
+
+      {alerts.length === 0 ? (
+        <div className="device-monitor-notifications-empty">
+          {t("detail.monitor.notifications.empty")}
+        </div>
+      ) : (
+        <div className="device-monitor-notification-list">
+          {alerts.map((alert) => (
+            <div className="device-monitor-notification-item" key={alert.id}>
+              <AlertTriangle size={14} />
+              <div className="device-monitor-notification-content">
+                <div className="device-monitor-notification-message">
+                  {resourceAlertMessageFor(alert.kind, t, threshold)}
+                </div>
+                <div className="device-monitor-notification-time">
+                  {t("detail.monitor.notifications.at", {
+                    time: new Date(alert.createdAt).toLocaleTimeString(),
+                  })}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="device-monitor-notification-dismiss"
+                aria-label={t("detail.monitor.notifications.dismiss")}
+                title={t("detail.monitor.notifications.dismiss")}
+                onClick={() => onDismiss(alert.id)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

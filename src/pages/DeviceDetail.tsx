@@ -36,7 +36,13 @@ import {
   type ControlFeedbackStatus,
 } from "../lib/controlFeedback";
 import { appendResourceSample, type ResourceSample } from "../lib/resourceMetrics";
-import { normalizeMonitorPreferences } from "../lib/monitorPreferences";
+import { normalizeMonitorPreferences, resourceAlertFor } from "../lib/monitorPreferences";
+import {
+  appendMonitorAlert,
+  evaluateResourceAlert,
+  type MonitorAlert,
+  type ResourceAlertTracker,
+} from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
@@ -79,9 +85,11 @@ export function DeviceDetail() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [metricHistory, setMetricHistory] = useState<ResourceSample[]>([]);
+  const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlert[]>([]);
   const [connecting, setConnecting] = useState(false);
   const autoTried = useRef("");
   const refreshInFlight = useRef(false);
+  const resourceAlertTracker = useRef<ResourceAlertTracker>({ active: null, lastEmittedAt: null });
   const monitorPreferences = normalizeMonitorPreferences(
     appSettings?.resourceAlertThreshold,
     appSettings?.deviceRefreshIntervalSecs,
@@ -165,6 +173,9 @@ export function DeviceDetail() {
   useEffect(() => {
     autoTried.current = "";
     setMetricHistory([]);
+    setMonitorAlerts([]);
+    resourceAlertTracker.current = { active: null, lastEmittedAt: null };
+    setDevice(null);
     void load().then((d) => {
       if (d) return connectIfNeeded(d);
       if (deviceId.includes(":")) {
@@ -178,6 +189,24 @@ export function DeviceDetail() {
       }
     });
   }, [deviceId]);
+
+  useEffect(() => {
+    const cpuUsage = typeof device?.cpuUsage === "number" ? device.cpuUsage : null;
+    const memoryUsage = typeof device?.memoryUsage === "number" ? device.memoryUsage : null;
+    const current = resourceAlertFor(cpuUsage, memoryUsage, monitorPreferences.alertThreshold);
+    const now = Date.now();
+    const result = evaluateResourceAlert(resourceAlertTracker.current, current, now);
+    resourceAlertTracker.current = result.tracker;
+    if (!result.emit || !current) return;
+
+    setMonitorAlerts((alerts) =>
+      appendMonitorAlert(alerts, {
+        id: `${deviceId}-${current}-${now}`,
+        kind: current,
+        createdAt: now,
+      }),
+    );
+  }, [device?.cpuUsage, device?.memoryUsage, monitorPreferences.alertThreshold]);
 
   useEffect(() => {
     if (!device || !autoRefresh) return;
@@ -370,6 +399,11 @@ export function DeviceDetail() {
             refreshError={refreshError}
             metricHistory={metricHistory}
             alertThreshold={monitorPreferences.alertThreshold}
+            monitorAlerts={monitorAlerts}
+            onDismissMonitorAlert={(alertId) =>
+              setMonitorAlerts((alerts) => alerts.filter((alert) => alert.id !== alertId))
+            }
+            onClearMonitorAlerts={() => setMonitorAlerts([])}
             autoRefresh={autoRefresh}
             onAutoRefreshChange={setAutoRefresh}
             onRefresh={() => void load()}

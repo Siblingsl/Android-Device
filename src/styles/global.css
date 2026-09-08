@@ -617,6 +617,78 @@ a {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.12);
 }
+.device-monitor-notifications {
+  margin-bottom: 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-hover);
+}
+.device-monitor-notifications-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.device-monitor-notifications-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.device-monitor-notifications-empty {
+  padding-top: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.device-monitor-notification-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+.device-monitor-notification-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 8px;
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.06);
+}
+.device-monitor-notification-content {
+  flex: 1;
+  min-width: 0;
+}
+.device-monitor-notification-message {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.device-monitor-notification-time {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.device-monitor-notification-dismiss {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -3px -3px 0 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.device-monitor-notification-dismiss:hover {
+  color: var(--text);
+  background: var(--bg-active);
+}
 .device-monitor-runtime {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
