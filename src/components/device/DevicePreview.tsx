@@ -8,6 +8,7 @@ interface DevicePreviewProps {
   serial: string;
   disabled?: boolean;
   scrcpyStatus: string;
+  scrcpyBusy?: "start" | "stop" | "restart" | null;
   preview: PreviewState;
   previewFlash: boolean;
   livePreview: boolean;
@@ -39,6 +40,7 @@ interface DevicePreviewProps {
 export function DevicePreview({
   disabled = false,
   scrcpyStatus,
+  scrcpyBusy = null,
   preview,
   previewFlash,
   livePreview,
@@ -97,20 +99,21 @@ export function DevicePreview({
       >
         <div className="row">
           {scrcpyStatus === "running" ? (
-            <Button size="sm" variant="primary" onClick={onStopScrcpy}>
+            <Button size="sm" variant="primary" loading={scrcpyBusy === "stop"} onClick={onStopScrcpy}>
               {t("detail.control.mirroringActive")}
             </Button>
           ) : (
-            <Button size="sm" variant="secondary" disabled={disabled} onClick={onStartScrcpy}>
+            <Button size="sm" variant="secondary" loading={scrcpyBusy === "start"} disabled={disabled} onClick={onStartScrcpy}>
               {t("detail.control.startMirroring")}
             </Button>
           )}
-          <Button size="sm" variant="secondary" disabled={scrcpyStatus !== "running"} onClick={onStopScrcpy}>
+          <Button size="sm" variant="secondary" loading={scrcpyBusy === "stop"} disabled={scrcpyStatus !== "running"} onClick={onStopScrcpy}>
             {t("detail.control.disconnect")}
           </Button>
           <Button
             size="sm"
             variant="secondary"
+            loading={scrcpyBusy === "restart"}
             disabled={disabled || scrcpyStatus !== "running"}
             onClick={onRestartScrcpy}
           >

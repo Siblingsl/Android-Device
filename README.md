@@ -147,4 +147,4 @@ bash scripts/setup-linux-binder.sh
 
 - Windows 上 Redroid 容器 Up ≠ ADB 可用，缺 binder 内核时常见 `offline`。  
 - GApps 是社区 overlay，Play 登录与认证需在虚机里自行完成。  
-- scrcpy 目前是独立窗口，页内控制区是占位 + 截图 / ADB 点击。
+- scrcpy 目前是独立窗口；页内提供截图预览、ADB 点击/滑动、常用按键、文本/剪贴板输入和 Shell 控制。

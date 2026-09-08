@@ -91,13 +91,10 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
             onStatus(t("detail.status.ready"));
           },
           onError: (error) => {
-            setShellOut(
-              formatShellOutput(
-                received?.stdout || "",
-                received?.stderr || error.message,
-                received?.exitCode,
-              ) || error.message,
-            );
+            const output = received
+              ? formatShellOutput(received.stdout || "", received.stderr || "", received.exitCode)
+              : formatShellOutput("", error.message);
+            setShellOut(output || error.message);
             onStatus(error.message || t("detail.control.shellFailed"));
           },
         },
