@@ -10,6 +10,8 @@ import {
   parseStoredMonitorAlerts,
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
+  summarizeMonitorAlerts,
+  buildMonitorAlertTrend,
   type MonitorAlert,
   type MonitorAlertTracker,
   type ResourceAlertTracker,
@@ -135,6 +137,49 @@ describe("filterMonitorAlerts", () => {
         (alert) => alert.id,
       ),
     ).toEqual(["cpu-a", "memory-b", "both-a"]);
+  });
+
+  it("filters by warning or critical severity while keeping all severities by default", () => {
+    const critical = { ...alerts[0], id: "critical-a", severity: "critical" as const };
+    expect(
+      filterMonitorAlerts(
+        [...alerts, critical],
+        { deviceId: "all", kind: "all", severity: "critical", timeRange: "all" },
+        now,
+      ),
+    ).toEqual([critical]);
+    expect(
+      filterMonitorAlerts(
+        [...alerts, critical],
+        { deviceId: "all", kind: "all", timeRange: "all" },
+        now,
+      ),
+    ).toHaveLength(4);
+  });
+});
+
+describe("monitor alert summaries and trend", () => {
+  it("counts resource kinds and treats legacy records as warning alerts", () => {
+    expect(summarizeMonitorAlerts([
+      { id: "cpu", deviceId: "a", deviceName: "A", kind: "cpu", createdAt: 1 },
+      { id: "memory", deviceId: "a", deviceName: "A", kind: "memory", severity: "critical", createdAt: 2 },
+      { id: "both", deviceId: "a", deviceName: "A", kind: "both", createdAt: 3 },
+    ])).toEqual({ total: 3, cpu: 1, memory: 1, both: 1, warning: 2, critical: 1 });
+  });
+
+  it("builds seven-day local trend buckets with separate warning and critical counts", () => {
+    const now = new Date(2026, 8, 8, 12, 0).getTime();
+    const trend = buildMonitorAlertTrend([
+      { id: "warning-today", deviceId: "a", deviceName: "A", kind: "cpu", createdAt: new Date(2026, 8, 8, 9, 0).getTime() },
+      { id: "critical-today", deviceId: "a", deviceName: "A", kind: "memory", severity: "critical", createdAt: new Date(2026, 8, 8, 10, 0).getTime() },
+      { id: "warning-yesterday", deviceId: "a", deviceName: "A", kind: "both", createdAt: new Date(2026, 8, 7, 10, 0).getTime() },
+    ], now, 3);
+
+    expect(trend).toEqual([
+      { dayStart: new Date(2026, 8, 6).getTime(), warning: 0, critical: 0 },
+      { dayStart: new Date(2026, 8, 7).getTime(), warning: 1, critical: 0 },
+      { dayStart: new Date(2026, 8, 8).getTime(), warning: 1, critical: 1 },
+    ]);
   });
 });
 

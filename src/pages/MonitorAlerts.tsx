@@ -1,17 +1,19 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { save } from "@tauri-apps/plugin-dialog";
-import { BellRing, Clock3, Cpu, Download, MemoryStick, Trash2, X } from "lucide-react";
+import { AlertTriangle, BellRing, Clock3, Cpu, Download, MemoryStick, Trash2, X } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { alertMsg, askConfirm } from "../lib/dialogs";
 import { useI18n } from "../i18n";
 import {
   filterMonitorAlerts,
+  buildMonitorAlertTrend,
   MAX_MONITOR_ALERT_HISTORY,
   monitorAlertMessageKey,
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
+  summarizeMonitorAlerts,
   type MonitorAlertFilter,
   type MonitorAlertKind,
 } from "../lib/monitorAlerts";
@@ -34,6 +36,7 @@ export function MonitorAlertsPage() {
   const [filters, setFilters] = useState<MonitorAlertFilter>({
     deviceId: "all",
     kind: "all",
+    severity: "all",
     timeRange: "7d",
   });
   const monitorPreferences = normalizeMonitorPreferences(
@@ -52,12 +55,10 @@ export function MonitorAlertsPage() {
     () => filterMonitorAlerts(alerts, filters, Date.now()),
     [alerts, filters],
   );
-  const counts = {
-    total: filteredAlerts.length,
-    cpu: filteredAlerts.filter((alert) => alert.kind === "cpu").length,
-    memory: filteredAlerts.filter((alert) => alert.kind === "memory").length,
-    both: filteredAlerts.filter((alert) => alert.kind === "both").length,
-  };
+  const counts = summarizeMonitorAlerts(filteredAlerts);
+  const trend = buildMonitorAlertTrend(filteredAlerts, Date.now());
+  const trendMax = Math.max(1, ...trend.map((point) => point.warning + point.critical));
+  const hasTrendData = trend.some((point) => point.warning > 0 || point.critical > 0);
 
   const openDevice = (deviceId: string) => {
     setSelectedDeviceId(deviceId);
@@ -125,6 +126,18 @@ export function MonitorAlertsPage() {
           tone="memory"
         />
         <SummaryCard icon={<BellRing size={18} />} label={t("monitor.stat.both")} value={counts.both} tone="both" />
+        <SummaryCard
+          icon={<AlertTriangle size={18} />}
+          label={t("monitor.stat.warning")}
+          value={counts.warning}
+          tone="warning"
+        />
+        <SummaryCard
+          icon={<AlertTriangle size={18} />}
+          label={t("monitor.stat.critical")}
+          value={counts.critical}
+          tone="critical"
+        />
       </div>
 
       <Card
@@ -167,6 +180,22 @@ export function MonitorAlertsPage() {
             </select>
           </label>
           <label className="field">
+            <span>{t("monitor.filter.severity")}</span>
+            <select
+              value={filters.severity ?? "all"}
+              onChange={(e) =>
+                setFilters((current) => ({
+                  ...current,
+                  severity: e.target.value as MonitorAlertFilter["severity"],
+                }))
+              }
+            >
+              <option value="all">{t("monitor.filter.allSeverities")}</option>
+              <option value="warning">{t("monitor.severity.warning")}</option>
+              <option value="critical">{t("monitor.severity.critical")}</option>
+            </select>
+          </label>
+          <label className="field">
             <span>{t("monitor.filter.kind")}</span>
             <select
               value={filters.kind}
@@ -201,6 +230,48 @@ export function MonitorAlertsPage() {
           </label>
         </div>
         <div className="monitor-alert-filter-result">{t("monitor.filter.result", { n: filteredAlerts.length })}</div>
+      </Card>
+
+      <Card
+        title={t("monitor.card.trend")}
+        className="monitor-alert-trend-card"
+        action={<span className="muted monitor-alert-trend-range">{t("monitor.trend.range")}</span>}
+      >
+        {!hasTrendData ? (
+          <div className="monitor-alert-trend-empty">{t("monitor.trend.empty")}</div>
+        ) : (
+          <>
+            <div className="monitor-alert-trend-legend">
+              <span><i className="warning" />{t("monitor.severity.warning")}</span>
+              <span><i className="critical" />{t("monitor.severity.critical")}</span>
+            </div>
+            <div className="monitor-alert-trend" role="img" aria-label={t("monitor.card.trend")}>
+              {trend.map((point) => {
+                const day = new Date(point.dayStart);
+                const label = day.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+                return (
+                  <div className="monitor-alert-trend-column" key={point.dayStart}>
+                    <div className="monitor-alert-trend-bars">
+                      <div
+                        className="monitor-alert-trend-bar warning"
+                        title={`${label} · ${t("monitor.severity.warning")} ${point.warning}`}
+                      >
+                        <span style={{ height: `${(point.warning / trendMax) * 100}%` }} />
+                      </div>
+                      <div
+                        className="monitor-alert-trend-bar critical"
+                        title={`${label} · ${t("monitor.severity.critical")} ${point.critical}`}
+                      >
+                        <span style={{ height: `${(point.critical / trendMax) * 100}%` }} />
+                      </div>
+                    </div>
+                    <span className="monitor-alert-trend-label">{label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </Card>
 
       <Card
@@ -307,7 +378,7 @@ function SummaryCard({
   icon: ReactNode;
   label: string;
   value: number;
-  tone?: MonitorAlertKind;
+  tone?: MonitorAlertKind | "warning" | "critical";
 }) {
   return (
     <Card className={`monitor-alert-summary-card ${tone ?? ""}`}>

@@ -14,7 +14,23 @@ export type MonitorAlertTimeRange = "24h" | "7d" | "all";
 export interface MonitorAlertFilter {
   deviceId: string;
   kind: MonitorAlertKind | "all";
+  severity?: MonitorAlertSeverity | "all";
   timeRange: MonitorAlertTimeRange;
+}
+
+export interface MonitorAlertSummary {
+  total: number;
+  cpu: number;
+  memory: number;
+  both: number;
+  warning: number;
+  critical: number;
+}
+
+export interface MonitorAlertTrendPoint {
+  dayStart: number;
+  warning: number;
+  critical: number;
 }
 
 export interface ResourceAlertTracker {
@@ -156,6 +172,43 @@ export function clearMonitorAlertsBefore(
   return alerts.filter((alert) => alert.createdAt >= cutoff);
 }
 
+export function summarizeMonitorAlerts(alerts: MonitorAlert[]): MonitorAlertSummary {
+  return alerts.reduce<MonitorAlertSummary>(
+    (summary, alert) => {
+      summary.total += 1;
+      summary[alert.kind] += 1;
+      summary[alert.severity ?? "warning"] += 1;
+      return summary;
+    },
+    { total: 0, cpu: 0, memory: 0, both: 0, warning: 0, critical: 0 },
+  );
+}
+
+export function buildMonitorAlertTrend(
+  alerts: MonitorAlert[],
+  now: number,
+  days = 7,
+): MonitorAlertTrendPoint[] {
+  const bucketCount = Number.isFinite(days) ? Math.max(1, Math.round(days)) : 7;
+  const anchor = new Date(Number.isFinite(now) ? now : Date.now());
+  anchor.setHours(0, 0, 0, 0);
+
+  return Array.from({ length: bucketCount }, (_, index) => {
+    const dayStart = new Date(anchor);
+    dayStart.setDate(anchor.getDate() - (bucketCount - 1 - index));
+    const nextDay = new Date(dayStart);
+    nextDay.setDate(dayStart.getDate() + 1);
+    const bucket = alerts.filter(
+      (alert) => alert.createdAt >= dayStart.getTime() && alert.createdAt < nextDay.getTime(),
+    );
+    return {
+      dayStart: dayStart.getTime(),
+      warning: bucket.filter((alert) => (alert.severity ?? "warning") === "warning").length,
+      critical: bucket.filter((alert) => alert.severity === "critical").length,
+    };
+  });
+}
+
 function csvField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
@@ -200,6 +253,12 @@ export function filterMonitorAlerts(
   return alerts
     .filter((alert) => filter.deviceId === "all" || alert.deviceId === filter.deviceId)
     .filter((alert) => filter.kind === "all" || alert.kind === filter.kind)
+    .filter(
+      (alert) =>
+        !filter.severity ||
+        filter.severity === "all" ||
+        (alert.severity ?? "warning") === filter.severity,
+    )
     .filter((alert) => cutoff === null || alert.createdAt >= cutoff)
     .sort((a, b) => b.createdAt - a.createdAt);
 }
