@@ -49,3 +49,14 @@ export function formatShellOutput(stdout: string, stderr: string, exitCode?: num
   if (exitCode !== undefined) lines.push(`[exit ${exitCode}]`);
   return lines.join("\n");
 }
+
+export type ScrcpyActionPhase = "start" | "stop" | "restart";
+export type ScrcpyUiState = "running" | "stopped" | "error";
+
+export function scrcpyStateFromResult(
+  result: ShellResultLike,
+  phase: ScrcpyActionPhase,
+): ScrcpyUiState {
+  if (!result.success) return "error";
+  return phase === "stop" ? "stopped" : "running";
+}

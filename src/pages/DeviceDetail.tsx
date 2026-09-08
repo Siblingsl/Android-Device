@@ -19,7 +19,7 @@ import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
-import { formatShellOutput, runDeviceAction } from "../lib/deviceActions";
+import { runDeviceAction, scrcpyStateFromResult } from "../lib/deviceActions";
 import {
   canRefreshPreview,
   emptyPreview,
@@ -31,6 +31,7 @@ import {
 import { shortcutForScreenKey } from "../lib/deviceInput";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
+import { DeviceShell } from "../components/device/DeviceShell";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -982,44 +983,15 @@ function Control({
   disabled?: boolean;
 }) {
   const { t } = useI18n();
-  const [shellCmd, setShellCmd] = useState("");
-  const [shellOut, setShellOut] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
-  const [copiedOut, setCopiedOut] = useState(false);
-  const [history, setHistory] = useState<string[]>(() => {
-    try {
-      const raw = sessionStorage.getItem("rdc.shell.history");
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as unknown;
-      return Array.isArray(parsed) && parsed.every((x) => typeof x === "string") ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-  const [favorites, setFavorites] = useState<string[]>(() => {
-    const fallback = [
-      "getprop ro.build.version.release",
-      "wm size",
-      "pm list packages -3",
-      "dumpsys activity activities | head -30",
-    ];
-    try {
-      const raw = localStorage.getItem("rdc.shell.favorites");
-      if (!raw) return fallback;
-      const parsed = JSON.parse(raw) as unknown;
-      return Array.isArray(parsed) && parsed.every((x) => typeof x === "string") && parsed.length
-        ? parsed
-        : fallback;
-    } catch {
-      return fallback;
-    }
-  });
+  const [shellDiagnostic, setShellDiagnostic] = useState<{ id: number; message: string } | null>(null);
   const [previewState, setPreviewState] = useState<PreviewState>(() => emptyPreview());
   const [previewFlash, setPreviewFlash] = useState(false);
   const [livePreview, setLivePreview] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [hideChrome, setHideChrome] = useState(false);
   const [scrcpyLabel, setScrcpyLabel] = useState("stopped");
+  const [scrcpyBusy, setScrcpyBusy] = useState<"start" | "stop" | "restart" | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const swipedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -1028,26 +1000,11 @@ function Control({
   const livePreviewRef = useRef(true);
   const refreshTimer = useRef(0);
   const previewRequesting = useRef(false);
+  const diagnosticId = useRef(0);
   const chromeTimer = useRef(0);
   const { w: screenW, h: screenH } = parseResolution(resolution);
   previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("rdc.shell.favorites", JSON.stringify(favorites));
-    } catch {
-      /* ignore */
-    }
-  }, [favorites]);
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem("rdc.shell.history", JSON.stringify(history));
-    } catch {
-      /* ignore */
-    }
-  }, [history]);
 
   useEffect(
     () => () => {
@@ -1102,7 +1059,7 @@ function Control({
   const appendDiagnostic = (message: string) => {
     const detail = message.trim();
     if (!detail) return;
-    setShellOut((prev) => `${prev}\n[control]\n${detail}`.trim());
+    setShellDiagnostic({ id: ++diagnosticId.current, message: detail });
   };
 
   const requestPreview = async (announce: boolean) => {
@@ -1234,31 +1191,6 @@ function Control({
     }
   };
 
-  const runShell = async (cmd?: string) => {
-    const c = (cmd ?? shellCmd).trim();
-    if (!c || actionBusy) return;
-    setActionBusy(true);
-    setStatusText(t("detail.control.runningShell"));
-    try {
-      const r = await DeviceService.shell(serial, c);
-      const output = formatShellOutput(r.stdout, r.stderr, r.exitCode) || "(empty)";
-      setShellOut(output);
-      const failure = r.success ? null : (r.stderr || r.stdout || t("detail.control.shellFailed"));
-      if (failure) {
-        setStatusText(failure.trim() || t("detail.control.shellFailed"));
-        return;
-      }
-      setHistory((h) => [c, ...h.filter((x) => x !== c)].slice(0, 30));
-      setStatusText(t("detail.status.ready"));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setShellOut(formatShellOutput("", message));
-      setStatusText(message || t("detail.control.shellFailed"));
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
   const takeShot = () => {
     void requestPreview(true);
   };
@@ -1316,53 +1248,100 @@ function Control({
   };
 
   const startScrcpy = async () => {
+    if (disabled || scrcpyBusy) return;
+    setScrcpyBusy("start");
     setStatusText(t("detail.control.startingScrcpy"));
-    // Ensure network devices are connected first
-    if (serial.includes(":")) {
-      const c = await DeviceService.connect(serial);
-      if (!c.success && c.stderr) {
-        setScrcpyLabel("stopped");
-        setStatusText(c.stderr);
-        setShellOut((c.stdout || "") + "\n" + (c.stderr || ""));
-        return;
-      }
-    }
-    let extra = "";
     try {
-      const raw = sessionStorage.getItem(`rdc.settings.draft.${serial}`);
-      extra = raw ? String((JSON.parse(raw) as { scrcpyArgs?: string }).scrcpyArgs || "") : "";
-    } catch {
-      extra = "";
-    }
-    const sizeHit = extra.match(/--max-size[=\s]+(\d+)/);
-    const rateHit = extra.match(/--video-bit-rate[=\s]+(\d+)/);
-    const maxSize = sizeHit ? Number(sizeHit[1]) : 1080;
-    const bitRate = rateHit ? Number(rateHit[1]) : 8;
-    const r = await DeviceService.scrcpyStart(serial, maxSize || 1080, bitRate || 8, extra);
-    setScrcpyLabel(r.success ? "running" : "stopped");
-    if (r.success) {
-      setStatusText(t("detail.control.scrcpyStarted"));
-    } else {
-      setStatusText(r.stderr || r.stdout || t("detail.control.scrcpyStartFailed"));
-      setShellOut((prev) => `${prev}\n[scrcpy]\n${r.stderr || r.stdout || "failed"}`.trim());
+      // Ensure network devices are connected first
+      if (serial.includes(":")) {
+        const c = await DeviceService.connect(serial);
+        if (!c.success) {
+          const reason = c.stderr || c.stdout || t("detail.control.scrcpyStartFailed");
+          setScrcpyLabel("error");
+          setStatusText(reason);
+          appendDiagnostic(`[scrcpy]\n${c.stdout || ""}\n${c.stderr || reason}`);
+          return;
+        }
+      }
+      let extra = "";
+      try {
+        const raw = sessionStorage.getItem(`rdc.settings.draft.${serial}`);
+        extra = raw ? String((JSON.parse(raw) as { scrcpyArgs?: string }).scrcpyArgs || "") : "";
+      } catch {
+        extra = "";
+      }
+      const sizeHit = extra.match(/--max-size[=\s]+(\d+)/);
+      const rateHit = extra.match(/--video-bit-rate[=\s]+(\d+)/);
+      const maxSize = sizeHit ? Number(sizeHit[1]) : 1080;
+      const bitRate = rateHit ? Number(rateHit[1]) : 8;
+      const r = await DeviceService.scrcpyStart(serial, maxSize || 1080, bitRate || 8, extra);
+      const state = scrcpyStateFromResult(r, "start");
+      setScrcpyLabel(state);
+      if (state === "running") {
+        setStatusText(t("detail.control.scrcpyStarted"));
+        void syncScrcpy();
+      } else {
+        const reason = r.stderr || r.stdout || t("detail.control.scrcpyStartFailed");
+        setStatusText(reason);
+        appendDiagnostic(`[scrcpy]\n${reason}`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setScrcpyLabel("error");
+      setStatusText(reason || t("detail.control.scrcpyStartFailed"));
+      appendDiagnostic(`[scrcpy]\n${reason || t("detail.control.scrcpyStartFailed")}`);
+    } finally {
+      setScrcpyBusy(null);
     }
   };
 
   const stopScrcpy = async () => {
-    await DeviceService.scrcpyStop(serial);
-    setScrcpyLabel("stopped");
-    setStatusText(t("detail.control.scrcpyStopped"));
+    if (scrcpyBusy) return;
+    setScrcpyBusy("stop");
+    try {
+      const r = await DeviceService.scrcpyStop(serial);
+      const state = scrcpyStateFromResult(r, "stop");
+      setScrcpyLabel(state);
+      if (state === "stopped") {
+        setStatusText(t("detail.control.scrcpyStopped"));
+      } else {
+        const reason = r.stderr || r.stdout || t("detail.control.scrcpyStopFailed");
+        setStatusText(reason);
+        appendDiagnostic(`[scrcpy stop]\n${reason}`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setScrcpyLabel("error");
+      setStatusText(reason || t("detail.control.scrcpyStopFailed"));
+      appendDiagnostic(`[scrcpy stop]\n${reason || t("detail.control.scrcpyStopFailed")}`);
+    } finally {
+      setScrcpyBusy(null);
+    }
   };
 
   const restartScrcpy = async () => {
+    if (disabled || scrcpyBusy) return;
+    setScrcpyBusy("restart");
     setStatusText(t("detail.control.reconnectingScrcpy"));
-    const r = await DeviceService.scrcpyRestart(serial);
-    setScrcpyLabel(r.success ? "running" : "stopped");
-    if (r.success) {
-      setStatusText(t("detail.control.scrcpyReconnected"));
-    } else {
-      setStatusText(r.stderr || r.stdout || t("detail.control.scrcpyReconnectFailed"));
-      setShellOut((prev) => `${prev}\n[scrcpy restart]\n${r.stderr || r.stdout || "failed"}`.trim());
+    try {
+      const r = await DeviceService.scrcpyRestart(serial);
+      const state = scrcpyStateFromResult(r, "restart");
+      setScrcpyLabel(state);
+      if (state === "running") {
+        setStatusText(t("detail.control.scrcpyReconnected"));
+        void syncScrcpy();
+      } else {
+        const reason = r.stderr || r.stdout || t("detail.control.scrcpyReconnectFailed");
+        setStatusText(reason);
+        appendDiagnostic(`[scrcpy restart]\n${reason}`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setScrcpyLabel("error");
+      setStatusText(reason || t("detail.control.scrcpyReconnectFailed"));
+      appendDiagnostic(`[scrcpy restart]\n${reason || t("detail.control.scrcpyReconnectFailed")}`);
+    } finally {
+      setScrcpyBusy(null);
     }
   };
 
@@ -1372,6 +1351,7 @@ function Control({
         serial={serial}
         disabled={disabled}
         scrcpyStatus={scrcpyLabel}
+        scrcpyBusy={scrcpyBusy}
         preview={previewState}
         previewFlash={previewFlash}
         livePreview={livePreview}
@@ -1447,101 +1427,12 @@ function Control({
           }}
         />
 
-        <Card title="ADB Shell">
-          <div className="field">
-            <label>{t("detail.control.command")}</label>
-            <div className="row">
-              <input
-                style={{ flex: 1 }}
-                className="mono"
-                value={shellCmd}
-                onChange={(e) => setShellCmd(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && runShell()}
-                placeholder="shell command..."
-              />
-              <Button variant="primary" disabled={disabled} onClick={() => runShell()}>
-                {t("detail.control.run")}
-              </Button>
-            </div>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-              {t("detail.control.favorites")}
-            </div>
-            <div className="row" style={{ flexWrap: "wrap" }}>
-              {favorites.map((f) => (
-                <span key={f} className="row" style={{ gap: 0 }}>
-                  <Button size="sm" variant="ghost" title={f} onClick={() => { setShellCmd(f); void runShell(f); }}>
-                    {f.length > 28 ? f.slice(0, 28) + "…" : f}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    title={t("detail.control.removeFavorite")}
-                    onClick={() => setFavorites((x) => x.filter((c) => c !== f))}
-                  >
-                    ×
-                  </Button>
-                </span>
-              ))}
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!shellCmd.trim()}
-                onClick={() => {
-                  const cmd = shellCmd.trim();
-                  setFavorites((x) =>
-                    x.includes(cmd) ? x.filter((c) => c !== cmd) : [cmd, ...x].slice(0, 12),
-                  );
-                }}
-              >
-                {favorites.includes(shellCmd.trim()) ? t("detail.control.unfavorite") : t("detail.control.favorite")}
-              </Button>
-            </div>
-          </div>
-          {history.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div className="row-between" style={{ marginBottom: 6 }}>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  {t("detail.control.history")}
-                </div>
-                <Button size="sm" variant="ghost" onClick={() => setHistory([])}>
-                  {t("detail.control.clearHistory")}
-                </Button>
-              </div>
-              <div className="stack">
-                {history.slice(0, 5).map((h) => (
-                  <button key={h} className="mono muted" style={{ textAlign: "left" }} onClick={() => setShellCmd(h)}>
-                    {h}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="shell-output" style={{ marginTop: 12 }}>
-            {shellOut || t("detail.control.outputPlaceholder")}
-          </div>
-          <div className="row" style={{ marginTop: 8 }}>
-            <Button
-              size="sm"
-              disabled={!shellOut}
-              onClick={() => {
-                void navigator.clipboard.writeText(shellOut).then(
-                  () => {
-                    setCopiedOut(true);
-                    window.setTimeout(() => setCopiedOut(false), 1500);
-                  },
-                  () => void alert(t("common.panel.copyFailed")),
-                );
-              }}
-            >
-              {copiedOut ? t("detail.control.copiedOutput") : t("detail.control.copyOutput")}
-            </Button>
-            <Button size="sm" variant="ghost" disabled={!shellOut} onClick={() => setShellOut("")}>
-              {t("detail.control.clearOutput")}
-            </Button>
-          </div>
-        </Card>
+        <DeviceShell
+          serial={serial}
+          disabled={disabled}
+          diagnostic={shellDiagnostic}
+          onStatus={setStatusText}
+        />
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import {
   normalizeActionError,
   formatShellOutput,
   runDeviceAction,
+  scrcpyStateFromResult,
   shellResultFailure,
 } from "./deviceActions";
 
@@ -54,5 +55,14 @@ describe("shellResultFailure", () => {
     expect(formatShellOutput("stdout text", "stderr text", 7)).toBe(
       "stdout text\nstderr text\n[exit 7]",
     );
+  });
+
+  it("marks a failed scrcpy start as a retryable error", () => {
+    expect(
+      scrcpyStateFromResult(
+        { success: false, stdout: "", stderr: "encoder unavailable", exitCode: 1 },
+        "start",
+      ),
+    ).toBe("error");
   });
 });
