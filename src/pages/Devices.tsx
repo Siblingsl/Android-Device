@@ -831,7 +831,10 @@ export function Devices() {
                     e.target.value = "";
                     if (v === "disconnect") {
                       if (!canDisconnect) return;
-                      void run(d.id, () => DeviceService.disconnect(d.serial), t("devices.status.disconnect", { name: d.name }));
+                      void (async () => {
+                        if (!(await askConfirm(t("devices.confirmDisconnectOne", { name: d.name })))) return;
+                        await run(d.id, () => DeviceService.disconnect(d.serial), t("devices.status.disconnect", { name: d.name }));
+                      })();
                     }
                     if (v === "restart") {
                       if (!canRestart) return;

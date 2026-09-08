@@ -11,6 +11,7 @@ vi.mock("../services/deviceService", () => ({
   DeviceService: {
     listDevices: vi.fn(),
     connect: vi.fn(),
+    disconnect: vi.fn(),
     restart: vi.fn(),
     stop: vi.fn(),
     refreshDevices: vi.fn(),
@@ -72,6 +73,7 @@ describe("Devices batch controls", () => {
     sessionStorage.clear();
     vi.mocked(DeviceService.listDevices).mockReset();
     vi.mocked(DeviceService.connect).mockReset();
+    vi.mocked(DeviceService.disconnect).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
     vi.mocked(askConfirm).mockReset();
@@ -79,6 +81,7 @@ describe("Devices batch controls", () => {
     storeState.setStatusText.mockReset();
     vi.mocked(DeviceService.listDevices).mockResolvedValue([device("one"), device("two")]);
     vi.mocked(DeviceService.connect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.disconnect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(askConfirm).mockResolvedValue(true);
@@ -219,5 +222,44 @@ describe("Devices batch controls", () => {
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
     await waitFor(() => expect(DeviceService.restart).toHaveBeenCalledWith("one"));
+  });
+
+  it("does not disconnect one device when the confirmation is cancelled", async () => {
+    vi.mocked(askConfirm).mockResolvedValue(false);
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "disconnect" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("断开设备 设备 one？"));
+    expect(DeviceService.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("disconnects one device only after the confirmation is accepted", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "disconnect" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("断开设备 设备 one？"));
+    await waitFor(() => expect(DeviceService.disconnect).toHaveBeenCalledWith("one-serial"));
   });
 });
