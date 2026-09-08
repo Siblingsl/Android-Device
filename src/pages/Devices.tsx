@@ -39,6 +39,7 @@ export function Devices() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>(() => {
     try {
       const raw = sessionStorage.getItem(PICKED_KEY);
@@ -168,6 +169,21 @@ export function Devices() {
       void alert(err);
     } finally {
       setBusy(null);
+    }
+  };
+
+  const confirmAndRun = async (
+    id: string,
+    confirmMessage: string,
+    action: () => Promise<unknown>,
+    statusMessage: string,
+  ) => {
+    setPendingConfirmation(id);
+    try {
+      if (!(await askConfirm(confirmMessage))) return;
+      await run(id, action, statusMessage);
+    } finally {
+      setPendingConfirmation(null);
     }
   };
 
@@ -660,7 +676,8 @@ export function Devices() {
             const offline = !online;
             const scrcpyOn = d.scrcpyStatus === "running";
             const hasContainer = Boolean(d.containerId) && d.dockerStatus !== "n/a";
-            const cardBusy = busy === "batch" || busy === d.id || busy === `${d.id}-screen`;
+            const cardActionBusy = busy === d.id || busy === `${d.id}-screen` || pendingConfirmation === d.id;
+            const cardBusy = busy === "batch" || cardActionBusy;
             // 离线：ADB 连接 + 重启/停止；在线：投屏/关闭投屏 + 断开（重启/停止需先断开）
             const canConnect = offline && Boolean(d.serial) && !cardBusy;
             const canScreen = online && !cardBusy;
@@ -750,7 +767,12 @@ export function Devices() {
                 )}
               </div>
 
-              <div className="row" style={{ marginTop: 14, flexWrap: "wrap" }} onClick={(e) => e.stopPropagation()}>
+              <div
+                className="row"
+                style={{ marginTop: 14, flexWrap: "wrap" }}
+                aria-busy={cardActionBusy}
+                onClick={(e) => e.stopPropagation()}
+              >
                 <Button
                   size="sm"
                   variant={online && !scrcpyOn ? "primary" : "secondary"}
@@ -822,6 +844,11 @@ export function Devices() {
                 >
                   {t("devices.card.detail")}
                 </Button>
+                {cardActionBusy ? (
+                  <span className="muted" role="status" aria-live="polite" style={{ fontSize: 12 }}>
+                    {t("devices.card.operationInProgress")}
+                  </span>
+                ) : null}
                 <select
                   disabled={cardBusy}
                   defaultValue=""
@@ -831,24 +858,30 @@ export function Devices() {
                     e.target.value = "";
                     if (v === "disconnect") {
                       if (!canDisconnect) return;
-                      void (async () => {
-                        if (!(await askConfirm(t("devices.confirmDisconnectOne", { name: d.name })))) return;
-                        await run(d.id, () => DeviceService.disconnect(d.serial), t("devices.status.disconnect", { name: d.name }));
-                      })();
+                      void confirmAndRun(
+                        d.id,
+                        t("devices.confirmDisconnectOne", { name: d.name }),
+                        () => DeviceService.disconnect(d.serial),
+                        t("devices.status.disconnect", { name: d.name }),
+                      );
                     }
                     if (v === "restart") {
                       if (!canRestart) return;
-                      void (async () => {
-                        if (!(await askConfirm(t("devices.confirmRestartOne", { name: d.name })))) return;
-                        await run(d.id, () => DeviceService.restart(d.id), t("devices.status.restart", { name: d.name }));
-                      })();
+                      void confirmAndRun(
+                        d.id,
+                        t("devices.confirmRestartOne", { name: d.name }),
+                        () => DeviceService.restart(d.id),
+                        t("devices.status.restart", { name: d.name }),
+                      );
                     }
                     if (v === "stop") {
                       if (!canStop) return;
-                      void (async () => {
-                        if (!(await askConfirm(t("devices.confirmStopOne", { name: d.name })))) return;
-                        await run(d.id, () => DeviceService.stop(d.id), t("devices.status.stop", { name: d.name }));
-                      })();
+                      void confirmAndRun(
+                        d.id,
+                        t("devices.confirmStopOne", { name: d.name }),
+                        () => DeviceService.stop(d.id),
+                        t("devices.status.stop", { name: d.name }),
+                      );
                     }
                     if (v === "copy" && d.serial) {
                       void copyText(d.serial).then(

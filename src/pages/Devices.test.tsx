@@ -268,6 +268,59 @@ describe("Devices batch controls", () => {
     await waitFor(() => expect(DeviceService.disconnect).toHaveBeenCalledWith("one-serial"));
   });
 
+  it("locks one device card while waiting for an action confirmation", async () => {
+    const confirmation = deferred<boolean>();
+    vi.mocked(askConfirm).mockReturnValueOnce(confirmation.promise);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "restart" } });
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
+    expect((cardActions[0] as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.getByText("操作进行中…")).toBeTruthy();
+    expect(DeviceService.restart).not.toHaveBeenCalled();
+
+    await act(async () => {
+      confirmation.resolve(false);
+      await confirmation.promise;
+    });
+
+    await waitFor(() => expect((cardActions[0] as HTMLSelectElement).disabled).toBe(false));
+    expect(screen.queryByText("操作进行中…")).toBeNull();
+  });
+
+  it("keeps one device card locked until the action finishes", async () => {
+    const action = deferred<ShellResult>();
+    vi.mocked(DeviceService.restart).mockReturnValueOnce(action.promise);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "restart" } });
+
+    await waitFor(() => expect(DeviceService.restart).toHaveBeenCalledWith("one"));
+    expect((cardActions[0] as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.getByText("操作进行中…")).toBeTruthy();
+
+    await act(async () => {
+      action.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await action.promise;
+    });
+
+    await waitFor(() => expect((cardActions[0] as HTMLSelectElement).disabled).toBe(false));
+    expect(screen.queryByText("操作进行中…")).toBeNull();
+  });
+
   it("reports a successful single-device serial copy in the status bar", async () => {
     render(
       <MemoryRouter>
