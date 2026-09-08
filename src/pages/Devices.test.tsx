@@ -143,6 +143,32 @@ describe("Devices batch controls", () => {
     expect(screen.queryByText(/未执行/)).toBeNull();
   }, 15_000);
 
+  it("disables the refresh button while the device list is loading", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const refresh = deferred<DeviceInfo[]>();
+    vi.mocked(DeviceService.listDevices).mockReturnValueOnce(refresh.promise);
+    const refreshButton = screen.getByRole("button", { name: "刷新" });
+
+    fireEvent.click(refreshButton);
+
+    await waitFor(() => expect(DeviceService.listDevices).toHaveBeenCalledTimes(2));
+    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+    expect(refreshButton.textContent).toBe("...");
+
+    await act(async () => {
+      refresh.resolve([device("one"), device("two")]);
+      await refresh.promise;
+    });
+
+    await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
+    expect(refreshButton.textContent).toBe("刷新");
+  });
+
   it("shows the backend error when restarting one device fails", async () => {
     const alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);

@@ -322,7 +322,12 @@ export function Devices() {
           <div className="page-title">{t("devices.page.title")}</div>
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
-        <Button variant="secondary" icon={<RefreshCw size={15} />} onClick={() => void load()}>
+        <Button
+          variant="secondary"
+          icon={<RefreshCw size={15} />}
+          loading={loading}
+          onClick={() => void load()}
+        >
           {t("common.refresh")}
         </Button>
       </div>
