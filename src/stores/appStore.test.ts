@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "./appStore";
-import type { MonitorAlert } from "../lib/monitorAlerts";
+import { MONITOR_ALERT_UNDO_WINDOW_MS, type MonitorAlert } from "../lib/monitorAlerts";
 
 const MONITOR_ALERT_STORAGE_KEY = "rdc.monitorAlerts";
 
@@ -13,6 +13,10 @@ const alertFor = (deviceId: string, id: string): MonitorAlert => ({
 });
 
 describe("app monitor alert state", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     const values = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -77,6 +81,35 @@ describe("app monitor alert state", () => {
     ]);
     expect(useAppStore.getState().lastDismissedMonitorAlerts).toBeNull();
     expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(false);
+  });
+
+  it("expires the undo slot after the timed restore window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+
+    useAppStore.getState().dismissMonitorAlerts(["alert-1000"]);
+
+    expect(useAppStore.getState().monitorAlertUndoExpiresAt).toBe(
+      100_000 + MONITOR_ALERT_UNDO_WINDOW_MS,
+    );
+
+    vi.setSystemTime(100_000 + MONITOR_ALERT_UNDO_WINDOW_MS);
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(false);
+    expect(useAppStore.getState().lastDismissedMonitorAlerts).toBeNull();
+    expect(useAppStore.getState().monitorAlertUndoExpiresAt).toBeNull();
+  });
+
+  it("keeps only the newest batch in the undo slot", () => {
+    vi.useFakeTimers();
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+    useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-2000"));
+
+    useAppStore.getState().dismissMonitorAlerts(["alert-1000"]);
+    useAppStore.getState().dismissMonitorAlerts(["alert-2000"]);
+
+    expect(useAppStore.getState().restoreDismissedMonitorAlerts()).toBe(true);
+    expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual(["alert-2000"]);
   });
 
   it("invalidates undo after clearing monitor history", () => {

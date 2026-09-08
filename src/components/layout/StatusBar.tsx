@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../stores/appStore";
 import { DeviceService } from "../../services/deviceService";
@@ -8,7 +8,9 @@ export function StatusBar() {
   const status = useAppStore((s) => s.status);
   const statusText = useAppStore((s) => s.statusText);
   const lastDismissedMonitorAlerts = useAppStore((s) => s.lastDismissedMonitorAlerts);
+  const monitorAlertUndoExpiresAt = useAppStore((s) => s.monitorAlertUndoExpiresAt);
   const restoreDismissedMonitorAlerts = useAppStore((s) => s.restoreDismissedMonitorAlerts);
+  const expireDismissedMonitorAlertUndo = useAppStore((s) => s.expireDismissedMonitorAlertUndo);
   const setStatusText = useAppStore((s) => s.setStatusText);
   const devices = useAppStore((s) => s.devices);
   const deviceCount = devices.length;
@@ -16,7 +18,27 @@ export function StatusBar() {
   const online = devices.filter((d) => d.online && d.adbStatus === "device").length;
   const { t } = useI18n();
   const [startingDocker, setStartingDocker] = useState(false);
+  const [undoNow, setUndoNow] = useState(() => Date.now());
   const logHint = /自动启动|失败|超时|错误|failed|timeout/i.test(statusText);
+  const undoRemainingSeconds =
+    monitorAlertUndoExpiresAt === null
+      ? 0
+      : Math.ceil(Math.max(0, monitorAlertUndoExpiresAt - undoNow) / 1_000);
+  const canUndo = Boolean(lastDismissedMonitorAlerts?.length) && undoRemainingSeconds > 0;
+
+  useEffect(() => {
+    if (monitorAlertUndoExpiresAt === null) return;
+    const update = () => setUndoNow(Date.now());
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [monitorAlertUndoExpiresAt]);
+
+  useEffect(() => {
+    if (monitorAlertUndoExpiresAt !== null && undoNow >= monitorAlertUndoExpiresAt) {
+      expireDismissedMonitorAlertUndo();
+    }
+  }, [expireDismissedMonitorAlertUndo, monitorAlertUndoExpiresAt, undoNow]);
 
   const goLogs = (source: string) => {
     try {
@@ -94,18 +116,18 @@ export function StatusBar() {
         >
           {statusText}
         </button>
-        {lastDismissedMonitorAlerts?.length ? (
+        {canUndo ? (
           <button
             type="button"
             className="statusbar-undo"
             onClick={() => {
-              const count = lastDismissedMonitorAlerts.length;
+              const count = lastDismissedMonitorAlerts?.length ?? 0;
               if (restoreDismissedMonitorAlerts()) {
                 setStatusText(t("monitor.batchDismiss.undoDone", { n: count }));
               }
             }}
           >
-            {t("monitor.batchDismiss.undo")}
+            {t("monitor.batchDismiss.undo", { seconds: undoRemainingSeconds })}
           </button>
         ) : null}
       </div>

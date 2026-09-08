@@ -6,6 +6,7 @@ import {
   clearMonitorAlertsBefore,
   hasRecentMonitorAlert,
   MAX_MONITOR_ALERT_HISTORY,
+  MONITOR_ALERT_UNDO_WINDOW_MS,
   MONITOR_ALERT_STORAGE_KEY,
   parseStoredMonitorAlerts,
   removeMonitorAlertsByIds,
@@ -21,6 +22,7 @@ interface AppState {
   devices: DeviceInfo[];
   monitorAlerts: MonitorAlert[];
   lastDismissedMonitorAlerts: MonitorAlert[] | null;
+  monitorAlertUndoExpiresAt: number | null;
   settings: AppSettings | null;
   loading: boolean;
   statusText: string;
@@ -33,6 +35,7 @@ interface AppState {
   dismissMonitorAlert: (id: string) => void;
   dismissMonitorAlerts: (ids: string[]) => void;
   restoreDismissedMonitorAlerts: () => boolean;
+  expireDismissedMonitorAlertUndo: () => void;
   clearMonitorAlerts: (deviceId?: string) => void;
   clearMonitorAlertsBefore: (cutoff: number) => void;
   refreshStatus: () => Promise<void>;
@@ -104,6 +107,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   devices: [],
   monitorAlerts: readMonitorAlerts(),
   lastDismissedMonitorAlerts: null,
+  monitorAlertUndoExpiresAt: null,
   settings: null,
   loading: false,
   statusText: tStatic("common.status.ready"),
@@ -140,14 +144,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         MAX_MONITOR_ALERT_HISTORY,
       );
       persistMonitorAlerts(monitorAlerts);
-      return { monitorAlerts, lastDismissedMonitorAlerts: null };
+      return {
+        monitorAlerts,
+        lastDismissedMonitorAlerts: null,
+        monitorAlertUndoExpiresAt: null,
+      };
     }),
   dismissMonitorAlert: (id) =>
     set((state) => {
       const monitorAlerts = state.monitorAlerts.filter((alert) => alert.id !== id);
       if (monitorAlerts.length === state.monitorAlerts.length) return state;
       persistMonitorAlerts(monitorAlerts);
-      return { monitorAlerts, lastDismissedMonitorAlerts: null };
+      return {
+        monitorAlerts,
+        lastDismissedMonitorAlerts: null,
+        monitorAlertUndoExpiresAt: null,
+      };
     }),
   dismissMonitorAlerts: (ids) =>
     set((state) => {
@@ -156,12 +168,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (dismissed.length === 0) return state;
       const monitorAlerts = removeMonitorAlertsByIds(state.monitorAlerts, ids);
       persistMonitorAlerts(monitorAlerts);
-      return { monitorAlerts, lastDismissedMonitorAlerts: dismissed };
+      return {
+        monitorAlerts,
+        lastDismissedMonitorAlerts: dismissed,
+        monitorAlertUndoExpiresAt: Date.now() + MONITOR_ALERT_UNDO_WINDOW_MS,
+      };
     }),
   restoreDismissedMonitorAlerts: () => {
     let restored = false;
     set((state) => {
       if (!state.lastDismissedMonitorAlerts?.length) return state;
+      if (
+        state.monitorAlertUndoExpiresAt === null ||
+        Date.now() >= state.monitorAlertUndoExpiresAt
+      ) {
+        return { lastDismissedMonitorAlerts: null, monitorAlertUndoExpiresAt: null };
+      }
       const monitorAlerts = restoreMonitorAlerts(
         state.monitorAlerts,
         state.lastDismissedMonitorAlerts,
@@ -169,23 +191,41 @@ export const useAppStore = create<AppState>((set, get) => ({
       );
       persistMonitorAlerts(monitorAlerts);
       restored = true;
-      return { monitorAlerts, lastDismissedMonitorAlerts: null };
+      return {
+        monitorAlerts,
+        lastDismissedMonitorAlerts: null,
+        monitorAlertUndoExpiresAt: null,
+      };
     });
     return restored;
   },
+  expireDismissedMonitorAlertUndo: () =>
+    set((state) =>
+      state.lastDismissedMonitorAlerts || state.monitorAlertUndoExpiresAt !== null
+        ? { lastDismissedMonitorAlerts: null, monitorAlertUndoExpiresAt: null }
+        : state,
+    ),
   clearMonitorAlerts: (deviceId) =>
     set((state) => {
       const monitorAlerts = deviceId
         ? state.monitorAlerts.filter((alert) => alert.deviceId !== deviceId)
         : [];
       persistMonitorAlerts(monitorAlerts);
-      return { monitorAlerts, lastDismissedMonitorAlerts: null };
+      return {
+        monitorAlerts,
+        lastDismissedMonitorAlerts: null,
+        monitorAlertUndoExpiresAt: null,
+      };
     }),
   clearMonitorAlertsBefore: (cutoff) =>
     set((state) => {
       const monitorAlerts = clearMonitorAlertsBefore(state.monitorAlerts, cutoff);
       persistMonitorAlerts(monitorAlerts);
-      return { monitorAlerts, lastDismissedMonitorAlerts: null };
+      return {
+        monitorAlerts,
+        lastDismissedMonitorAlerts: null,
+        monitorAlertUndoExpiresAt: null,
+      };
     }),
 
   refreshStatus: async () => {

@@ -4,6 +4,7 @@ import type { ResourceAlert } from "./monitorPreferences";
 export type { ResourceAlert } from "./monitorPreferences";
 
 export const MONITOR_ALERT_COOLDOWN_MS = 60_000;
+export const MONITOR_ALERT_UNDO_WINDOW_MS = 10_000;
 export const MAX_MONITOR_ALERTS = 8;
 export const MAX_MONITOR_ALERT_HISTORY = 50;
 export const MONITOR_ALERT_STORAGE_KEY = "rdc.monitorAlerts";
