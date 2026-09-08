@@ -7,6 +7,7 @@ import type { DeviceInfo, ShellResult } from "../types";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn() }));
+vi.mock("../lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../services/deviceService", () => ({
   DeviceService: {
     listDevices: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("../stores/appStore", () => ({
 
 const { DeviceService } = await import("../services/deviceService");
 const { askConfirm } = await import("../lib/dialogs");
+const { copyText } = await import("../lib/clipboard");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -77,6 +79,7 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
     vi.mocked(askConfirm).mockReset();
+    vi.mocked(copyText).mockReset();
     storeState.setSelectedDeviceId.mockReset();
     storeState.setStatusText.mockReset();
     vi.mocked(DeviceService.listDevices).mockResolvedValue([device("one"), device("two")]);
@@ -85,10 +88,12 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(askConfirm).mockResolvedValue(true);
+    vi.mocked(copyText).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("stops before the next device and reports the skipped item", async () => {
@@ -261,5 +266,37 @@ describe("Devices batch controls", () => {
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("断开设备 设备 one？"));
     await waitFor(() => expect(DeviceService.disconnect).toHaveBeenCalledWith("one-serial"));
+  });
+
+  it("reports a successful single-device serial copy in the status bar", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "copy" } });
+
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith("one-serial"));
+    expect(storeState.setStatusText).toHaveBeenCalledWith("已复制 one-serial");
+  });
+
+  it("keeps the single-device serial copy failure in the status bar and alert", async () => {
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    vi.mocked(copyText).mockRejectedValueOnce(new Error("clipboard unavailable"));
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox").slice(2);
+    fireEvent.change(cardActions[0], { target: { value: "copy" } });
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("复制失败"));
+    expect(storeState.setStatusText).toHaveBeenCalledWith("复制失败");
   });
 });

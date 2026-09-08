@@ -853,7 +853,11 @@ export function Devices() {
                     if (v === "copy" && d.serial) {
                       void copyText(d.serial).then(
                         () => setStatusText(t("common.panel.copied", { value: d.serial })),
-                        () => void alert(t("common.panel.copyFailed")),
+                        () => {
+                          const error = t("common.panel.copyFailed");
+                          setStatusText(error);
+                          void alert(error);
+                        },
                       );
                     }
                   }}
