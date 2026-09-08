@@ -17,6 +17,7 @@ export interface MonitorAlertFilter {
   severity?: MonitorAlertSeverity | "all";
   timeRange: MonitorAlertTimeRange;
   dayStart?: number;
+  query?: string;
 }
 
 export interface MonitorAlertSummary {
@@ -184,6 +185,13 @@ export function clearMonitorAlertsBefore(
   return alerts.filter((alert) => alert.createdAt >= cutoff);
 }
 
+export function removeMonitorAlertsByIds(alerts: MonitorAlert[], ids: string[]): MonitorAlert[] {
+  const selectedIds = new Set(ids);
+  if (selectedIds.size === 0) return alerts;
+  const next = alerts.filter((alert) => !selectedIds.has(alert.id));
+  return next.length === alerts.length ? alerts : next;
+}
+
 export function summarizeMonitorAlerts(alerts: MonitorAlert[]): MonitorAlertSummary {
   return alerts.reduce<MonitorAlertSummary>(
     (summary, alert) => {
@@ -327,6 +335,7 @@ export function filterMonitorAlerts(
           nextDay.setDate(nextDay.getDate() + 1);
           return nextDay.getTime();
         })();
+  const query = filter.query?.trim().toLocaleLowerCase() ?? "";
   const cutoff =
     exactDayStart !== null
       ? null
@@ -350,6 +359,18 @@ export function filterMonitorAlerts(
         exactDayStart === null ||
         (exactDayEnd !== null && alert.createdAt >= exactDayStart && alert.createdAt < exactDayEnd),
     )
+    .filter((alert) => {
+      if (!query) return true;
+      const severity = alert.severity ?? "warning";
+      return [
+        alert.deviceName,
+        alert.deviceId,
+        alert.kind,
+        severity,
+        severity === "critical" ? "critical alert 严重告警" : "warning alert 普通告警",
+        alert.alertThreshold === undefined ? "" : String(alert.alertThreshold),
+      ].some((value) => value.toLocaleLowerCase().includes(query));
+    })
     .filter((alert) => cutoff === null || alert.createdAt >= cutoff)
     .sort((a, b) => b.createdAt - a.createdAt);
 }

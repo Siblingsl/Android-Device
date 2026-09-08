@@ -52,6 +52,19 @@ describe("app monitor alert state", () => {
     expect(localStorage.getItem(MONITOR_ALERT_STORAGE_KEY)).toBe("[]");
   });
 
+  it("removes selected alerts in one persisted batch", () => {
+    useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
+    useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-2000"));
+    useAppStore.getState().addMonitorAlert(alertFor("device-c", "alert-3000"));
+
+    useAppStore.getState().dismissMonitorAlerts(["alert-1000", "alert-3000"]);
+
+    expect(useAppStore.getState().monitorAlerts.map((alert) => alert.id)).toEqual(["alert-2000"]);
+    expect(JSON.parse(localStorage.getItem(MONITOR_ALERT_STORAGE_KEY) ?? "[]").map((alert: MonitorAlert) => alert.id)).toEqual([
+      "alert-2000",
+    ]);
+  });
+
   it("clears alerts older than a timestamp and persists the retained history", () => {
     useAppStore.getState().addMonitorAlert(alertFor("device-a", "alert-1000"));
     useAppStore.getState().addMonitorAlert(alertFor("device-b", "alert-70000"));

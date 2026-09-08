@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { save } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, BellRing, Clock3, Cpu, Download, MemoryStick, Trash2, X } from "lucide-react";
@@ -30,6 +30,7 @@ export function MonitorAlertsPage() {
   const settings = useAppStore((s) => s.settings);
   const setSelectedDeviceId = useAppStore((s) => s.setSelectedDeviceId);
   const dismissMonitorAlert = useAppStore((s) => s.dismissMonitorAlert);
+  const dismissMonitorAlerts = useAppStore((s) => s.dismissMonitorAlerts);
   const clearMonitorAlerts = useAppStore((s) => s.clearMonitorAlerts);
   const clearMonitorAlertsBefore = useAppStore((s) => s.clearMonitorAlertsBefore);
   const setStatusText = useAppStore((s) => s.setStatusText);
@@ -39,7 +40,9 @@ export function MonitorAlertsPage() {
     kind: "all",
     severity: "all",
     timeRange: "7d",
+    query: "",
   });
+  const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
   const monitorPreferences = normalizeMonitorPreferences(
     settings?.resourceAlertThreshold,
     settings?.deviceRefreshIntervalSecs,
@@ -64,10 +67,26 @@ export function MonitorAlertsPage() {
     typeof filters.dayStart === "number" && Number.isFinite(filters.dayStart)
       ? new Date(filters.dayStart).toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" })
       : "";
+  const visibleAlertIds = useMemo(
+    () => new Set(filteredAlerts.map((alert) => alert.id)),
+    [filteredAlerts],
+  );
+  const selectedVisibleIds = useMemo(
+    () => selectedAlertIds.filter((id) => visibleAlertIds.has(id)),
+    [selectedAlertIds, visibleAlertIds],
+  );
+  const allVisibleSelected = filteredAlerts.length > 0 && selectedVisibleIds.length === filteredAlerts.length;
   const deviceSummaries = useMemo(
     () => summarizeMonitorAlertsByDevice(filteredAlerts, Date.now()),
     [filteredAlerts],
   );
+
+  useEffect(() => {
+    setSelectedAlertIds((current) => {
+      const next = current.filter((id) => visibleAlertIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [visibleAlertIds]);
 
   const openDevice = (deviceId: string) => {
     setSelectedDeviceId(deviceId);
@@ -106,6 +125,35 @@ export function MonitorAlertsPage() {
       const message = error instanceof Error ? error.message : String(error);
       setStatusText(t("monitor.export.failed", { error: message }));
       await alertMsg(t("monitor.export.failed", { error: message }));
+    }
+  };
+
+  const toggleAlertSelection = (id: string) => {
+    setSelectedAlertIds((current) =>
+      current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id],
+    );
+  };
+
+  const toggleVisibleAlertSelection = () => {
+    const visibleIds = filteredAlerts.map((alert) => alert.id);
+    setSelectedAlertIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return [...next];
+    });
+  };
+
+  const dismissSelectedAlerts = async () => {
+    const count = selectedVisibleIds.length;
+    if (count === 0) return;
+    const completed = await runConfirmedMonitorAlertCleanup(
+      () => askConfirm(t("monitor.batchDismiss.confirm", { n: count })),
+      () => dismissMonitorAlerts(selectedVisibleIds),
+    );
+    if (completed) {
+      setSelectedAlertIds([]);
+      setStatusText(t("monitor.batchDismiss.done", { n: count }));
     }
   };
 
@@ -174,6 +222,28 @@ export function MonitorAlertsPage() {
         }
       >
         <div className="monitor-alert-filters">
+          <label className="field monitor-alert-search-field">
+            <span>{t("monitor.filter.search")}</span>
+            <div className="monitor-alert-search-control">
+              <input
+                type="search"
+                value={filters.query ?? ""}
+                placeholder={t("monitor.filter.searchPlaceholder")}
+                onChange={(e) => setFilters((current) => ({ ...current, query: e.target.value }))}
+              />
+              {filters.query ? (
+                <button
+                  type="button"
+                  className="monitor-alert-search-clear"
+                  aria-label={t("monitor.filter.clearSearch")}
+                  title={t("monitor.filter.clearSearch")}
+                  onClick={() => setFilters((current) => ({ ...current, query: "" }))}
+                >
+                  <X size={14} />
+                </button>
+              ) : null}
+            </div>
+          </label>
           <label className="field">
             <span>{t("monitor.filter.device")}</span>
             <select
@@ -433,45 +503,79 @@ export function MonitorAlertsPage() {
             {alerts.length === 0 ? t("monitor.empty.noAlerts") : t("monitor.empty.noMatches")}
           </div>
         ) : (
-          <div className="monitor-alert-history-list">
-            {filteredAlerts.map((alert) => (
-              <div className="monitor-alert-history-item" key={alert.id}>
-                <div className={`monitor-alert-kind ${alert.kind}`}>
-                  {kindIcon(alert.kind)}
-                </div>
-                <div className="monitor-alert-history-content">
-                  <div className="monitor-alert-history-device">
-                    {alert.deviceName || t("monitor.deviceUnknown")}
-                  </div>
-                  <div className="monitor-alert-history-message">
-                    <span className={`monitor-severity-badge ${alert.severity ?? "warning"}`}>
-                      {t(`monitor.severity.${alert.severity ?? "warning"}`)}
-                    </span>{" "}
-                    {t(monitorAlertMessageKey(alert.kind), {
-                      threshold: alert.alertThreshold ?? monitorPreferences.alertThreshold,
-                    })}
-                  </div>
-                  <div className="monitor-alert-history-time">
-                    {t("monitor.at", { time: new Date(alert.createdAt).toLocaleString() })}
-                  </div>
-                </div>
-                <div className="monitor-alert-history-actions">
-                  <Button size="sm" variant="ghost" onClick={() => openDevice(alert.deviceId)}>
-                    {t("monitor.openDevice")}
-                  </Button>
-                  <button
-                    type="button"
-                    className="monitor-alert-dismiss"
-                    aria-label={t("monitor.dismiss")}
-                    title={t("monitor.dismiss")}
-                    onClick={() => dismissMonitorAlert(alert.id)}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
+          <>
+            <div className="monitor-alert-selection-bar">
+              <label className="monitor-alert-select-all">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleVisibleAlertSelection}
+                  aria-label={t("monitor.batchDismiss.selectAll")}
+                />
+                <span>{t("monitor.batchDismiss.selectAll")}</span>
+              </label>
+              <div className="monitor-alert-selection-actions">
+                <span className="muted">{t("monitor.batchDismiss.selected", { n: selectedVisibleIds.length })}</span>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={selectedVisibleIds.length === 0}
+                  onClick={() => void dismissSelectedAlerts()}
+                >
+                  {t("monitor.batchDismiss.action")}
+                </Button>
               </div>
-            ))}
-          </div>
+            </div>
+            <div className="monitor-alert-history-list">
+              {filteredAlerts.map((alert) => (
+                <div className="monitor-alert-history-item" key={alert.id}>
+                  <label className="monitor-alert-select-control">
+                    <input
+                      type="checkbox"
+                      checked={selectedAlertIds.includes(alert.id)}
+                      onChange={() => toggleAlertSelection(alert.id)}
+                      aria-label={t("monitor.batchDismiss.selectOne", {
+                        device: alert.deviceName || t("monitor.deviceUnknown"),
+                      })}
+                    />
+                  </label>
+                  <div className={`monitor-alert-kind ${alert.kind}`}>
+                    {kindIcon(alert.kind)}
+                  </div>
+                  <div className="monitor-alert-history-content">
+                    <div className="monitor-alert-history-device">
+                      {alert.deviceName || t("monitor.deviceUnknown")}
+                    </div>
+                    <div className="monitor-alert-history-message">
+                      <span className={`monitor-severity-badge ${alert.severity ?? "warning"}`}>
+                        {t(`monitor.severity.${alert.severity ?? "warning"}`)}
+                      </span>{" "}
+                      {t(monitorAlertMessageKey(alert.kind), {
+                        threshold: alert.alertThreshold ?? monitorPreferences.alertThreshold,
+                      })}
+                    </div>
+                    <div className="monitor-alert-history-time">
+                      {t("monitor.at", { time: new Date(alert.createdAt).toLocaleString() })}
+                    </div>
+                  </div>
+                  <div className="monitor-alert-history-actions">
+                    <Button size="sm" variant="ghost" onClick={() => openDevice(alert.deviceId)}>
+                      {t("monitor.openDevice")}
+                    </Button>
+                    <button
+                      type="button"
+                      className="monitor-alert-dismiss"
+                      aria-label={t("monitor.dismiss")}
+                      title={t("monitor.dismiss")}
+                      onClick={() => dismissMonitorAlert(alert.id)}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </Card>
     </div>

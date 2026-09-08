@@ -1301,6 +1301,27 @@ a {
   font-size: 12px;
   font-weight: 500;
 }
+.monitor-alert-search-field { grid-column: 1 / -1; }
+.monitor-alert-search-control { position: relative; }
+.monitor-alert-search-control input { width: 100%; padding-right: 36px; }
+.monitor-alert-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  transform: translateY(-50%);
+  border-radius: 5px;
+  color: var(--text-muted);
+}
+.monitor-alert-search-clear:hover { color: var(--text); background: var(--bg-hover); }
+.monitor-alert-search-clear:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
 .monitor-alert-filter-result {
   margin-top: 12px;
   padding-top: 10px;
@@ -1526,9 +1547,38 @@ a {
   flex-direction: column;
   gap: 8px;
 }
+.monitor-alert-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-hover);
+}
+.monitor-alert-select-all,
+.monitor-alert-select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.monitor-alert-select-all {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.monitor-alert-select-all input,
+.monitor-alert-select-control input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.monitor-alert-selection-actions { display: flex; align-items: center; gap: 10px; }
 .monitor-alert-history-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 10px;
@@ -1573,6 +1623,7 @@ a {
   align-items: center;
   gap: 4px;
 }
+.monitor-alert-select-control { justify-content: center; }
 .monitor-alert-dismiss {
   display: grid;
   place-items: center;
@@ -1618,8 +1669,10 @@ a {
   .monitor-alert-device-total::before { margin-right: 14px; }
   .monitor-alert-device-severity::before { margin-right: 14px; }
   .monitor-alert-device-peak::before { margin-right: 14px; }
-  .monitor-alert-history-item { grid-template-columns: auto minmax(0, 1fr); }
-  .monitor-alert-history-actions { grid-column: 2; justify-content: flex-start; }
+  .monitor-alert-selection-bar { align-items: flex-start; flex-direction: column; }
+  .monitor-alert-selection-actions { width: 100%; justify-content: space-between; }
+  .monitor-alert-history-item { grid-template-columns: auto auto minmax(0, 1fr); }
+  .monitor-alert-history-actions { grid-column: 3; justify-content: flex-start; }
   .monitor-alert-history-card .card-head { align-items: flex-start; flex-direction: column; }
   .monitor-alert-history-tools { width: 100%; flex-wrap: wrap; justify-content: flex-start; }
 }

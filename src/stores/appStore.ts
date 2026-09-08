@@ -8,6 +8,7 @@ import {
   MAX_MONITOR_ALERT_HISTORY,
   MONITOR_ALERT_STORAGE_KEY,
   parseStoredMonitorAlerts,
+  removeMonitorAlertsByIds,
   type MonitorAlert,
 } from "../lib/monitorAlerts";
 
@@ -28,6 +29,7 @@ interface AppState {
   setStatusText: (text: string) => void;
   addMonitorAlert: (alert: MonitorAlert) => void;
   dismissMonitorAlert: (id: string) => void;
+  dismissMonitorAlerts: (ids: string[]) => void;
   clearMonitorAlerts: (deviceId?: string) => void;
   clearMonitorAlertsBefore: (cutoff: number) => void;
   refreshStatus: () => Promise<void>;
@@ -139,6 +141,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   dismissMonitorAlert: (id) =>
     set((state) => {
       const monitorAlerts = state.monitorAlerts.filter((alert) => alert.id !== id);
+      persistMonitorAlerts(monitorAlerts);
+      return { monitorAlerts };
+    }),
+  dismissMonitorAlerts: (ids) =>
+    set((state) => {
+      const monitorAlerts = removeMonitorAlertsByIds(state.monitorAlerts, ids);
+      if (monitorAlerts === state.monitorAlerts) return state;
       persistMonitorAlerts(monitorAlerts);
       return { monitorAlerts };
     }),

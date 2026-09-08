@@ -8,6 +8,7 @@ import {
   hasRecentMonitorAlert,
   monitorAlertMessageKey,
   parseStoredMonitorAlerts,
+  removeMonitorAlertsByIds,
   runConfirmedMonitorAlertCleanup,
   serializeMonitorAlertsCsv,
   summarizeMonitorAlerts,
@@ -177,6 +178,30 @@ describe("filterMonitorAlerts", () => {
         new Date(2026, 8, 10, 12, 0).getTime(),
       ),
     ).toEqual([sameDay]);
+  });
+
+  it("searches device, resource, severity, and threshold fields without changing other filters", () => {
+    const searchableAlerts: MonitorAlert[] = [
+      { id: "cpu-lab", deviceId: "device-a", deviceName: "Lab One", kind: "cpu", createdAt: now, alertThreshold: 80 },
+      { id: "critical-memory", deviceId: "device-b", deviceName: "Office Two", kind: "memory", severity: "critical", createdAt: now - 1_000, alertThreshold: 90 },
+    ];
+
+    expect(filterMonitorAlerts(searchableAlerts, { deviceId: "all", kind: "all", timeRange: "all", query: "office" }, now).map((alert) => alert.id)).toEqual(["critical-memory"]);
+    expect(filterMonitorAlerts(searchableAlerts, { deviceId: "all", kind: "all", timeRange: "all", query: "critical" }, now).map((alert) => alert.id)).toEqual(["critical-memory"]);
+    expect(filterMonitorAlerts(searchableAlerts, { deviceId: "all", kind: "all", timeRange: "all", query: "80" }, now).map((alert) => alert.id)).toEqual(["cpu-lab"]);
+  });
+});
+
+describe("removeMonitorAlertsByIds", () => {
+  it("removes only selected alerts and keeps the original list for an empty selection", () => {
+    const alerts: MonitorAlert[] = [
+      { id: "a", deviceId: "device-a", deviceName: "A", kind: "cpu", createdAt: 3 },
+      { id: "b", deviceId: "device-b", deviceName: "B", kind: "memory", createdAt: 2 },
+      { id: "c", deviceId: "device-c", deviceName: "C", kind: "both", createdAt: 1 },
+    ];
+
+    expect(removeMonitorAlertsByIds(alerts, ["a", "c"]).map((alert) => alert.id)).toEqual(["b"]);
+    expect(removeMonitorAlertsByIds(alerts, [])).toEqual(alerts);
   });
 });
 
