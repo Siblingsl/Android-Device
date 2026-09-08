@@ -172,6 +172,29 @@ describe("Devices batch controls", () => {
     expect(screen.getByRole("button", { name: "批量截图" })).toBeTruthy();
   }, 15_000);
 
+  it("retries only failed devices from the last batch", async () => {
+    vi.mocked(DeviceService.connect)
+      .mockResolvedValueOnce({ success: false, stdout: "", stderr: "offline", exitCode: 1 })
+      .mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+
+    expect(await screen.findByText(/批量 ADB 连接 · 1\/2 成功/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重试失败" }));
+
+    expect(await screen.findByText(/批量 ADB 连接 · 1\/1 成功/)).toBeTruthy();
+    expect(DeviceService.connect).toHaveBeenNthCalledWith(1, "one-serial");
+    expect(DeviceService.connect).toHaveBeenNthCalledWith(2, "two-serial");
+    expect(DeviceService.connect).toHaveBeenNthCalledWith(3, "one-serial");
+  }, 15_000);
+
   it("disables the refresh button while the device list is loading", async () => {
     render(
       <MemoryRouter>

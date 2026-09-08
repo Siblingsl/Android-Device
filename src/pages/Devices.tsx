@@ -25,6 +25,15 @@ const FILTER_KEY = "rdc.devices.filter";
 const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
 
+type BatchAction = (device: DeviceInfo) => Promise<unknown>;
+type BatchReportItem = { id: string; name: string; ok: boolean; detail: string };
+type BatchReport = {
+  title: string;
+  kind: string;
+  items: BatchReportItem[];
+  retry: { label: string; kind: string; action: BatchAction };
+};
+
 function readFilter(): "all" | "online" | "offline" {
   try {
     const v = sessionStorage.getItem(FILTER_KEY);
@@ -58,11 +67,7 @@ export function Devices() {
       return "";
     }
   });
-  const [batchReport, setBatchReport] = useState<{
-    title: string;
-    kind: string;
-    items: { id: string; name: string; ok: boolean; detail: string }[];
-  } | null>(null);
+  const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
   const [batchProgress, setBatchProgress] = useState<{
     label: string;
     current: number;
@@ -229,21 +234,22 @@ export function Devices() {
 
   const batch = async (
     label: string,
-    fn: (d: DeviceInfo) => Promise<{ success?: boolean; stderr?: string; stdout?: string } | unknown>,
+    fn: BatchAction,
     kind = "",
+    targetDevices = selectedDevices,
   ) => {
-    if (selectedDevices.length === 0) {
+    if (targetDevices.length === 0) {
       setStatusText(t("devices.pickFirst"));
       return;
     }
     batchCancelRequested.current = false;
     setBusy("batch");
-    setBatchProgress({ label, current: 0, total: selectedDevices.length, name: "", stopping: false });
+    setBatchProgress({ label, current: 0, total: targetDevices.length, name: "", stopping: false });
     setStatusText(label);
-    const items: { id: string; name: string; ok: boolean; detail: string }[] = [];
+    const items: BatchReportItem[] = [];
     try {
-      for (let i = 0; i < selectedDevices.length; i += 1) {
-        const d = selectedDevices[i];
+      for (let i = 0; i < targetDevices.length; i += 1) {
+        const d = targetDevices[i];
         if (batchCancelRequested.current) {
           items.push({
             id: d.id,
@@ -293,6 +299,7 @@ export function Devices() {
         }),
         kind,
         items,
+        retry: { label, kind, action: fn },
       });
       setStatusText(
         t(stopped ? "devices.batch.cancelled" : "devices.batch.done", {
@@ -306,6 +313,19 @@ export function Devices() {
       setBatchProgress(null);
       batchCancelRequested.current = false;
     }
+  };
+
+  const retryFailedBatch = () => {
+    if (!batchReport || busy === "batch") return;
+    const failedIds = new Set(batchReport.items.filter((item) => !item.ok).map((item) => item.id));
+    const retryDevices = devices.filter((device) => failedIds.has(device.id));
+    if (retryDevices.length === 0) {
+      setStatusText(t("devices.batch.retryUnavailable"));
+      return;
+    }
+    const { label, kind, action } = batchReport.retry;
+    setBatchReport(null);
+    void batch(label, action, kind, retryDevices);
   };
 
   const cancelBatch = () => {
@@ -563,17 +583,26 @@ export function Devices() {
                 </Button>
               )}
               {batchReport.items.some((it) => !it.ok) && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    const ids = batchReport.items.filter((it) => !it.ok).map((it) => it.id);
-                    setPicked(ids);
-                    setStatusText(t("devices.selectedFailed", { n: ids.length }));
-                  }}
-                >
-                  {t("devices.selectFailed")}
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    onClick={retryFailedBatch}
+                    disabled={busy === "batch"}
+                  >
+                    {t("devices.retryFailed")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      const ids = batchReport.items.filter((it) => !it.ok).map((it) => it.id);
+                      setPicked(ids);
+                      setStatusText(t("devices.selectedFailed", { n: ids.length }));
+                    }}
+                  >
+                    {t("devices.selectFailed")}
+                  </Button>
+                </>
               )}
               <Button
                 size="sm"
