@@ -9,8 +9,15 @@ use tauri::Manager;
 pub fn run() {
     services::log::info("System", "Redroid Device Center starting");
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    }
+
+    builder
         .manage(services::terminal::TerminalRegistry::default())
         .manage(services::transfer::TransferRegistry::default())
         .invoke_handler(tauri::generate_handler![
