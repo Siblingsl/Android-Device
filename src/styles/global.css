@@ -131,6 +131,61 @@ a {
   padding: 18px 22px 20px;
 }
 
+.control-window-page {
+  min-height: 100%;
+  overflow: auto;
+  padding: 14px;
+  background: var(--bg);
+}
+.control-window-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.control-window-kicker {
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.control-window-header h1 {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+.control-window-page .card { margin-bottom: 10px; }
+.control-window-device-card .field { margin: 0; }
+.control-window-device-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+}
+.control-window-button-grid {
+  display: grid;
+  gap: 6px;
+}
+.control-window-button-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.control-window-button-grid .btn { min-width: 0; padding-inline: 7px; font-size: 11px; }
+.control-window-preferences { display: grid; gap: 8px; }
+.control-window-preferences .row { font-size: 12px; cursor: pointer; }
+.control-window-preferences input { accent-color: var(--primary); }
+.control-window-message {
+  margin-top: 10px;
+  padding: 7px 9px;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .page-header {
   display: flex;
   align-items: flex-start;

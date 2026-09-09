@@ -10,9 +10,11 @@ vi.mock("../../services/terminalSessionService", () => ({
   TerminalSessionService: { start: vi.fn() },
 }));
 vi.mock("../../lib/terminalWindow", () => ({ openTerminalWindow: vi.fn() }));
+vi.mock("../../lib/controlWindow", () => ({ openControlWindow: vi.fn() }));
 
 const { TerminalSessionService } = await import("../../services/terminalSessionService");
 const { openTerminalWindow } = await import("../../lib/terminalWindow");
+const { openControlWindow } = await import("../../lib/controlWindow");
 
 function TestShell({ children }: { children: React.ReactNode }) {
   return (
@@ -33,6 +35,7 @@ describe("WorkspaceHeader", () => {
       status: "running",
     });
     vi.mocked(openTerminalWindow).mockResolvedValue({} as never);
+    vi.mocked(openControlWindow).mockResolvedValue({} as never);
   });
 
   afterEach(() => cleanup());
@@ -56,6 +59,16 @@ describe("WorkspaceHeader", () => {
     await waitFor(() => {
       expect(TerminalSessionService.start).toHaveBeenCalledWith({ kind: "local", serial: "", shell: "powershell" });
       expect(openTerminalWindow).toHaveBeenCalledWith("session-local", { title: "独立终端" });
+    });
+  });
+
+  it("opens the independent floating control window", async () => {
+    render(<WorkspaceHeader />, { wrapper: TestShell });
+
+    fireEvent.click(screen.getByRole("button", { name: "浮动控制" }));
+
+    await waitFor(() => {
+      expect(openControlWindow).toHaveBeenCalledWith(undefined, { title: "浮动控制" });
     });
   });
 });

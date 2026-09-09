@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Languages, Moon, RefreshCw, Search, Settings2, Sun, Wrench } from "lucide-react";
+import { ChevronDown, Languages, Moon, RefreshCw, Search, Settings2, SlidersHorizontal, Sun, Wrench } from "lucide-react";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
 import { ToolLauncher } from "./ToolLauncher";
+import { openControlWindow } from "../../lib/controlWindow";
 
 export function WorkspaceHeader() {
   const location = useLocation();
@@ -16,6 +17,7 @@ export function WorkspaceHeader() {
   const refreshStatus = useAppStore((s) => s.refreshStatus);
   const refreshDevices = useAppStore((s) => s.refreshDevices);
   const devices = useAppStore((s) => s.devices);
+  const selectedDeviceId = useAppStore((s) => s.selectedDeviceId);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const online = devices.filter((device) => device.online && device.adbStatus === "device").length;
@@ -85,6 +87,18 @@ export function WorkspaceHeader() {
       </div>
 
       <div className="workspace-actions">
+        <button
+          className="workspace-icon-button"
+          type="button"
+          onClick={() => {
+            const fallback = devices.find((device) => device.online && device.adbStatus === "device")?.id;
+            void openControlWindow(selectedDeviceId ?? fallback, { title: t("controlWindow.title") });
+          }}
+          title={t("controlWindow.title")}
+          aria-label={t("controlWindow.title")}
+        >
+          <SlidersHorizontal size={16} />
+        </button>
         <button className="workspace-icon-button" type="button" onClick={() => void refresh()} title={t("common.refresh")} aria-label={t("common.refresh")}>
           <RefreshCw size={16} />
         </button>
