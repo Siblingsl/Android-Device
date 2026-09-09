@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { I18nProvider } from "../../i18n";
@@ -45,9 +45,20 @@ describe("WorkspaceHeader", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "工具" }));
 
-    expect(screen.getByRole("link", { name: "设备中心" }).getAttribute("href")).toBe("/devices");
-    expect(screen.getByRole("link", { name: "文件与应用" }).getAttribute("href")).toBe("/devices");
+    const menu = screen.getByRole("menu", { name: "工具入口" });
+    expect(within(menu).getByRole("link", { name: "设备中心" }).getAttribute("href")).toBe("/devices");
+    expect(within(menu).getByRole("link", { name: "文件与应用" }).getAttribute("href")).toBe("/devices");
     expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
+  });
+
+  it("exposes the compact primary workbench navigation", () => {
+    render(<WorkspaceHeader />, { wrapper: TestShell });
+
+    const nav = screen.getByRole("navigation", { name: "工作台导航" });
+    expect(nav.querySelector('a[href="/"]')).toBeTruthy();
+    expect(nav.querySelector('a[href="/devices"]')).toBeTruthy();
+    expect(nav.querySelector('a[href="/adb"]')).toBeTruthy();
+    expect(nav.querySelector('a[href="/settings"]')).toBeTruthy();
   });
 
   it("opens a persistent local terminal in its own window", async () => {

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Languages, Moon, RefreshCw, Search, Settings2, SlidersHorizontal, Sun, Wrench } from "lucide-react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Cable, ChevronDown, Home, Languages, Moon, RefreshCw, Search, Settings2, SlidersHorizontal, Smartphone, Sun, Wrench } from "lucide-react";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
 import { ToolLauncher } from "./ToolLauncher";
@@ -57,6 +57,25 @@ export function WorkspaceHeader() {
           <span className="workspace-brand-subtitle">Device Center</span>
         </span>
       </button>
+
+      <nav className="workspace-primary-nav" aria-label="工作台导航">
+        <NavLink to="/" end className={({ isActive }) => `workspace-primary-link${isActive ? " active" : ""}`}>
+          <Home size={14} aria-hidden="true" />
+          <span>{t("common.nav.dashboard")}</span>
+        </NavLink>
+        <NavLink to="/devices" className={({ isActive }) => `workspace-primary-link${isActive ? " active" : ""}`}>
+          <Smartphone size={14} aria-hidden="true" />
+          <span>{t("common.nav.devices")}</span>
+        </NavLink>
+        <NavLink to="/adb" className={({ isActive }) => `workspace-primary-link${isActive ? " active" : ""}`}>
+          <Cable size={14} aria-hidden="true" />
+          <span>{t("common.nav.adb")}</span>
+        </NavLink>
+        <NavLink to="/settings" className={({ isActive }) => `workspace-primary-link${isActive ? " active" : ""}`}>
+          <Settings2 size={14} aria-hidden="true" />
+          <span>{t("common.nav.settings")}</span>
+        </NavLink>
+      </nav>
 
       <div className="workspace-context">
         <span className="workspace-context-kicker">{location.pathname === "/" ? t("common.workspace.overview") : t("common.workspace.tools")}</span>
