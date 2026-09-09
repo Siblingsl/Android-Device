@@ -44,6 +44,7 @@ import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { DeviceBroadcastInput } from "../components/device/DeviceBroadcastInput";
 import { DeviceHoverCard } from "../components/device/DeviceHoverCard";
+import { QuickAppLauncher } from "../components/device/QuickAppLauncher";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
@@ -1282,6 +1283,7 @@ export function Devices() {
           </Button>
           </div>
           <div className="devices-toolbar-batch-utility">
+          <QuickAppLauncher devices={devices} selectedDevices={selectedDevices} setStatusText={setStatusText} />
           <Button
             size="sm"
             variant="ghost"
