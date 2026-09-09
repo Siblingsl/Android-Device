@@ -134,12 +134,12 @@ export function LogsPage() {
   useEffect(() => () => window.clearTimeout(resumeTimer.current), []);
 
   return (
-    <div>
-      <div className="page-header">
-        <div>
+    <div className="log-workbench">
+      <div className="page-header log-header-rail">
+        <div className="log-heading-rail">
           <div className="page-title">{t("logs.title")}</div>
           <div className="page-subtitle">{t("logs.subtitle")}</div>
-          <div className="row" style={{ gap: 12, marginTop: 6, fontSize: 12 }}>
+          <div className="row log-level-rail">
             {(
               [
                 ["INFO", "INFO"],
@@ -165,7 +165,7 @@ export function LogsPage() {
             ))}
           </div>
         </div>
-        <div className="row">
+        <div className="row log-action-rail">
           <Button
             variant={level === "ERROR" ? "danger" : "secondary"}
             onClick={() => setLevel(level === "ERROR" ? "all" : "ERROR")}
@@ -253,8 +253,8 @@ export function LogsPage() {
         </div>
       </div>
 
-      <Card>
-        <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
+      <Card className="log-card">
+        <div className="log-filter-rail">
           <select value={source} onChange={(e) => setSource(e.target.value)}>
             <option value="all">{t("logs.source.all")}</option>
             <option value="System">{t("logs.source.system")}</option>
@@ -271,7 +271,6 @@ export function LogsPage() {
             <option value="DEBUG">DEBUG</option>
           </select>
           <input
-            style={{ flex: 1, minWidth: 180 }}
             placeholder={t("logs.searchPlaceholder")}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -281,6 +280,9 @@ export function LogsPage() {
               {t("logs.clearKeyword")}
             </Button>
           )}
+        </div>
+
+        <div className="log-status-rail">
           <span className="muted" style={{ fontSize: 12 }}>
             {loading && logs.length === 0
               ? t("common.loading")
@@ -326,62 +328,64 @@ export function LogsPage() {
           </Button>
         </div>
 
-        {loading && logs.length === 0 ? (
-          <Skeleton count={10} height={20} />
-        ) : logs.length === 0 ? (
-          <div className="empty-state">
-            {keyword || source !== "all" || level !== "all" ? (
-              <>
-                {t("logs.noMatch")}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  style={{ marginLeft: 8 }}
-                  onClick={() => {
-                    setKeyword("");
-                    setSource("all");
-                    setLevel("all");
-                  }}
-                >
-                  {t("logs.clearFilters")}
-                </Button>
-              </>
-            ) : (
-              t("logs.empty")
-            )}
-          </div>
-        ) : (
-          <div
-            className="shell-output"
-            style={{ maxHeight: 560, background: "var(--bg)" , color: "var(--text)" }}
-            onScroll={bumpPause}
-          >
-            {logs.map((l) => {
-              const text = `[${l.timestamp}] [${l.level}] [${l.source}] ${l.message}`;
-              return (
-                <button
-                  key={l.id}
-                  type="button"
-                  className={`log-line ${l.level}`}
-                  style={{ display: "block", width: "100%", textAlign: "left" }}
-                  title={t("logs.clickToCopy")}
-                  onClick={() => {
-                    bumpPause();
-                    void copyText(text).then(
-                      () => {
-                        setCopiedId(l.id);
-                        window.setTimeout(() => setCopiedId((cur) => (cur === l.id ? null : cur)), 1500);
-                      },
-                      () => void alert(t("common.panel.copyFailed")),
-                    );
-                  }}
-                >
-                  {copiedId === l.id ? t("logs.copiedSuffix", { text }) : text}
-                </button>
-              );
-            })}
-          </div>
-        )}
+        <div className="log-surface">
+          {loading && logs.length === 0 ? (
+            <Skeleton count={10} height={20} />
+          ) : logs.length === 0 ? (
+            <div className="empty-state">
+              {keyword || source !== "all" || level !== "all" ? (
+                <>
+                  {t("logs.noMatch")}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => {
+                      setKeyword("");
+                      setSource("all");
+                      setLevel("all");
+                    }}
+                  >
+                    {t("logs.clearFilters")}
+                  </Button>
+                </>
+              ) : (
+                t("logs.empty")
+              )}
+            </div>
+          ) : (
+            <div
+              className="shell-output"
+              style={{ maxHeight: 560, background: "var(--bg)" , color: "var(--text)" }}
+              onScroll={bumpPause}
+            >
+              {logs.map((l) => {
+                const text = `[${l.timestamp}] [${l.level}] [${l.source}] ${l.message}`;
+                return (
+                  <button
+                    key={l.id}
+                    type="button"
+                    className={`log-line ${l.level}`}
+                    style={{ display: "block", width: "100%", textAlign: "left" }}
+                    title={t("logs.clickToCopy")}
+                    onClick={() => {
+                      bumpPause();
+                      void copyText(text).then(
+                        () => {
+                          setCopiedId(l.id);
+                          window.setTimeout(() => setCopiedId((cur) => (cur === l.id ? null : cur)), 1500);
+                        },
+                        () => void alert(t("common.panel.copyFailed")),
+                      );
+                    }}
+                  >
+                    {copiedId === l.id ? t("logs.copiedSuffix", { text }) : text}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </Card>
     </div>
   );

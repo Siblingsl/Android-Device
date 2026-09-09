@@ -84,4 +84,27 @@ describe("LogsPage refresh ordering", () => {
     });
     expect(screen.getByText(/新筛选结果/)).toBeTruthy();
   });
+
+  it("keeps the log workbench rails and log surface visible", async () => {
+    vi.mocked(DeviceService.getLogs).mockResolvedValue([log("one", "日志内容")]);
+
+    render(
+      <MemoryRouter>
+        <LogsPage />
+      </MemoryRouter>,
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(0);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector(".log-workbench")).toBeTruthy();
+    expect(document.querySelector(".log-filter-rail")).toBeTruthy();
+    expect(document.querySelector(".log-action-rail")).toBeTruthy();
+    expect(document.querySelector(".log-surface")).toBeTruthy();
+    expect(document.querySelector(".log-status-rail")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /日志内容/ })).toBeTruthy();
+  });
 });
