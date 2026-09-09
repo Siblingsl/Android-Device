@@ -9,9 +9,18 @@ import {
   ArrowLeft,
   RefreshCw,
   FolderPlus,
+  FilePlus2,
   Trash2,
   Upload,
   Download,
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  Pencil,
+  Eye,
+  Clock3,
+  X,
+  Save as SaveIcon,
   Play,
   Square,
   Search,
@@ -32,6 +41,15 @@ import {
   type PreviewState,
 } from "../lib/devicePreview";
 import { shortcutForScreenKey } from "../lib/deviceInput";
+import {
+  dialogPaths,
+  encodeUtf8Base64,
+  normalizeRemotePath,
+  remoteBaseName,
+  remoteChildPath,
+  remoteFileCommand,
+  type FileClipboard,
+} from "../lib/fileManager";
 import {
   isRetryableControlAction,
   prependControlFeedback,
@@ -1897,6 +1915,32 @@ function Files({
       return defaults;
     }
   });
+  const [recentPaths, setRecentPaths] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("rdc.files.recentPaths");
+      const parsed = raw ? JSON.parse(raw) as unknown : [];
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string").slice(0, 12) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [clipboard, setClipboard] = useState<FileClipboard | null>(() => {
+    try {
+     const raw = sessionStorage.getItem(`rdc.files.clipboard.${serial}`);
+     const parsed = raw ? JSON.parse(raw) as Partial<FileClipboard> : null;
+      if ((parsed?.mode === "copy" || parsed?.mode === "cut") && Array.isArray(parsed.paths) && parsed.paths.every((value) => typeof value === "string")) {
+        return { mode: parsed.mode, paths: parsed.paths };
+     }
+    } catch {
+      /* storage is optional */
+    }
+    return null;
+  });
+  const [editor, setEditor] = useState<{ path: string; name: string; content: string; readOnly: boolean } | null>(null);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [fileQuery, setFileQuery] = useState("");
   const [sortKey, setSortKey] = useState<"name" | "size" | "modified">("name");
   const [sortAsc, setSortAsc] = useState(true);
@@ -1966,6 +2010,24 @@ function Files({
 
   useEffect(() => {
     try {
+      localStorage.setItem("rdc.files.recentPaths", JSON.stringify(recentPaths));
+    } catch {
+      /* ignore */
+    }
+  }, [recentPaths]);
+
+  useEffect(() => {
+    try {
+      const key = `rdc.files.clipboard.${serial}`;
+      if (clipboard) sessionStorage.setItem(key, JSON.stringify(clipboard));
+      else sessionStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }, [serial, clipboard]);
+
+  useEffect(() => {
+    try {
       sessionStorage.setItem(`rdc.files.path.${serial}`, path);
     } catch {
       /* ignore */
@@ -2016,8 +2078,10 @@ function Files({
   }, []);
 
   const go = (p: string) => {
-    const next = p.trim() || "/";
+    const next = normalizeRemotePath(p);
     setPath(next);
+    setRecentPaths((items) => [next, ...items.filter((item) => item !== next)].slice(0, 12));
+    setSelectedPaths([]);
     setFileQuery("");
     void load(next);
   };
@@ -2133,6 +2197,167 @@ function Files({
     }
   };
 
+  const runRemoteCommand = async (command: string, success: string, fallback: string) => {
+    try {
+      const result = await DeviceService.shell(serial, command);
+      if (!result.success) {
+        const reason = (result.stderr || result.stdout || fallback).trim();
+        setStatusText(reason);
+        void alert(reason);
+        return false;
+      }
+      setStatusText(success);
+      return true;
+    } catch (error) {
+      reportOperationError(error, fallback, setStatusText);
+      return false;
+    }
+  };
+
+  const selectedEntries = () => selectedPaths
+    .map((selectedPath) => files.find((entry) => entry.path === selectedPath))
+    .filter((entry): entry is FileEntry => Boolean(entry));
+
+  const setFileClipboard = (mode: FileClipboard["mode"]) => {
+    if (!selectedPaths.length) return;
+    setClipboard({ mode, paths: selectedPaths });
+    setStatusText(t(mode === "copy" ? "detail.files.copiedToClipboard" : "detail.files.cutToClipboard", { n: selectedPaths.length }));
+  };
+
+  const pasteClipboard = async () => {
+    if (!clipboard?.paths.length || transferBusy) return;
+    let successCount = 0;
+    for (const source of clipboard.paths) {
+      const target = remoteChildPath(path, remoteBaseName(source));
+      if (normalizeRemotePath(source) === target) {
+        successCount += 1;
+        continue;
+      }
+      const ok = await runRemoteCommand(
+        remoteFileCommand(clipboard.mode === "cut" ? "move" : "copy", source, target),
+        t("detail.files.pasted", { name: remoteBaseName(source) }),
+        t("detail.files.pasteFailed"),
+      );
+      if (ok) successCount += 1;
+    }
+    if (clipboard.mode === "cut" && successCount === clipboard.paths.length) setClipboard(null);
+    if (successCount > 0) {
+      setSelectedPaths([]);
+      await load();
+    }
+  };
+
+  const renameEntry = async (entry: FileEntry) => {
+    const name = prompt(t("detail.files.renamePrompt"), entry.name)?.trim();
+    if (!name || name === entry.name) return;
+    const target = remoteChildPath(path, name);
+    await runRemoteCommand(
+      remoteFileCommand("move", entry.path, target),
+      t("detail.files.renamed", { name }),
+      t("detail.files.renameFailed"),
+    );
+    await load();
+  };
+
+  const createFile = async () => {
+    const name = prompt(t("detail.files.fileNamePrompt"))?.trim();
+    if (!name) return;
+    const target = remoteChildPath(path, name);
+    const ok = await runRemoteCommand(
+      remoteFileCommand("touch", target),
+      t("detail.files.created", { name }),
+      t("detail.files.createFailed"),
+    );
+    if (ok) await load();
+  };
+
+  const openTextFile = async (entry: FileEntry, readOnly: boolean) => {
+    setEditor({ path: entry.path, name: entry.name, content: "", readOnly });
+    setEditorLoading(true);
+    try {
+      const result = await DeviceService.shell(serial, remoteFileCommand("read", entry.path));
+      if (!result.success) {
+        const reason = (result.stderr || result.stdout || t("detail.files.previewFailed")).trim();
+        setStatusText(reason);
+        setEditor(null);
+        void alert(reason);
+        return;
+      }
+      setEditor({ path: entry.path, name: entry.name, content: result.stdout, readOnly });
+    } catch (error) {
+      reportOperationError(error, t("detail.files.previewFailed"), setStatusText);
+      setEditor(null);
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const saveTextFile = async () => {
+    if (!editor || editor.readOnly || editorSaving) return;
+    setEditorSaving(true);
+    const ok = await runRemoteCommand(
+      remoteFileCommand("write", editor.path, undefined, encodeUtf8Base64(editor.content)),
+      t("detail.files.saved", { name: editor.name }),
+      t("detail.files.saveFailed"),
+    );
+    setEditorSaving(false);
+    if (ok) setEditor(null);
+  };
+
+  const uploadPaths = async (localPaths: string[]) => {
+    if (transferBusy || !localPaths.length) return;
+    for (const local of localPaths) await runUpload(local);
+  };
+
+  const chooseUpload = async (directory: boolean) => {
+   try {
+      const picked = await open({ multiple: true, directory });
+     await uploadPaths(dialogPaths(picked));
+   } catch (error) {
+      if (!isDialogCancellation(error)) reportOperationError(error, t("detail.files.uploadFailed"), setStatusText);
+    }
+  };
+
+  const downloadSelected = async () => {
+    const entries = selectedEntries();
+    if (!entries.length || transferBusy) return;
+    try {
+      const picked = await open({ directory: true, multiple: false });
+      const directory = dialogPaths(picked)[0];
+      if (!directory) return;
+      for (const entry of entries) await runDownload(entry, `${directory}/${entry.name}`);
+      setSelectedPaths([]);
+    } catch (error) {
+      if (!isDialogCancellation(error)) reportOperationError(error, t("detail.files.downloadFailed"), setStatusText);
+    }
+  };
+
+  const deleteSelected = async () => {
+    const entries = selectedEntries();
+    if (!entries.length) return;
+    if (!(await askConfirm(t("detail.files.confirmDeleteMany", { n: entries.length })))) return;
+    let deleted = 0;
+    for (const entry of entries) {
+      const result = await DeviceService.deleteFile(serial, entry.path);
+      if (result.success) deleted += 1;
+      else setStatusText((result.stderr || result.stdout || t("detail.files.deleteFailed")).trim());
+    }
+    setStatusText(t("detail.files.deletedMany", { n: deleted }));
+    setSelectedPaths([]);
+    await load();
+  };
+
+  const onDropUpload = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragOver(false);
+    const localPaths = dialogPaths(Array.from(event.dataTransfer.files).map((file) => (file as File & { path?: string }).path));
+    if (!localPaths.length) {
+      setStatusText(t("detail.files.dropUnsupported"));
+      return;
+    }
+    await uploadPaths(localPaths);
+  };
+
   const cancelTransfer = async () => {
     const current = transfer;
     if (
@@ -2188,7 +2413,17 @@ function Files({
     : "";
 
   return (
-    <div className="stack">
+    <div
+      className={`stack ${dragOver ? "file-drop-active" : ""}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (!disabled) setDragOver(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget === event.target) setDragOver(false);
+      }}
+      onDrop={(event) => void onDropUpload(event)}
+    >
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
         <div className="row-between" style={{ marginBottom: 12 }}>
@@ -2238,24 +2473,22 @@ function Files({
             >
               {t("detail.files.newFolder")}
             </Button>
+            <Button size="sm" icon={<FilePlus2 size={14} />} onClick={() => void createFile()}>
+              {t("detail.files.newFile")}
+            </Button>
             <Button
               size="sm"
               icon={<Upload size={14} />}
               loading={transferBusy && transfer?.kind === "upload"}
               disabled={transferBusy}
               onClick={async () => {
-                try {
-                  const local = await open({ multiple: false, directory: false });
-                  if (typeof local !== "string" || !local) return;
-                  await runUpload(local);
-                } catch (e) {
-                  if (!isDialogCancellation(e)) {
-                    reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
-                  }
-                }
+                await chooseUpload(false);
               }}
             >
               {t("detail.files.upload")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={transferBusy} onClick={() => void chooseUpload(true)}>
+              {t("detail.files.uploadFolder")}
             </Button>
           </div>
         </div>
@@ -2347,6 +2580,32 @@ function Files({
             {t("detail.files.bookmarkPath")}
           </Button>
         </div>
+        <div className="file-manager-toolbar">
+          <div className="row" style={{ flexWrap: "wrap", gap: 5 }}>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length} onClick={() => setFileClipboard("copy")} icon={<Copy size={13} />}>
+              {t("detail.files.copySelected")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length} onClick={() => setFileClipboard("cut")} icon={<Scissors size={13} />}>
+              {t("detail.files.cutSelected")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!clipboard?.paths.length || transferBusy} onClick={() => void pasteClipboard()} icon={<ClipboardPaste size={13} />}>
+              {t("detail.files.paste")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length || transferBusy} onClick={() => void downloadSelected()}>
+              {t("detail.files.downloadSelected")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length || transferBusy} onClick={() => void deleteSelected()}>
+              {t("detail.files.deleteSelected")}
+            </Button>
+            {clipboard?.paths.length ? <span className="file-clipboard-hint">{t(clipboard.mode === "copy" ? "detail.files.copyReady" : "detail.files.cutReady", { n: clipboard.paths.length })}</span> : null}
+          </div>
+          <div className="file-path-history">
+            <span className="muted"><Clock3 size={12} />{t("detail.files.recentPaths")}</span>
+            {recentPaths.slice(0, 5).map((recent) => (
+              <button key={recent} type="button" className="file-path-chip" onClick={() => go(recent)} title={recent}>{recent}</button>
+            ))}
+          </div>
+        </div>
         <div className="muted mono" style={{ fontSize: 12, marginBottom: 10, whiteSpace: "pre-wrap" }}>
           {storage || t("detail.files.storagePlaceholder")}
         </div>
@@ -2378,9 +2637,20 @@ function Files({
             </Button>
           </div>
         ) : (
-          <table className="table">
+          <table className="table file-manager-table">
             <thead>
               <tr>
+                <th className="file-select-col">
+                  <input
+                    type="checkbox"
+                    aria-label={t("detail.files.selectAll")}
+                    checked={visibleFiles.length > 0 && visibleFiles.every((entry) => selectedPaths.includes(entry.path))}
+                    onChange={(event) => {
+                      if (event.target.checked) setSelectedPaths((current) => [...new Set([...current, ...visibleFiles.map((entry) => entry.path)])]);
+                      else setSelectedPaths((current) => current.filter((selected) => !visibleFiles.some((entry) => entry.path === selected)));
+                    }}
+                  />
+                </th>
                 <th>
                   <button type="button" onClick={() => toggleSort("name")}>
                     {t("detail.files.colName")}{sortMark("name")}
@@ -2403,6 +2673,14 @@ function Files({
             <tbody>
               {visibleFiles.map((f) => (
                 <tr key={f.path}>
+                  <td className="file-select-col">
+                    <input
+                      type="checkbox"
+                      aria-label={t("detail.files.selectItem", { name: f.name })}
+                      checked={selectedPaths.includes(f.path)}
+                      onChange={(event) => setSelectedPaths((current) => event.target.checked ? [...new Set([...current, f.path])] : current.filter((selected) => selected !== f.path))}
+                    />
+                  </td>
                   <td>
                     <button onClick={() => openEntry(f)} style={{ fontWeight: f.isDir ? 600 : 400 }}>
                       {f.isDir ? "📁 " : "📄 "}
@@ -2427,6 +2705,13 @@ function Files({
                       >
                         {t("common.copy")}
                       </Button>
+                      {!f.isDir && (
+                        <>
+                          <Button size="sm" variant="ghost" icon={<Eye size={14} />} title={t("detail.files.preview")} onClick={() => void openTextFile(f, true)} />
+                          <Button size="sm" variant="ghost" icon={<Pencil size={14} />} title={t("detail.files.edit")} onClick={() => void openTextFile(f, false)} />
+                        </>
+                      )}
+                      <Button size="sm" variant="ghost" icon={<Pencil size={14} />} title={t("detail.files.rename")} onClick={() => void renameEntry(f)} />
                       {!f.isDir && (
                         <Button
                           size="sm"
@@ -2475,6 +2760,19 @@ function Files({
             </tbody>
           </table>
         )}
+        {editor ? (
+          <div className="file-editor" role="dialog" aria-label={editor.readOnly ? t("detail.files.preview") : t("detail.files.edit")}>
+            <div className="file-editor-head">
+              <div className="row"><span className="file-editor-title">{editor.name}</span><span className="muted mono">{editor.path}</span></div>
+              <button type="button" className="icon-btn" title={t("detail.files.closeEditor")} onClick={() => setEditor(null)}><X size={15} /></button>
+            </div>
+            {editorLoading ? <div className="muted">{t("detail.files.loadingText")}</div> : <textarea value={editor.content} readOnly={editor.readOnly} onChange={(event) => setEditor((current) => current ? { ...current, content: event.target.value } : current)} />}
+            <div className="row" style={{ marginTop: 8 }}>
+              {!editor.readOnly ? <Button size="sm" variant="primary" loading={editorSaving} onClick={() => void saveTextFile()} icon={<SaveIcon size={13} />}>{t("detail.files.saveText")}</Button> : null}
+              <Button size="sm" variant="ghost" onClick={() => setEditor(null)}>{t("detail.files.closeEditor")}</Button>
+            </div>
+          </div>
+        ) : null}
       </Card>
       </fieldset>
     </div>

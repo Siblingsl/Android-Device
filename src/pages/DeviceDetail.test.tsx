@@ -44,6 +44,7 @@ vi.mock("../services/deviceService", () => ({
     getSuPolicies: vi.fn(),
     listFiles: vi.fn(),
     storageInfo: vi.fn(),
+    shell: vi.fn(),
     listApps: vi.fn(),
     getAppDetail: vi.fn(),
     getAppPermissions: vi.fn(),
@@ -230,6 +231,7 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.uploadFileTracked).mockReset();
     vi.mocked(DeviceService.downloadFileTracked).mockReset();
     vi.mocked(DeviceService.cancelFileTransfer).mockReset();
+    vi.mocked(DeviceService.shell).mockReset();
     vi.mocked(DeviceService.startApp).mockReset();
     vi.mocked(DeviceService.stopApp).mockReset();
     vi.mocked(DeviceService.clearAppData).mockReset();
@@ -640,6 +642,70 @@ describe("DeviceDetail refresh ordering", () => {
     });
 
     expect(alert).toHaveBeenCalledWith("mkdir unavailable");
+  });
+
+  it("pastes selected files into the current folder with a remote copy command", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    vi.mocked(DeviceService.shell).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 old.txt" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制所选" }));
+    const pathInput = screen.getAllByRole("textbox")[0];
+    fireEvent.change(pathInput, { target: { value: "/sdcard/Download" } });
+    fireEvent.keyDown(pathInput, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.shell).toHaveBeenCalledWith(
+      "device-1-serial",
+      "cp -R '/sdcard/old.txt' '/sdcard/Download/old.txt'",
+    );
+  });
+
+  it("opens a text preview and saves edited content through the device shell", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("old.txt")]);
+    const readResult = deferred<ShellResult>();
+    vi.mocked(DeviceService.shell)
+      .mockReturnValueOnce(readResult.promise)
+      .mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getAllByTitle("编辑文本")[0]);
+    expect(DeviceService.shell).toHaveBeenCalledWith("device-1-serial", "cat '/sdcard/old.txt'");
+    await act(async () => {
+      readResult.resolve({ success: true, stdout: "hello", stderr: "", exitCode: 0 });
+      await readResult.promise;
+    });
+    const editor = screen.getByRole("dialog", { name: "编辑文本" });
+    const textarea = editor.querySelector("textarea") as HTMLTextAreaElement;
+    expect(textarea.value).toBe("hello");
+    fireEvent.change(textarea, { target: { value: "你好" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存文件" }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.shell).toHaveBeenNthCalledWith(1, "device-1-serial", "cat '/sdcard/old.txt'");
+    expect(DeviceService.shell).toHaveBeenNthCalledWith(
+      2,
+      "device-1-serial",
+      "printf '%s' '5L2g5aW9' | base64 -d > '/sdcard/old.txt'",
+    );
   });
 
   it("reports a file deletion error instead of leaving an unhandled rejection", async () => {
