@@ -568,6 +568,21 @@ pub async fn adb_connect(address: String) -> ShellResult {
 }
 
 #[tauri::command]
+pub async fn adb_pair(address: String, pairing_code: String) -> ShellResult {
+    blocking(move || adb::pair(&address, &pairing_code)).await
+}
+
+#[tauri::command]
+pub async fn adb_mdns_services() -> Vec<AdbMdnsService> {
+    blocking(adb::mdns_services).await
+}
+
+#[tauri::command]
+pub async fn adb_tcpip(serial: String, port: u16) -> ShellResult {
+    blocking(move || adb::tcpip(&serial, port)).await
+}
+
+#[tauri::command]
 pub async fn adb_disconnect(address: String) -> ShellResult {
     blocking(move || adb::disconnect(&address)).await
 }

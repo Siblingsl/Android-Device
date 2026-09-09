@@ -118,6 +118,9 @@ pub fn run() {
             adb_auto_fix,
             adb_local_subnet,
             adb_lan_scan,
+            adb_pair,
+            adb_mdns_services,
+            adb_tcpip,
             // Scrcpy
             scrcpy_start,
             scrcpy_stop,

@@ -46,4 +46,22 @@ describe("DeviceService tracked file transfers", () => {
     });
     expect(invoke).toHaveBeenNthCalledWith(2, "cancel_file_transfer", { operationId: "op-2" });
   });
+
+  it("maps wireless pairing, mDNS discovery and tcpip commands", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ success: true, stdout: "paired", stderr: "", exitCode: 0 })
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ success: true, stdout: "restarting", stderr: "", exitCode: 0 });
+
+    await DeviceService.adbPair("192.168.1.20:37145", "515109");
+    await DeviceService.adbMdnsServices();
+    await DeviceService.adbTcpip("usb-serial", 5555);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "adb_pair", {
+      address: "192.168.1.20:37145",
+      pairingCode: "515109",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "adb_mdns_services", undefined);
+    expect(invoke).toHaveBeenNthCalledWith(3, "adb_tcpip", { serial: "usb-serial", port: 5555 });
+  });
 });

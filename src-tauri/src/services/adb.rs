@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::models::{AdbDevice, AdbInfo, LanDevice, LanScanResult, ShellResult};
+use crate::models::{AdbDevice, AdbInfo, AdbMdnsService, LanDevice, LanScanResult, ShellResult};
 use crate::services::{cache, log, settings, util};
 
 pub fn adb_bin() -> String {
@@ -120,6 +120,25 @@ fn connect_output_failed(stdout: &str, stderr: &str) -> bool {
         || text.contains("timeout")
 }
 
+fn invalid_adb_result(message: &str) -> ShellResult {
+    ShellResult {
+        success: false,
+        stdout: String::new(),
+        stderr: message.to_string(),
+        exit_code: -1,
+    }
+}
+
+fn pair_output_failed(stdout: &str, stderr: &str) -> bool {
+    let text = format!("{stdout} {stderr}").to_lowercase();
+    text.contains("failed")
+        || text.contains("unable")
+        || text.contains("refused")
+        || text.contains("timed out")
+        || text.contains("timeout")
+        || text.contains("invalid")
+}
+
 pub fn connect(address: &str) -> ShellResult {
     log::info("ADB", &format!("Connecting to {}", address));
     let mut r = util::run_command_timeout(&adb_bin(), &["connect", address], Duration::from_secs(8));
@@ -132,6 +151,45 @@ pub fn connect(address: &str) -> ShellResult {
     } else {
         log::error("ADB", &format!("Connect failed: {} {}", r.stdout, r.stderr));
     }
+    r
+}
+
+/// Pair an Android 11+ wireless-debugging pairing server using a code or QR secret.
+pub fn pair(address: &str, pairing_code: &str) -> ShellResult {
+    let address = address.trim();
+    let pairing_code = pairing_code.trim();
+    if address.is_empty() || pairing_code.is_empty() {
+        return invalid_adb_result("配对地址和配对码不能为空");
+    }
+    log::info("ADB", &format!("Pairing with {}", address));
+    let mut r = util::run_command_timeout(
+        &adb_bin(),
+        &["pair", address, pairing_code],
+        Duration::from_secs(20),
+    );
+    if pair_output_failed(&r.stdout, &r.stderr) {
+        r.success = false;
+    }
+    cache::invalidate_adb();
+    r
+}
+
+/// Switch a USB-connected device into legacy ADB-over-TCP mode.
+pub fn tcpip(serial: &str, port: u16) -> ShellResult {
+    let serial = serial.trim();
+    if serial.is_empty() || port == 0 {
+        return invalid_adb_result("设备和 TCP 端口不能为空");
+    }
+    let port_text = port.to_string();
+    let mut r = util::run_command_timeout(
+        &adb_bin(),
+        &["-s", serial, "tcpip", &port_text],
+        Duration::from_secs(15),
+    );
+    if connect_output_failed(&r.stdout, &r.stderr) {
+        r.success = false;
+    }
+    cache::invalidate_adb();
     r
 }
 
@@ -505,6 +563,35 @@ pub fn auto_fix() -> ShellResult {
 
 // ---- LAN scan (ADB over TCP discovery) ----
 
+fn parse_mdns_services(output: &str) -> Vec<AdbMdnsService> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 || parts[0].eq_ignore_ascii_case("list") {
+                return None;
+            }
+            let address = parts.last()?.to_string();
+            if !address.contains(':') {
+                return None;
+            }
+            Some(AdbMdnsService {
+                instance_name: parts[0].to_string(),
+                service_type: parts[1].to_string(),
+                address,
+            })
+        })
+        .collect()
+}
+
+pub fn mdns_services() -> Vec<AdbMdnsService> {
+    let result = util::run_command_timeout(&adb_bin(), &["mdns", "services"], Duration::from_secs(8));
+    if !result.success && result.stdout.trim().is_empty() {
+        return Vec::new();
+    }
+    parse_mdns_services(&result.stdout)
+}
+
 /// Best-effort detection of the host's primary LAN /24, via the default-route
 /// interface (UDP connect trick — no packets are sent).
 pub fn local_subnet() -> Result<String, String> {
@@ -683,5 +770,26 @@ mod tests {
         assert!(parse_lan_hosts("hello", 5555).is_err());
         assert!(parse_lan_hosts("1.2.3.4.5/24", 5555).is_err());
         assert!(parse_lan_hosts("999.1.1.0/24", 5555).is_err());
+    }
+
+    #[test]
+    fn parses_adb_mdns_services_and_ignores_headers() {
+        let output = "List of discovered mdns services
+adb-serial         _adb._tcp                192.168.1.20:5555
+studio-device      _adb-tls-pairing._tcp    192.168.1.20:37145
+adb-serial-suffix  _adb-tls-connect._tcp    192.168.1.20:41123";
+        let services = parse_mdns_services(output);
+        assert_eq!(services.len(), 3);
+        assert_eq!(services[1].instance_name, "studio-device");
+        assert_eq!(services[1].service_type, "_adb-tls-pairing._tcp");
+        assert_eq!(services[1].address, "192.168.1.20:37145");
+    }
+
+    #[test]
+    fn rejects_empty_pair_and_tcpip_inputs_before_spawning_adb() {
+        assert!(!pair("", "123456").success);
+        assert!(!pair("192.168.1.20:37145", "").success);
+        assert!(!tcpip("", 5555).success);
+        assert!(!tcpip("serial", 0).success);
     }
 }

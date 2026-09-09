@@ -336,3 +336,9 @@ export interface LanScanResult {
   durationMs: number;
   message: string;
 }
+
+export interface AdbMdnsService {
+  instanceName: string;
+  serviceType: string;
+  address: string;
+}

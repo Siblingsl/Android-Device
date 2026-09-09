@@ -1,8 +1,9 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { friendlyError } from "../lib/errors";
 import type {
-  AdbInfo,
-  AppInfo,
+ AdbInfo,
+  AdbMdnsService,
+ AppInfo,
   AppSettings,
   CreateInstanceRequest,
   DashboardData,
@@ -197,8 +198,11 @@ export const DeviceService = {
   adbStartServer: () => invoke<ShellResult>("adb_start_server"),
   adbKillServer: () => invoke<ShellResult>("adb_kill_server"),
   adbRestartServer: () => invoke<ShellResult>("adb_restart_server"),
-  adbConnect: (address: string) => invoke<ShellResult>("adb_connect", { address }),
-  adbDisconnect: (address: string) => invoke<ShellResult>("adb_disconnect", { address }),
+ adbConnect: (address: string) => invoke<ShellResult>("adb_connect", { address }),
+  adbPair: (address: string, pairingCode: string) => invoke<ShellResult>("adb_pair", { address, pairingCode }),
+  adbMdnsServices: () => invoke<AdbMdnsService[]>("adb_mdns_services"),
+  adbTcpip: (serial: string, port: number) => invoke<ShellResult>("adb_tcpip", { serial, port }),
+ adbDisconnect: (address: string) => invoke<ShellResult>("adb_disconnect", { address }),
   adbReconnect: (serial: string) => invoke<ShellResult>("adb_reconnect", { serial }),
   adbAutoFix: () => invoke<ShellResult>("adb_auto_fix"),
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Cable, Link2, RefreshCw, Unplug, Wrench } from "lucide-react";
+import { BookmarkPlus, Cable, Link2, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench } from "lucide-react";
+import QRCode from "qrcode";
 import { copyText } from "../lib/clipboard";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -12,7 +13,16 @@ import { probeTool, type ProbeHit } from "../hooks/useToolProbe";
 import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
-import type { AdbInfo, LanScanResult } from "../types";
+import {
+  findPairingService,
+  isAdbConnectService,
+  isAdbPairingService,
+  normalizeWirelessAddress,
+  runWithConcurrency,
+  upsertSavedWirelessAddress,
+  type SavedWirelessAddress,
+} from "../lib/wirelessDebug";
+import type { AdbInfo, AdbMdnsService, LanScanResult } from "../types";
 
 export function AdbPage() {
   const [info, setInfo] = useState<AdbInfo | null>(null);
@@ -36,6 +46,39 @@ export function AdbPage() {
   const [lanAuto, setLanAuto] = useState(true);
   const [lanScanning, setLanScanning] = useState(false);
   const [lanResult, setLanResult] = useState<LanScanResult | null>(null);
+  const [pairAddress, setPairAddress] = useState("");
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [mdnsServices, setMdnsServices] = useState<AdbMdnsService[]>([]);
+  const [mdnsLoading, setMdnsLoading] = useState(false);
+  const mdnsBusy = useRef(false);
+  const [qrPair, setQrPair] = useState<{
+    instanceName: string;
+    pairingSecret: string;
+    payload: string;
+    dataUrl: string;
+  } | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState<SavedWirelessAddress[]>(() => {
+    try {
+      const raw = localStorage.getItem("rdc.adb.savedWirelessAddresses");
+      const parsed = raw ? JSON.parse(raw) as unknown : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((entry): entry is Partial<SavedWirelessAddress> => Boolean(entry) && typeof entry === "object")
+        .map((entry) => ({
+          address: normalizeWirelessAddress(typeof entry.address === "string" ? entry.address : "") || "",
+          label: typeof entry.label === "string" ? entry.label : "",
+          lastConnectedAt: typeof entry.lastConnectedAt === "string" ? entry.lastConnectedAt : "",
+        }))
+        .filter((entry) => entry.address);
+    } catch {
+      return [];
+    }
+  });
+  const [reconnectBusy, setReconnectBusy] = useState(false);
+  const [tcpipSerial, setTcpipSerial] = useState("");
+  const [tcpipPort, setTcpipPort] = useState("5555");
   const loadSequence = useRef(createRequestSequence()).current;
 
   useEffect(() => {
@@ -106,6 +149,191 @@ export function AdbPage() {
     );
   };
 
+  const connectWirelessAddress = async (rawAddress: string, label = rawAddress) => {
+    const target = normalizeWirelessAddress(rawAddress);
+    if (!target) {
+      setStatusText(t("adb.wireless.invalidAddress"));
+      void alert(t("adb.wireless.invalidAddress"));
+      return false;
+    }
+    setStatusText(t("adb.connecting", { address: target }));
+    try {
+      const r = await DeviceService.adbConnect(target);
+      const message = (r.success ? r.stdout : r.stderr || r.stdout || t("adb.connectFailed")).trim();
+      setStatusText(message || (r.success ? t("adb.connected") : t("adb.connectFailed")));
+      if (!r.success) {
+        void alert(message || t("adb.connectFailed"));
+        return false;
+      }
+      setSavedAddresses((entries) => upsertSavedWirelessAddress(entries, target, label));
+      await load();
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatusText(message || t("adb.connectFailed"));
+      void alert(message || t("adb.connectFailed"));
+      return false;
+    }
+  };
+
+  const refreshMdnsServices = async (silent = false) => {
+    if (!adbOk || mdnsBusy.current) return [];
+    mdnsBusy.current = true;
+    setMdnsLoading(true);
+    try {
+      const services = await DeviceService.adbMdnsServices();
+      setMdnsServices(services);
+      if (!silent) setStatusText(t("adb.wireless.mdnsDone", { n: services.length }));
+      return services;
+    } catch (e) {
+      if (!silent) {
+        const message = e instanceof Error ? e.message : String(e);
+        setStatusText(t("adb.wireless.mdnsFailed", { msg: message }));
+        void alert(t("adb.wireless.mdnsFailed", { msg: message }));
+      }
+      return [];
+    } finally {
+      mdnsBusy.current = false;
+      setMdnsLoading(false);
+    }
+  };
+
+  const pairWirelessAddress = async (rawAddress = pairAddress, secret = pairingCode) => {
+    const target = normalizeWirelessAddress(rawAddress);
+    const code = secret.trim();
+    if (!target || !code) {
+      setStatusText(t("adb.wireless.invalidPair"));
+      void alert(t("adb.wireless.invalidPair"));
+      return false;
+    }
+    setPairAddress(target);
+    setPairingCode(code);
+    setPairingBusy(true);
+    setStatusText(t("adb.wireless.pairing", { address: target }));
+    try {
+      const r = await DeviceService.adbPair(target, code);
+      const message = (r.success ? r.stdout : r.stderr || r.stdout || t("adb.wireless.pairFailed")).trim();
+      setStatusText(message || (r.success ? t("adb.wireless.paired") : t("adb.wireless.pairFailed")));
+      if (!r.success) {
+        void alert(message || t("adb.wireless.pairFailed"));
+        return false;
+      }
+      await refreshMdnsServices(true);
+      await load();
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatusText(message || t("adb.wireless.pairFailed"));
+      void alert(message || t("adb.wireless.pairFailed"));
+      return false;
+    } finally {
+      setPairingBusy(false);
+    }
+  };
+
+  const createQrPairing = async () => {
+    setQrBusy(true);
+    try {
+      const bytes = new Uint8Array(10);
+      globalThis.crypto?.getRandomValues(bytes);
+      const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const suffix = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+      const instanceName = "studio-rdc@" + suffix;
+      const secretBytes = new Uint8Array(10);
+      globalThis.crypto?.getRandomValues(secretBytes);
+      const pairingSecret = Array.from(secretBytes, (byte) => String(byte % 10)).join("");
+      const escapeQr = (value: string) => value.replace(/[\\;,:]/g, (character) => "\\" + character);
+      const payload = "WIFI:T:ADB;S:" + escapeQr(instanceName) + ";P:" + escapeQr(pairingSecret) + ";;";
+      const dataUrl = await QRCode.toDataURL(payload, {
+        width: 220,
+        margin: 1,
+        errorCorrectionLevel: "M",
+      });
+      setQrPair({ instanceName, pairingSecret, payload, dataUrl });
+      setPairingCode(pairingSecret);
+      setStatusText(t("adb.wireless.qrReady"));
+      await refreshMdnsServices(true);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatusText(t("adb.wireless.qrFailed", { msg: message }));
+      void alert(t("adb.wireless.qrFailed", { msg: message }));
+    } finally {
+      setQrBusy(false);
+    }
+  };
+
+  const pairGeneratedQr = async () => {
+    if (!qrPair) return;
+    const services = await refreshMdnsServices(true);
+    const pairingService = findPairingService(services, qrPair.instanceName);
+    if (!pairingService) {
+      setStatusText(t("adb.wireless.qrServiceMissing", { name: qrPair.instanceName }));
+      void alert(t("adb.wireless.qrServiceMissing", { name: qrPair.instanceName }));
+      return;
+    }
+    await pairWirelessAddress(pairingService.address, qrPair.pairingSecret);
+  };
+
+  const saveWirelessAddress = () => {
+    const target = normalizeWirelessAddress(address);
+    if (!target) {
+      setStatusText(t("adb.wireless.invalidAddress"));
+      void alert(t("adb.wireless.invalidAddress"));
+      return;
+    }
+    setSavedAddresses((entries) => upsertSavedWirelessAddress(entries, target));
+    setStatusText(t("adb.wireless.saved", { address: target }));
+  };
+
+  const reconnectSavedAddresses = async () => {
+    if (!savedAddresses.length || reconnectBusy) return;
+    setReconnectBusy(true);
+    setStatusText(t("adb.wireless.reconnecting", { n: savedAddresses.length }));
+    try {
+      const results = await runWithConcurrency(savedAddresses, 3, async (entry) => {
+        try {
+          const result = await DeviceService.adbConnect(entry.address);
+          return { entry, success: result.success };
+        } catch {
+          return { entry, success: false };
+        }
+      });
+      const successful = results.filter((result) => result.success).map((result) => result.entry);
+      setSavedAddresses((entries) => successful.reduce(
+        (next, entry) => upsertSavedWirelessAddress(next, entry.address, entry.label),
+        entries,
+      ));
+      setStatusText(t("adb.wireless.reconnectedSummary", {
+        ok: successful.length,
+        n: savedAddresses.length,
+      }));
+      await load();
+    } finally {
+      setReconnectBusy(false);
+    }
+  };
+
+  const switchTcpip = async () => {
+    const port = Number(tcpipPort);
+    if (!tcpipSerial || !Number.isInteger(port) || port < 1 || port > 65535) {
+      setStatusText(t("adb.wireless.invalidTcpip"));
+      void alert(t("adb.wireless.invalidTcpip"));
+      return;
+    }
+    setStatusText(t("adb.wireless.tcpipStarting", { serial: tcpipSerial, port }));
+    try {
+      const r = await DeviceService.adbTcpip(tcpipSerial, port);
+      const message = (r.success ? r.stdout : r.stderr || r.stdout || t("adb.wireless.tcpipFailed")).trim();
+      setStatusText(message || (r.success ? t("adb.wireless.tcpipDone") : t("adb.wireless.tcpipFailed")));
+      if (!r.success) void alert(message || t("adb.wireless.tcpipFailed"));
+      else await load();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatusText(message || t("adb.wireless.tcpipFailed"));
+      void alert(message || t("adb.wireless.tcpipFailed"));
+    }
+  };
+
   const load = async () => {
     const token = loadSequence.begin();
     setLoading(true);
@@ -144,6 +372,28 @@ export function AdbPage() {
       /* ignore */
     }
   }, [address]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify(savedAddresses));
+    } catch {
+      /* ignore */
+    }
+  }, [savedAddresses]);
+
+  useEffect(() => {
+    if (!adbOk) return;
+    const refresh = () => void refreshMdnsServices(true);
+    void refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [adbOk]);
+
+  useEffect(() => {
+    if (tcpipSerial || !info?.devices.length) return;
+    const usbDevice = info.devices.find((device) => !device.serial.includes(":"));
+    if (usbDevice) setTcpipSerial(usbDevice.serial);
+  }, [info, tcpipSerial]);
 
   return (
     <div>
@@ -281,6 +531,161 @@ export function AdbPage() {
         )}
       </Card>
 
+      <div className="grid-2 wireless-debug-grid">
+        <Card title={t("adb.wireless.title")}>
+          <div className="wireless-form-grid">
+            <div className="field">
+              <label>{t("adb.wireless.pairAddress")}</label>
+              <input
+                aria-label={t("adb.wireless.pairAddress")}
+                value={pairAddress}
+                onChange={(e) => setPairAddress(e.target.value)}
+                placeholder="192.168.1.20:37145"
+                disabled={pairingBusy}
+              />
+            </div>
+            <div className="field">
+              <label>{t("adb.wireless.pairingCode")}</label>
+              <input
+                aria-label={t("adb.wireless.pairingCode")}
+                value={pairingCode}
+                onChange={(e) => setPairingCode(e.target.value)}
+                placeholder="123456"
+                disabled={pairingBusy}
+              />
+            </div>
+          </div>
+          <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+            <Button
+              variant="primary"
+              loading={pairingBusy}
+              disabled={!adbOk || pairingBusy}
+              onClick={() => void pairWirelessAddress()}
+            >
+              {t("adb.wireless.pair")}
+            </Button>
+            <span className="muted wireless-help">{t("adb.wireless.pairHint")}</span>
+          </div>
+          <div className="wireless-qr-block">
+            <div className="row-between">
+              <div>
+                <div className="wireless-section-title"><QrCode size={14} />{t("adb.wireless.qrTitle")}</div>
+                <div className="muted wireless-help">{t("adb.wireless.qrHint")}</div>
+              </div>
+              <Button size="sm" variant="ghost" icon={<QrCode size={14} />} loading={qrBusy} disabled={!adbOk} onClick={() => void createQrPairing()}>
+                {t("adb.wireless.generateQr")}
+              </Button>
+            </div>
+            {qrPair ? (
+              <div className="wireless-qr-result">
+                <img src={qrPair.dataUrl} alt={t("adb.wireless.qrAlt")} width={180} height={180} />
+                <div className="wireless-qr-meta">
+                  <span className="muted">{t("adb.wireless.qrScanStatus")}</span>
+                  <span className="mono">{qrPair.instanceName}</span>
+                  <span className="muted">{t("adb.wireless.qrSecret")}</span>
+                  <span className="mono">{qrPair.pairingSecret}</span>
+                  <div className="row" style={{ flexWrap: "wrap" }}>
+                    <Button size="sm" variant="primary" loading={pairingBusy} disabled={pairingBusy} onClick={() => void pairGeneratedQr()}>
+                      {t("adb.wireless.qrPair")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void copyText(qrPair.payload)}>
+                      {t("adb.wireless.copyQr")}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </Card>
+
+        <Card
+          title={t("adb.wireless.savedTitle")}
+          action={
+            <Button size="sm" variant="ghost" loading={reconnectBusy} disabled={!adbOk || !savedAddresses.length} onClick={() => void reconnectSavedAddresses()}>
+              {t("adb.wireless.reconnectAll")}
+            </Button>
+          }
+        >
+          {savedAddresses.length ? (
+            <div className="wireless-saved-list">
+              {savedAddresses.map((entry) => (
+                <div className="wireless-saved-row" key={entry.address}>
+                  <div>
+                    <div>{entry.label}</div>
+                    <div className="muted mono">{entry.address}</div>
+                  </div>
+                  <div className="row">
+                    <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
+                      {t("adb.connect")}
+                    </Button>
+                    <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => setSavedAddresses((items) => items.filter((item) => item.address !== entry.address))} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">{t("adb.wireless.noSaved")}</div>
+          )}
+          <div className="wireless-divider" />
+          <div className="wireless-section-title"><Usb size={14} />{t("adb.wireless.tcpipTitle")}</div>
+          <div className="row wireless-tcpip-row">
+            <select value={tcpipSerial} onChange={(e) => setTcpipSerial(e.target.value)} disabled={!adbOk}>
+              <option value="">{t("adb.wireless.selectUsb")}</option>
+              {info?.devices.filter((device) => !device.serial.includes(":")).map((device) => (
+                <option key={device.serial} value={device.serial}>{device.serial}</option>
+              ))}
+            </select>
+            <input value={tcpipPort} onChange={(e) => setTcpipPort(e.target.value)} inputMode="numeric" aria-label={t("adb.wireless.tcpipPort")} />
+            <Button size="sm" variant="secondary" disabled={!adbOk || !tcpipSerial} onClick={() => void switchTcpip()}>
+              {t("adb.wireless.enableTcpip")}
+            </Button>
+          </div>
+          <div className="muted wireless-help">{t("adb.wireless.tcpipHint")}</div>
+        </Card>
+      </div>
+
+      <Card
+        title={t("adb.wireless.mdnsTitle")}
+        action={
+          <Button size="sm" variant="ghost" icon={<RefreshCw size={14} />} loading={mdnsLoading} disabled={!adbOk} onClick={() => void refreshMdnsServices()}>
+            {t("adb.wireless.refreshMdns")}
+          </Button>
+        }
+      >
+        <div className="row wireless-mdns-summary">
+          <Radio size={14} />
+          <span className="muted">{t("adb.wireless.mdnsHint")}</span>
+          <span className="badge">{mdnsServices.length}</span>
+        </div>
+        {mdnsServices.length ? (
+          <div className="wireless-mdns-list">
+            {mdnsServices.map((service) => {
+              const pairing = isAdbPairingService(service);
+              const connect = isAdbConnectService(service);
+              return (
+                <div className="wireless-mdns-row" key={service.instanceName + service.serviceType + service.address}>
+                  <div>
+                    <div className="mono">{service.instanceName}</div>
+                    <div className="muted">{service.serviceType} · {service.address}</div>
+                  </div>
+                  {pairing ? (
+                    <Button size="sm" variant="secondary" disabled={!pairingCode || pairingBusy} onClick={() => void pairWirelessAddress(service.address)}>
+                      {t("adb.wireless.usePairingService")}
+                    </Button>
+                  ) : connect ? (
+                    <Button size="sm" variant="primary" disabled={!adbOk} onClick={() => void connectWirelessAddress(service.address, service.instanceName)}>
+                      {t("adb.wireless.connectService")}
+                    </Button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-state">{t("adb.wireless.noMdns")}</div>
+        )}
+      </Card>
+
       <div className="grid-2">
         <Card title={t("adb.connectManager")}>
           <div className="field">
@@ -293,13 +698,7 @@ export function AdbPage() {
                 onKeyDown={(e) => {
                   if (e.key !== "Enter" || !adbOk) return;
                   e.preventDefault();
-                  void (async () => {
-                    setStatusText(t("adb.connecting", { address }));
-                    const r = await DeviceService.adbConnect(address);
-                    setStatusText(r.success ? r.stdout || t("adb.connected") : r.stderr || r.stdout || t("adb.connectFailed"));
-                    if (!r.success) void alert(r.stderr || r.stdout || t("adb.connectFailed"));
-                    await load();
-                  })();
+                  void connectWirelessAddress(address);
                 }}
                 placeholder="ip:port"
               />
@@ -308,15 +707,18 @@ export function AdbPage() {
                 icon={<Link2 size={14} />}
                 disabled={!adbOk}
                 title={tools.adb && !tools.adb.ok ? t("adb.unavailable", { text: tools.adb.text }) : undefined}
-                onClick={async () => {
-                  setStatusText(t("adb.connecting", { address }));
-                  const r = await DeviceService.adbConnect(address);
-                  setStatusText(r.success ? r.stdout || t("adb.connected") : r.stderr || r.stdout || t("adb.connectFailed"));
-                  if (!r.success) void alert(r.stderr || r.stdout || t("adb.connectFailed"));
-                  await load();
-                }}
+                onClick={() => void connectWirelessAddress(address)}
               >
                 {t("adb.connect")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<BookmarkPlus size={14} />}
+                disabled={!adbOk}
+                onClick={saveWirelessAddress}
+              >
+                {t("adb.wireless.saveAddress")}
               </Button>
               <Button
                 disabled={!address.includes(":")}

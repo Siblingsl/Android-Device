@@ -455,6 +455,15 @@ pub struct LanScanResult {
     pub message: String,
 }
 
+/// One service discovered through ADB's mDNS backend.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AdbMdnsService {
+    pub instance_name: String,
+    pub service_type: String,
+    pub address: String,
+}
+
 /// WSL2 custom binder kernel status for Redroid + Docker Desktop.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
