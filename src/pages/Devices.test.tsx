@@ -246,6 +246,28 @@ describe("Devices batch controls", () => {
     expect(within(row).getByText("1080x1920")).toBeTruthy();
   }, 15_000);
 
+  it("keeps the identity column in a compact three-level hierarchy", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device", dataVolume: "data-one" },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    const identity = row.querySelector(".devices-table-identity");
+    expect(identity?.querySelector(".devices-table-primary")).toBeTruthy();
+    expect(identity?.querySelector(".devices-table-note")).toBeTruthy();
+    expect(identity?.querySelector(".devices-table-identifiers")).toBeTruthy();
+    expect(identity?.querySelector(".devices-table-supporting")).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "编辑备注 设备 one" })).toBeTruthy();
+    expect(within(row).getByText(/one-serial/)).toBeTruthy();
+    expect(within(row).getByText("Android 13 · 2 CPU · 2g RAM")).toBeTruthy();
+  }, 15_000);
+
   it("groups status, services, and runtime details while preserving their values", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
       {

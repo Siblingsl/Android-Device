@@ -1729,16 +1729,20 @@ export function Devices() {
                             >
                               {d.name}
                             </button>
+                          </div>
+                          <div className="devices-table-note">
                             <DeviceNoteEditor
                               deviceName={d.name}
                               value={deviceNotes[d.id]}
                               onSave={(value) => saveDeviceNote(d.id, value)}
                             />
                           </div>
-                          <div className="devices-table-secondary">
+                          <div className="devices-table-identifiers devices-table-secondary">
                             <span className="devices-table-serial mono">
                               {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
                             </span>
+                          </div>
+                          <div className="devices-table-supporting">
                             <span className="devices-table-meta">
                               Android {d.androidVersion || "—"} · {d.cpu || "—"} CPU · {d.ram || "—"} RAM
                             </span>

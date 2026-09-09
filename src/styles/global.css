@@ -1648,11 +1648,15 @@ a {
 .devices-table-row:hover td { background: var(--bg-hover); }
 .devices-table-check { width: 32px; text-align: center !important; }
 .devices-table-check input { width: 14px; height: 14px; accent-color: var(--primary); }
-.devices-table-identity { display: flex; flex-direction: column; min-width: 220px; gap: 2px; }
+.devices-table-identity { display: flex; flex-direction: column; min-width: 220px; gap: 1px; }
 .devices-table-primary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; }
-.devices-table-primary .device-note-editor,
-.devices-table-primary .device-note-line { margin-top: 0; }
+.devices-table-note { display: flex; align-items: center; min-width: 0; color: var(--text-secondary); }
+.devices-table-note .device-note-editor,
+.devices-table-note .device-note-line { margin-top: 0; }
+.devices-table-identifiers { gap: 0; }
 .devices-table-secondary { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.devices-table-supporting { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; column-gap: 8px; row-gap: 1px; }
+.devices-table-supporting > * { min-width: 0; }
 .devices-table-hover-anchor { position: relative; }
 .devices-table-hover-anchor .device-hover-card { top: calc(100% + 7px); left: -6px; }
 .devices-table-name { overflow: hidden; width: fit-content; max-width: 260px; padding: 0; border: 0; color: var(--text); background: transparent; font-size: 13px; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -1705,6 +1709,7 @@ a {
   .devices-table-responsive .devices-table-identity { min-width: 0; }
   .devices-table-responsive .devices-table-primary { gap: 4px; }
   .devices-table-responsive .devices-table-secondary { gap: 1px; }
+  .devices-table-responsive .devices-table-supporting { column-gap: 5px; }
   .devices-table-responsive .devices-table-service { padding: 2px 4px; }
   .devices-table-responsive .devices-table-runtime-secondary { gap: 5px; }
   .devices-table-responsive .devices-table-action-cell { position: sticky; right: 0; z-index: 2; box-shadow: -8px 0 14px -14px var(--text); }
