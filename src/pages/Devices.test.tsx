@@ -1482,6 +1482,23 @@ describe("Devices batch controls", () => {
     expect(row.querySelector(".devices-table-action-cell")).toBeTruthy();
   });
 
+  it("keeps the table header and action rail compact and stable", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    const table = row.closest("table");
+    expect(table?.querySelector(".devices-table-head-row")).toBeTruthy();
+    expect(table?.querySelector(".devices-table-check-head")).toBeTruthy();
+    expect(table?.querySelector(".devices-table-action-head")).toBeTruthy();
+    expect(row.querySelector(".devices-table-check-cell")).toBeTruthy();
+    expect(row.querySelector(".devices-table-action-cell")).toBeTruthy();
+    expect(row.querySelector(".devices-table-actions-compact")).toBeTruthy();
+  });
+
   it("keeps the single-device serial copy failure in the status bar and alert", async () => {
     const alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);

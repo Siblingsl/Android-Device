@@ -1665,13 +1665,13 @@ export function Devices() {
           <div className="devices-table-shell devices-table-responsive">
             <table className="table devices-table">
               <thead>
-                <tr>
-                  <th aria-label={t("devices.table.select")} />
+                <tr className="devices-table-head-row">
+                  <th className="devices-table-check-head" aria-label={t("devices.table.select")} />
                   <th className="devices-table-identity-head">{t("devices.table.device")}</th>
                   <th className="devices-table-status-head">{t("devices.table.status")}</th>
                   <th className="devices-table-services-head">{t("devices.table.services")}</th>
                   <th className="devices-table-runtime-head">{t("devices.table.runtime")}</th>
-                  <th className="devices-table-action-cell">{t("devices.table.actions")}</th>
+                  <th className="devices-table-action-head devices-table-action-cell">{t("devices.table.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1693,7 +1693,7 @@ export function Devices() {
 
                   return (
                     <tr key={d.id} className="devices-table-row">
-                      <td className="devices-table-check">
+                      <td className="devices-table-check devices-table-check-cell">
                         <input
                           type="checkbox"
                           aria-label={`${t("devices.table.select")} ${d.name}`}
