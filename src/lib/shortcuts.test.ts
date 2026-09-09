@@ -5,7 +5,9 @@ import {
   findShortcutConflict,
   formatShortcut,
   matchesShortcut,
+  persistGlobalShortcutsEnabled,
   persistShortcuts,
+  readGlobalShortcutsEnabled,
   readShortcuts,
   shortcutActionForEvent,
   type ShortcutAction,
@@ -56,5 +58,15 @@ describe("application shortcuts", () => {
     expect(
       shortcutActionForEvent(new KeyboardEvent("keydown", { key: "d", altKey: true }), bindings),
     ).toBe("openDevices");
+  });
+
+  it("keeps system shortcut enablement separate and enabled by default", () => {
+    expect(readGlobalShortcutsEnabled()).toBe(true);
+
+    persistGlobalShortcutsEnabled(false);
+    expect(readGlobalShortcutsEnabled()).toBe(false);
+
+    localStorage.setItem("rdc.shortcuts.enabled", "invalid");
+    expect(readGlobalShortcutsEnabled()).toBe(true);
   });
 });

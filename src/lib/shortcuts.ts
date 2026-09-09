@@ -1,4 +1,5 @@
 export const SHORTCUTS_STORAGE_KEY = "rdc.shortcuts";
+export const GLOBAL_SHORTCUTS_ENABLED_KEY = "rdc.shortcuts.enabled";
 
 export const SHORTCUT_ACTIONS = [
   "openDashboard",
@@ -119,6 +120,22 @@ export function persistShortcuts(bindings: ShortcutBindings): void {
         ),
       ),
     );
+  } catch {
+    /* local persistence is best effort */
+  }
+}
+
+export function readGlobalShortcutsEnabled(): boolean {
+  try {
+    return localStorage.getItem(GLOBAL_SHORTCUTS_ENABLED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function persistGlobalShortcutsEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(GLOBAL_SHORTCUTS_ENABLED_KEY, enabled ? "1" : "0");
   } catch {
     /* local persistence is best effort */
   }
