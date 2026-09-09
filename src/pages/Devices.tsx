@@ -772,13 +772,13 @@ export function Devices() {
   };
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="devices-workbench">
+      <div className="page-header devices-header-rail">
         <div>
           <div className="page-title">{t("devices.page.title")}</div>
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
-        <div className="row">
+        <div className="row devices-header-actions">
           {historicalOffline.length > 0 && (
             <Button
               variant="ghost"
@@ -809,6 +809,7 @@ export function Devices() {
         </div>
       </div>
 
+      <div className="devices-history-stack">
       {offlineHistoryOpen && historicalOffline.length > 0 && (
         <Card
           className="offline-device-history-card"
@@ -929,10 +930,11 @@ export function Devices() {
           </div>
         </Card>
       )}
+      </div>
 
       {devices.length > 0 && (
-        <div className="devices-toolbar">
-          <div className="devices-toolbar-main">
+        <div className="devices-toolbar devices-query-action-deck">
+          <div className="devices-toolbar-main devices-query-rail">
           <div className="devices-toolbar-view">
           <input
             value={query}
@@ -1099,7 +1101,7 @@ export function Devices() {
           </details>
           </div>
           </div>
-          <div className="devices-toolbar-batch devices-toolbar-batch-rail">
+          <div className="devices-toolbar-batch devices-toolbar-batch-rail devices-action-deck">
           <div className="devices-toolbar-batch-supporting">
           <DeviceBroadcastInput
             disabled={selectedDevices.length === 0}
@@ -1388,6 +1390,7 @@ export function Devices() {
         </div>
       )}
 
+      <div className="devices-feedback-stack">
       {batchProgress && (
         <div
           className="row"
@@ -1620,7 +1623,9 @@ export function Devices() {
           </table>
         </Card>
       )}
+      </div>
 
+      <div className="devices-results-surface">
       {loading ? (
         <div className="device-grid">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -2195,6 +2200,7 @@ export function Devices() {
         )
       )}
 
+      </div>
     </div>
   );
 }

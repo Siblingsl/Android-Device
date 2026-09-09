@@ -186,6 +186,23 @@ describe("Devices batch controls", () => {
     expect(screen.getByRole("button", { name: "广播文本" }).closest(".devices-toolbar-batch")).toBeTruthy();
   }, 15_000);
 
+  it("presents the device page as a compact console with separated rails", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const workbench = screen.getByText("设备中心").closest(".devices-workbench");
+    expect(workbench).toBeTruthy();
+    expect(workbench?.classList.contains("devices-workbench")).toBe(true);
+    expect(screen.getByText("设备中心").closest(".devices-header-rail")).toBeTruthy();
+    expect((await screen.findByPlaceholderText("搜索名称 / Serial / 镜像")).closest(".devices-query-rail")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量投屏" }).closest(".devices-action-deck")).toBeTruthy();
+    expect(workbench?.querySelector(".devices-feedback-stack")).toBeTruthy();
+    expect(workbench?.querySelector(".devices-results-surface")).toBeTruthy();
+  }, 15_000);
+
   it("prioritizes batch actions into primary, supporting, and utility groups", async () => {
     render(
       <MemoryRouter>
