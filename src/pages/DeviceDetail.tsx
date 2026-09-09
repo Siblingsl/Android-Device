@@ -112,6 +112,13 @@ type FileTransferState = {
   cancelling: boolean;
   error: string | null;
 };
+type FileBatchTransferState = {
+  kind: "upload" | "download";
+  current: number;
+  total: number;
+  completed: number;
+  failed: number;
+};
 type InstallRetry = { path: string; name: string; error: string | null };
 
 function operationErrorMessage(error: unknown, fallback: string): string {
@@ -2085,7 +2092,8 @@ function Files({
   const [sortKey, setSortKey] = useState<"name" | "size" | "modified">("name");
   const [sortAsc, setSortAsc] = useState(true);
   const [transfer, setTransfer] = useState<FileTransferState | null>(null);
-  const transferRetry = useRef<(() => Promise<void>) | null>(null);
+  const [batchTransfer, setBatchTransfer] = useState<FileBatchTransferState | null>(null);
+  const transferRetry = useRef<(() => Promise<boolean>) | null>(null);
   const activeTransferId = useRef<string | null>(null);
   const cancelledTransferIds = useRef(new Set<string>());
   const cancelInFlight = useRef<string | null>(null);
@@ -2234,7 +2242,7 @@ function Files({
     go(path.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/");
   };
 
-  const runUpload = async (local: string, remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`) => {
+  const runUpload = async (local: string, remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`): Promise<boolean> => {
     const name = local.split(/[/\\]/).pop() || "file";
     const operationId = createTransferId();
     const state: FileTransferState = {
@@ -2258,7 +2266,7 @@ function Files({
     try {
       await listenerReady.current;
       const r = await DeviceService.uploadFileTracked(serial, local, remote, operationId);
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       if (!r.success) {
         const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.uploadFailed"));
         setStatusText(reason);
@@ -2266,24 +2274,26 @@ function Files({
         setTransfer((current) => current && current.operationId === operationId
           ? { ...current, status: "failed", cancelling: false, error: reason }
           : current);
-        return;
+        return false;
       }
       setStatusText(t("detail.files.uploadDone"));
       setTransfer(null);
       transferRetry.current = null;
       activeTransferId.current = null;
       await load();
+      return true;
     } catch (e) {
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       const reason = operationErrorMessage(e, t("detail.files.uploadFailed"));
       reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
       setTransfer((current) => current && current.operationId === operationId
         ? { ...current, status: "failed", cancelling: false, error: reason }
         : current);
+      return false;
     }
   };
 
-  const runDownload = async (f: FileEntry, local: string) => {
+  const runDownload = async (f: FileEntry, local: string): Promise<boolean> => {
     const operationId = createTransferId();
     const state: FileTransferState = {
       kind: "download",
@@ -2306,7 +2316,7 @@ function Files({
     try {
       await listenerReady.current;
       const r = await DeviceService.downloadFileTracked(serial, f.path, local, operationId);
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       if (!r.success) {
         const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.downloadFailed"));
         setStatusText(reason);
@@ -2314,7 +2324,7 @@ function Files({
         setTransfer((current) => current && current.operationId === operationId
           ? { ...current, status: "failed", cancelling: false, error: reason }
           : current);
-        return;
+        return false;
       }
       setStatusText(t("detail.files.downloadDone"));
       setTransfer((current) => current && current.operationId === operationId
@@ -2323,17 +2333,19 @@ function Files({
       if (await askConfirm(t("detail.files.confirmReveal"))) {
         await DeviceService.revealInFolder(local);
       }
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       setTransfer(null);
       transferRetry.current = null;
       activeTransferId.current = null;
+      return true;
     } catch (e) {
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       const reason = operationErrorMessage(e, t("detail.files.downloadFailed"));
       reportOperationError(e, t("detail.files.downloadFailed"), setStatusText);
       setTransfer((current) => current && current.operationId === operationId
         ? { ...current, status: "failed", cancelling: false, error: reason }
         : current);
+      return false;
     }
   };
 
@@ -2446,7 +2458,21 @@ function Files({
 
   const uploadPaths = async (localPaths: string[]) => {
     if (transferBusy || !localPaths.length) return;
-    for (const local of localPaths) await runUpload(local);
+    const isBatch = localPaths.length > 1;
+    if (isBatch) setBatchTransfer({ kind: "upload", current: 0, total: localPaths.length, completed: 0, failed: 0 });
+    for (let index = 0; index < localPaths.length; index += 1) {
+      if (isBatch) setBatchTransfer((current) => current ? { ...current, current: index + 1 } : current);
+      const ok = await runUpload(localPaths[index]);
+      if (isBatch) {
+        setBatchTransfer((current) => current ? {
+          ...current,
+          current: index + 1,
+          completed: current.completed + (ok ? 1 : 0),
+          failed: current.failed + (ok ? 0 : 1),
+        } : current);
+      }
+    }
+    if (isBatch) setBatchTransfer(null);
   };
 
   const chooseUpload = async (directory: boolean) => {
@@ -2465,7 +2491,21 @@ function Files({
       const picked = await open({ directory: true, multiple: false });
       const directory = dialogPaths(picked)[0];
       if (!directory) return;
-      for (const entry of entries) await runDownload(entry, `${directory}/${entry.name}`);
+      const isBatch = entries.length > 1;
+      if (isBatch) setBatchTransfer({ kind: "download", current: 0, total: entries.length, completed: 0, failed: 0 });
+      for (let index = 0; index < entries.length; index += 1) {
+        if (isBatch) setBatchTransfer((current) => current ? { ...current, current: index + 1 } : current);
+        const ok = await runDownload(entries[index], `${directory}/${entries[index].name}`);
+        if (isBatch) {
+          setBatchTransfer((current) => current ? {
+            ...current,
+            current: index + 1,
+            completed: current.completed + (ok ? 1 : 0),
+            failed: current.failed + (ok ? 0 : 1),
+          } : current);
+        }
+      }
+      if (isBatch) setBatchTransfer(null);
       setSelectedPaths([]);
     } catch (error) {
       if (!isDialogCancellation(error)) reportOperationError(error, t("detail.files.downloadFailed"), setStatusText);
@@ -2541,10 +2581,11 @@ function Files({
       (transfer.status === "queued" || transfer.status === "running"),
   );
   const transferBusy = Boolean(
-    transfer &&
-      !transfer.error &&
-      transfer.status !== "cancelled" &&
-      transfer.status !== "failed",
+    batchTransfer ||
+      (transfer &&
+        !transfer.error &&
+        transfer.status !== "cancelled" &&
+        transfer.status !== "failed"),
   );
   const transferLabel = transfer
     ? transfer.kind === "upload"
@@ -2664,6 +2705,16 @@ function Files({
                 {transfer.kind === "upload" ? t("detail.files.retryUpload") : t("detail.files.retryDownload")}
               </Button>
             )}
+          </div>
+        )}
+        {batchTransfer && (
+          <div className="file-transfer-batch" role="status" aria-live="polite">
+            <span>
+              {t(batchTransfer.kind === "upload" ? "detail.files.batchUpload" : "detail.files.batchDownload")} {batchTransfer.current}/{batchTransfer.total}
+            </span>
+            <span className="muted">
+              {t("detail.files.batchSummary", { completed: batchTransfer.completed, failed: batchTransfer.failed })}
+            </span>
           </div>
         )}
         <div className="row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 10, fontSize: 12 }}>

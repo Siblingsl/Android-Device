@@ -1019,6 +1019,36 @@ describe("DeviceDetail refresh ordering", () => {
     });
   });
 
+  it("shows batch progress while downloading multiple selected files", async () => {
+    const pending = deferred<ShellResult>();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("one.txt"), file("two.txt")]);
+    vi.mocked(open).mockResolvedValueOnce("C:/downloads");
+    vi.mocked(DeviceService.downloadFileTracked).mockReturnValueOnce(pending.promise);
+    vi.mocked(askConfirm).mockResolvedValue(false);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 one.txt" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 two.txt" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量下载" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("批量下载 1/2")).toBeTruthy();
+    expect(screen.getByText("已完成 0 · 失败 0")).toBeTruthy();
+
+    await act(async () => {
+      pending.resolve({ success: true, stdout: "", stderr: "", exitCode: 0 });
+      await pending.promise;
+      await Promise.resolve();
+    });
+  });
+
   it("sends cancellation once and stays silent for a cancelled transfer", async () => {
     const pending = deferred<ShellResult>();
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
