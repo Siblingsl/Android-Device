@@ -79,6 +79,22 @@ describe("AdbPage refresh ordering", () => {
     localStorage.clear();
   });
 
+  it("presents wireless debugging as a connected workbench while keeping every workflow surface", () => {
+    vi.mocked(DeviceService.getAdbInfo).mockResolvedValueOnce(adbInfo("ADB 1.0"));
+
+    const { container } = render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+
+    expect(container.querySelector(".adb-workbench")).toBeTruthy();
+    expect(container.querySelector(".adb-health-rail .grid-stats")).toBeTruthy();
+    expect(container.querySelector(".adb-connection-workspace .wireless-debug-grid")).toBeTruthy();
+    expect(container.querySelector(".adb-discovery-surface .card")).toBeTruthy();
+    expect(container.querySelector(".adb-results-surface .grid-2")).toBeTruthy();
+  });
+
   it("keeps the newest ADB information when an earlier refresh resolves later", async () => {
     const initial = deferred<AdbInfo>();
     const refreshed = deferred<AdbInfo>();

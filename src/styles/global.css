@@ -2956,6 +2956,16 @@ a {
   outline-offset: 2px;
 }
 
+.adb-workbench { max-width: 1680px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.adb-header-rail { margin-bottom: 0; }
+.adb-health-rail { padding: 9px 11px 10px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg-elevated) 88%, var(--primary) 12%); }
+.adb-tool-status-rail { margin-bottom: 8px !important; }
+.adb-metrics-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 0; }
+.adb-metrics-rail .card { min-height: 0; }
+.adb-lan-surface > .card, .adb-discovery-surface > .card { margin: 0; }
+.adb-connection-workspace .wireless-debug-grid { margin-bottom: 0; }
+.adb-connection-workspace .card { height: 100%; }
+.adb-results-surface .grid-2 { gap: 12px; }
 .wireless-debug-grid { margin-bottom: 16px; }
 .wireless-form-grid {
   display: grid;

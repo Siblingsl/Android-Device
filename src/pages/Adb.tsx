@@ -718,8 +718,8 @@ export function AdbPage() {
     && displayedSavedAddresses.every((entry) => selectedSavedAddresses.includes(entry.address));
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="adb-workbench">
+      <div className="page-header adb-header-rail">
         <div>
           <div className="page-title">{t("adb.page.title")}</div>
           <div className="page-subtitle">{t("adb.page.subtitle")}</div>
@@ -729,28 +729,31 @@ export function AdbPage() {
         </Button>
       </div>
 
-      <div className="row" style={{ marginBottom: 14, flexWrap: "wrap", gap: 16 }}>
-        <ToolStatus kind="adb" hit={tools.adb} />
-        <ToolStatus kind="docker" hit={tools.docker} />
-      </div>
+      <section className="adb-health-rail" aria-label={t("adb.page.title")}>
+        <div className="row adb-tool-status-rail" style={{ marginBottom: 14, flexWrap: "wrap", gap: 16 }}>
+          <ToolStatus kind="adb" hit={tools.adb} />
+          <ToolStatus kind="docker" hit={tools.docker} />
+        </div>
 
-      <div className="grid-stats">
-        <Card>
-          <div className="muted">{t("adb.version")}</div>
-          <div style={{ fontWeight: 700 }}>{loading ? "..." : info?.version || "—"}</div>
-        </Card>
-        <Card>
-          <div className="muted">{t("adb.serverStatus")}</div>
-          <div style={{ fontWeight: 700, color: info?.serverRunning ? "var(--success)" : "var(--danger)" }}>
-            {loading ? "..." : info?.serverRunning ? t("common.status.dockerRunning") : t("adb.serverError")}
-          </div>
-        </Card>
-        <Card>
-          <div className="muted">{t("adb.deviceCount")}</div>
-          <div style={{ fontWeight: 700 }}>{info?.devices.length ?? 0}</div>
-        </Card>
-      </div>
+        <div className="grid-stats adb-metrics-rail">
+          <Card>
+            <div className="muted">{t("adb.version")}</div>
+            <div style={{ fontWeight: 700 }}>{loading ? "..." : info?.version || "—"}</div>
+          </Card>
+          <Card>
+            <div className="muted">{t("adb.serverStatus")}</div>
+            <div style={{ fontWeight: 700, color: info?.serverRunning ? "var(--success)" : "var(--danger)" }}>
+              {loading ? "..." : info?.serverRunning ? t("common.status.dockerRunning") : t("adb.serverError")}
+            </div>
+          </Card>
+          <Card>
+            <div className="muted">{t("adb.deviceCount")}</div>
+            <div style={{ fontWeight: 700 }}>{info?.devices.length ?? 0}</div>
+          </Card>
+        </div>
+      </section>
 
+      <section className="adb-lan-surface">
       <Card
         title={t("adb.lan.title")}
         action={
@@ -852,7 +855,9 @@ export function AdbPage() {
           </>
         )}
       </Card>
+      </section>
 
+      <section className="adb-connection-workspace">
       <div className="grid-2 wireless-debug-grid">
         <Card title={t("adb.wireless.title")}>
           <div className="wireless-form-grid">
@@ -1206,7 +1211,9 @@ export function AdbPage() {
           <div className="muted wireless-help">{t("adb.wireless.tcpipHint")}</div>
         </Card>
       </div>
+      </section>
 
+      <section className="adb-discovery-surface">
       <Card
         title={t("adb.wireless.mdnsTitle")}
         action={
@@ -1248,7 +1255,9 @@ export function AdbPage() {
           <div className="empty-state">{t("adb.wireless.noMdns")}</div>
         )}
       </Card>
+      </section>
 
+      <section className="adb-results-surface">
       <div className="grid-2">
         <Card title={t("adb.connectManager")}>
           <div className="field">
@@ -1462,6 +1471,7 @@ export function AdbPage() {
           )}
         </Card>
       </div>
+      </section>
     </div>
   );
 }
