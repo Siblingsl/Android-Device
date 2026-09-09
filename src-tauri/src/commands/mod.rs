@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::services::{
-    adb, copilot, device, docker, log, root, scrcpy, settings, terminal, transfer, wsl_kernel,
+    adb, copilot, device, docker, log, root, scrcpy, settings, terminal, transfer, updates, wsl_kernel,
 };
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -29,6 +29,20 @@ pub async fn copilot_completion(
     request: copilot::CopilotCompletionRequest,
 ) -> Result<serde_json::Value, String> {
     copilot::completion(request).await
+}
+
+// ---- Application updates ----
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<updates::UpdateCheckResult, String> {
+    updates::check().await
+}
+
+#[tauri::command]
+pub async fn download_update(
+    request: updates::UpdateDownloadRequest,
+) -> Result<String, String> {
+    updates::download(request).await
 }
 
 // ---- System / Dashboard ----

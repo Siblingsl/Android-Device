@@ -23,6 +23,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // System
             copilot_completion,
+            check_for_updates,
+            download_update,
             get_dashboard,
             get_system_status,
             // Devices

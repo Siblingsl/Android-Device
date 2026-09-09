@@ -9,5 +9,6 @@ pub mod scrcpy;
 pub mod settings;
 pub mod terminal;
 pub mod transfer;
+pub mod updates;
 pub mod util;
 pub mod wsl_kernel;

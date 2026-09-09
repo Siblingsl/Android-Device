@@ -50,6 +50,32 @@ export interface CopilotCompletionResponse {
   }>;
 }
 
+export interface UpdateAsset {
+  name: string;
+  size: number;
+  downloadUrl: string;
+}
+
+export interface UpdateRelease {
+  tagName: string;
+  name: string;
+  body: string;
+  htmlUrl: string;
+  publishedAt: string;
+  assets: UpdateAsset[];
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  updateAvailable: boolean;
+  latest: UpdateRelease | null;
+}
+
+export interface UpdateDownloadRequest {
+  downloadUrl: string;
+  name: string;
+}
+
 /** Unified Device Service — all device capabilities go through here */
 const invoke = async <T,>(
   cmd: string,
@@ -66,6 +92,9 @@ export const DeviceService = {
   // The native command owns the provider request boundary; the key is never logged by the UI.
   copilotCompletion: (request: CopilotCompletionRequest) =>
     invoke<CopilotCompletionResponse>("copilot_completion", { request }),
+  checkForUpdates: () => invoke<UpdateCheckResult>("check_for_updates"),
+  downloadUpdate: (request: UpdateDownloadRequest) =>
+    invoke<string>("download_update", { request }),
 
   // System
   getDashboard: () => invoke<DashboardData>("get_dashboard"),

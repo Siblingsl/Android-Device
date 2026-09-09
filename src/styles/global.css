@@ -1173,6 +1173,68 @@ a {
   font-size: 12px;
 }
 
+.update-release-meta,
+.update-download-path {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.update-release-meta a {
+  color: var(--primary);
+}
+
+.update-download-path {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--success);
+}
+
+.update-asset-list {
+  display: grid;
+  gap: 8px;
+}
+
+.update-asset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.update-asset-row:last-child {
+  border-bottom: 0;
+}
+
+.update-asset-row > div:first-child {
+  min-width: 0;
+}
+
+.update-asset-row strong,
+.update-asset-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-asset-row strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.update-asset-row span {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 @media (max-width: 900px) {
   .update-grid {
     grid-template-columns: 1fr;
