@@ -931,7 +931,8 @@ export function Devices() {
       )}
 
       {devices.length > 0 && (
-        <div className="row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+        <div className="devices-toolbar">
+          <div className="devices-toolbar-view">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -967,6 +968,8 @@ export function Devices() {
               {t("devices.view.cards")}
             </Button>
           </div>
+          </div>
+          <div className="devices-toolbar-selection">
           <Button
             size="sm"
             variant="ghost"
@@ -1003,6 +1006,8 @@ export function Devices() {
           <span className="muted" style={{ fontSize: 12 }}>
             {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
           </span>
+          </div>
+          <div className="devices-toolbar-advanced">
           <details className="batch-layout-details">
             <summary>{t("devices.layout.title")}</summary>
             <div className="batch-layout-fields">
@@ -1089,6 +1094,8 @@ export function Devices() {
             </div>
             <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
           </details>
+          </div>
+          <div className="devices-toolbar-batch">
           <DeviceBroadcastInput
             disabled={selectedDevices.length === 0}
             busy={busy}
@@ -1363,6 +1370,7 @@ export function Devices() {
             <option value="back">{t("devices.batch.back")}</option>
             <option value="recent">{t("devices.batch.recent")}</option>
           </select>
+          </div>
         </div>
       )}
 

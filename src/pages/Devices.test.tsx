@@ -172,6 +172,20 @@ describe("Devices batch controls", () => {
     expect(await screen.findByText(/批量 ADB 连接 已停止 · 1\/2 成功/)).toBeTruthy();
   }, 15_000);
 
+  it("organizes the device toolbar into view, batch, and advanced groups", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const search = await screen.findByPlaceholderText("搜索名称 / Serial / 镜像");
+    expect(search.closest(".devices-toolbar-view")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量连接" }).closest(".devices-toolbar-batch")).toBeTruthy();
+    expect(screen.getByText("窗口布局").closest(".devices-toolbar-advanced")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "广播文本" }).closest(".devices-toolbar-batch")).toBeTruthy();
+  }, 15_000);
+
   it("shows devices in a compact table with row-level actions by default", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
       { ...device("one"), online: true, adbStatus: "device" },

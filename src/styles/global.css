@@ -1616,6 +1616,17 @@ a {
 
 .devices-view-toggle { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-elevated); }
 .devices-view-toggle .btn { min-height: 26px; }
+.devices-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 10px; align-items: center; margin-bottom: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-hover); }
+.devices-toolbar-view, .devices-toolbar-selection, .devices-toolbar-batch { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.devices-toolbar-view input, .devices-toolbar-view select { border: 1px solid var(--border); color: var(--text); background: var(--bg-card); }
+.devices-toolbar-view input:focus-visible, .devices-toolbar-view select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.devices-toolbar-selection { justify-content: flex-end; }
+.devices-toolbar-selection .muted { white-space: nowrap; }
+.devices-toolbar-advanced { position: relative; display: inline-flex; align-items: center; }
+.devices-toolbar-batch { grid-column: 1 / -1; padding-top: 7px; border-top: 1px solid var(--border); }
+.devices-toolbar-batch > .btn, .devices-toolbar-batch > select { flex: 0 0 auto; }
+.devices-toolbar-batch > select { height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--bg-card); }
+.devices-toolbar-batch > select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .devices-table-shell { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
 .devices-table { min-width: 920px; }
 .devices-table th, .devices-table td { padding: 8px 10px; vertical-align: middle; }
@@ -1679,6 +1690,10 @@ a {
 }
 
 @media (max-width: 720px) {
+  .devices-toolbar { grid-template-columns: 1fr; }
+  .devices-toolbar-selection { justify-content: flex-start; }
+  .devices-toolbar-batch { grid-column: auto; }
+  .devices-toolbar-view input { flex: 1 1 220px; min-width: 0 !important; }
   .devices-table-responsive .devices-table { min-width: 700px; }
   .devices-table-responsive .devices-table-actions { gap: 3px; }
   .devices-table-responsive .devices-table-actions .device-row-action { width: 28px; min-width: 28px; }
