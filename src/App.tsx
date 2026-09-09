@@ -10,6 +10,7 @@ import { VolumesPage } from "./pages/Volumes";
 import { LogsPage } from "./pages/Logs";
 import { SettingsPage } from "./pages/Settings";
 import { MonitorAlertsPage } from "./pages/MonitorAlerts";
+import { TerminalPage } from "./pages/Terminal";
 import { I18nProvider } from "./i18n";
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
     <I18nProvider>
       <HashRouter>
         <Routes>
+          <Route path="terminal" element={<TerminalPage />} />
           <Route element={<AppLayout />}>
             <Route index element={<Dashboard />} />
             <Route path="devices" element={<Devices />} />
