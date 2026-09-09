@@ -14,6 +14,7 @@ import { TerminalPage } from "./pages/Terminal";
 import { FloatingControlPage } from "./pages/FloatingControl";
 import { AutomationPage } from "./pages/Automation";
 import { CopilotPage } from "./pages/Copilot";
+import { UpdateCenterPage } from "./pages/UpdateCenter";
 import { I18nProvider } from "./i18n";
 
 export default function App() {
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="monitor" element={<MonitorAlertsPage />} />
             <Route path="automation" element={<AutomationPage />} />
             <Route path="copilot" element={<CopilotPage />} />
+            <Route path="updates" element={<UpdateCenterPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

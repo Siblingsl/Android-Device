@@ -1109,6 +1109,76 @@ a {
 .card-title { font-weight: 600; font-size: 14px; }
 .card-body { padding: 14px 16px 16px; }
 
+.update-workbench {
+  min-width: 0;
+}
+
+.update-header-rail {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.update-header-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.update-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.update-status-card .card-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: start;
+}
+
+.update-status-symbol {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 10px;
+}
+
+.update-status-card strong {
+  display: block;
+  font-size: 13px;
+}
+
+.update-status-card p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.update-meta-row {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .update-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-workbench {
   min-width: 0;
 }

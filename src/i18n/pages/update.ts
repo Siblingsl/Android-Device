@@ -1,0 +1,31 @@
+export const updateZh: Record<string, string> = {
+  "updates.title": "更新中心",
+  "updates.subtitle": "检查应用版本、下载更新并访问项目文档",
+  "updates.check": "检查更新",
+  "updates.docs": "打开项目文档",
+  "updates.statusTitle": "更新服务",
+  "updates.sourceMissing": "当前未配置更新源",
+  "updates.sourceMissingDetail": "本版本未配置检查与下载服务，不会伪造更新结果。",
+  "updates.unavailable": "更新服务尚未配置",
+  "updates.unavailableDetail": "更新服务尚未配置，无法检查或下载。",
+  "updates.currentVersion": "当前版本",
+  "updates.downloadTitle": "下载状态",
+  "updates.downloadUnavailable": "暂无可用更新源或下载任务。",
+  "updates.unavailableShort": "更新服务尚未配置，无法检查或下载",
+};
+
+export const updateEn: Record<string, string> = {
+  "updates.title": "Updates",
+  "updates.subtitle": "Check the app version, download updates and open project documentation",
+  "updates.check": "Check for updates",
+  "updates.docs": "Open project docs",
+  "updates.statusTitle": "Update service",
+  "updates.sourceMissing": "No update source configured",
+  "updates.sourceMissingDetail": "This build has no check or download service configured, so it will not report fake update results.",
+  "updates.unavailable": "Update service is not configured",
+  "updates.unavailableDetail": "The update service is not configured, so updates cannot be checked or downloaded.",
+  "updates.currentVersion": "Current version",
+  "updates.downloadTitle": "Download status",
+  "updates.downloadUnavailable": "No update source or download task is available.",
+  "updates.unavailableShort": "Update service is not configured; check and download are unavailable",
+};

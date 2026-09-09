@@ -7,6 +7,7 @@ import {
   FileBox,
   LayoutDashboard,
   Package,
+  RefreshCw,
   ScrollText,
   Settings,
   Smartphone,
@@ -40,6 +41,7 @@ const tools: ToolItem[] = [
   { kind: "link", to: "/copilot", labelKey: "common.nav.copilot", descriptionKey: "common.tool.copilotHint", icon: Bot },
   { kind: "link", to: "/logs", labelKey: "common.nav.logs", descriptionKey: "common.tool.logsHint", icon: ScrollText },
   { kind: "link", to: "/settings", labelKey: "common.nav.settings", descriptionKey: "common.tool.settingsHint", icon: Settings },
+  { kind: "link", to: "/updates", labelKey: "common.nav.updates", descriptionKey: "common.tool.updatesHint", icon: RefreshCw },
 ];
 
 export function ToolLauncher({ onNavigate }: { onNavigate?: () => void }) {
