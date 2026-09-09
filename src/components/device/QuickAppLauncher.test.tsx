@@ -8,6 +8,7 @@ vi.mock("../../services/deviceService", () => ({
   DeviceService: {
     listApps: vi.fn(),
     startApp: vi.fn(),
+    startAppOnDisplay: vi.fn(),
   },
 }));
 
@@ -54,8 +55,10 @@ describe("QuickAppLauncher", () => {
   beforeEach(() => {
     vi.mocked(DeviceService.listApps).mockReset();
     vi.mocked(DeviceService.startApp).mockReset();
+    vi.mocked(DeviceService.startAppOnDisplay).mockReset();
     vi.mocked(DeviceService.listApps).mockResolvedValue([app("com.demo.app")]);
     vi.mocked(DeviceService.startApp).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.startAppOnDisplay).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
   });
 
   afterEach(() => cleanup());
@@ -71,7 +74,7 @@ describe("QuickAppLauncher", () => {
     });
 
     expect(DeviceService.listApps).toHaveBeenCalledWith("two-serial", false);
-    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "com.demo.app" } });
+    fireEvent.change(screen.getByLabelText("应用"), { target: { value: "com.demo.app" } });
     fireEvent.click(screen.getByRole("button", { name: "启动" }));
     await act(async () => {
       await Promise.resolve();
@@ -80,6 +83,30 @@ describe("QuickAppLauncher", () => {
 
     expect(DeviceService.startApp).toHaveBeenCalledWith("two-serial", "com.demo.app");
     expect(setStatus).toHaveBeenCalled();
+  });
+
+  it("launches the selected online devices on the chosen display", async () => {
+    const setStatus = vi.fn();
+    const selected = [device("one"), device("two")];
+    render(<QuickAppLauncher devices={selected} selectedDevices={selected} setStatusText={setStatus} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "快速启动应用" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getByLabelText("应用"), { target: { value: "com.demo.app" } });
+    fireEvent.change(screen.getByLabelText("启动方式"), { target: { value: "display" } });
+    fireEvent.change(screen.getByLabelText("显示屏编号"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "启动" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.startAppOnDisplay).toHaveBeenNthCalledWith(1, "one-serial", "com.demo.app", 2);
+    expect(DeviceService.startAppOnDisplay).toHaveBeenNthCalledWith(2, "two-serial", "com.demo.app", 2);
+    expect(setStatus).toHaveBeenCalledWith("已启动 2 台设备");
   });
 
   it("keeps the launcher unavailable when no online device exists", () => {
