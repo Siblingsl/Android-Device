@@ -15,6 +15,9 @@ vi.mock("../services/deviceService", () => ({
     adbTcpip: vi.fn(),
   },
 }));
+vi.mock("../lib/dialogs", () => ({
+  askConfirm: vi.fn(),
+}));
 vi.mock("qrcode", () => ({
   default: {
     toDataURL: vi.fn(async () => "data:image/png;base64,qr"),
@@ -38,6 +41,7 @@ vi.mock("../stores/appStore", () => ({
 
 const { DeviceService } = await import("../services/deviceService");
 const { probeTool } = await import("../hooks/useToolProbe");
+const { askConfirm } = await import("../lib/dialogs");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -67,6 +71,7 @@ describe("AdbPage refresh ordering", () => {
     vi.mocked(DeviceService.adbPair).mockResolvedValue({ success: true, stdout: "Successfully paired", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.adbConnect).mockResolvedValue({ success: true, stdout: "connected to device", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.adbTcpip).mockResolvedValue({ success: true, stdout: "restarting in TCP mode port: 5555", stderr: "", exitCode: 0 });
+    vi.mocked(askConfirm).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -287,5 +292,48 @@ describe("AdbPage refresh ordering", () => {
       { address: "192.168.1.20:5555", label: "主手机", lastConnectedAt: "" },
       { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
     ]);
+  });
+
+  it("supports select-all and reconnects only the selected set", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "全选" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    expect(screen.getByText("已选择 2 项")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+    expect(screen.queryByText("已选择 2 项")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Phone A" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量连接" }));
+    await waitFor(() => expect(DeviceService.adbConnect).toHaveBeenCalledTimes(1));
+    expect(DeviceService.adbConnect).toHaveBeenCalledWith("192.168.1.20:5555");
+    expect(DeviceService.adbConnect).not.toHaveBeenCalledWith("192.168.1.21:5555");
+  });
+
+  it("deletes only the selected saved addresses after confirmation", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "选择 Phone A" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 Phone A" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量删除" }));
+    await waitFor(() => expect(screen.queryByText("Phone A")).toBeNull());
+    expect(screen.getByText("Phone B")).toBeTruthy();
+    expect(askConfirm).toHaveBeenCalled();
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]")).toEqual([
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
   });
 });

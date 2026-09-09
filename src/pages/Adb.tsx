@@ -101,6 +101,7 @@ export function AdbPage() {
     }
   });
   const [reconnectResults, setReconnectResults] = useState<Record<string, SavedReconnectResult>>({});
+  const [selectedSavedAddresses, setSelectedSavedAddresses] = useState<string[]>([]);
   const [editingAddress, setEditingAddress] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
   const [tcpipSerial, setTcpipSerial] = useState("");
@@ -495,6 +496,33 @@ export function AdbPage() {
     void reconnectSavedAddresses(failed);
   };
 
+  const toggleSavedAddressSelection = (target: string) => {
+    setSelectedSavedAddresses((current) => current.includes(target)
+      ? current.filter((address) => address !== target)
+      : [...current, target]);
+  };
+
+  const toggleAllSavedAddresses = () => {
+    setSelectedSavedAddresses((current) => current.length === savedAddresses.length
+      ? []
+      : savedAddresses.map((entry) => entry.address));
+  };
+
+  const deleteSelectedSavedAddresses = async () => {
+    if (!selectedSavedAddresses.length) return;
+    const selected = new Set(selectedSavedAddresses);
+    const targets = savedAddresses.filter((entry) => selected.has(entry.address));
+    if (!(await askConfirm(t("adb.wireless.confirmBatchDelete", { n: targets.length })))) return;
+    setSavedAddresses((entries) => entries.filter((entry) => !selected.has(entry.address)));
+    setReconnectResults((current) => {
+      const next = { ...current };
+      selectedSavedAddresses.forEach((address) => delete next[address]);
+      return next;
+    });
+    setSelectedSavedAddresses([]);
+    setStatusText(t("adb.wireless.batchDeleted", { n: targets.length }));
+  };
+
   const switchTcpip = async () => {
     const port = Number(tcpipPort);
     if (!tcpipSerial || !Number.isInteger(port) || port < 1 || port > 65535) {
@@ -588,6 +616,8 @@ export function AdbPage() {
   const failedSavedCount = savedAddresses.filter(
     (entry) => reconnectResults[entry.address]?.status === "failed",
   ).length;
+  const selectedSavedEntries = savedAddresses.filter((entry) => selectedSavedAddresses.includes(entry.address));
+  const allSavedAddressesSelected = Boolean(savedAddresses.length) && selectedSavedEntries.length === savedAddresses.length;
 
   return (
     <div>
@@ -850,6 +880,25 @@ export function AdbPage() {
           }
         >
           {savedAddresses.length ? (
+            <div className="wireless-selection-bar">
+              <Button size="sm" variant="ghost" onClick={toggleAllSavedAddresses}>
+                {allSavedAddressesSelected ? t("adb.wireless.cancelSelectAll") : t("adb.wireless.selectAll")}
+              </Button>
+              {selectedSavedEntries.length ? (
+                <>
+                  <span className="badge">{t("adb.wireless.selectedCount", { n: selectedSavedEntries.length })}</span>
+                  <Button size="sm" variant="secondary" disabled={!adbOk || reconnectBusy} onClick={() => void reconnectSavedAddresses(selectedSavedEntries)}>
+                    {t("adb.wireless.batchConnect")}
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => void deleteSelectedSavedAddresses()}>
+                    <Trash2 size={14} />
+                    {t("adb.wireless.batchDelete")}
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {savedAddresses.length ? (
             <div className="wireless-saved-list">
               {savedAddresses.map((entry) => {
                 const result = reconnectResults[entry.address];
@@ -857,7 +906,14 @@ export function AdbPage() {
                 const isEditing = editingAddress === entry.address;
                 return (
                   <div className="wireless-saved-row" key={entry.address}>
-                    <div>
+                    <input
+                      type="checkbox"
+                      aria-label={t("adb.wireless.selectAddress", { label: entry.label })}
+                      checked={selectedSavedAddresses.includes(entry.address)}
+                      onChange={() => toggleSavedAddressSelection(entry.address)}
+                      disabled={reconnectBusy}
+                    />
+                    <div className="wireless-saved-row-content">
                       {isEditing ? (
                         <div className="wireless-saved-edit">
                           <input
@@ -894,7 +950,10 @@ export function AdbPage() {
                       <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy || isEditing} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
                         {t("adb.connect")}
                       </Button>
-                      <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => setSavedAddresses((items) => items.filter((item) => item.address !== entry.address))} />
+                      <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => {
+                        setSavedAddresses((items) => items.filter((item) => item.address !== entry.address));
+                        setSelectedSavedAddresses((items) => items.filter((address) => address !== entry.address));
+                      }} />
                     </div>
                   </div>
                 );

@@ -2383,9 +2383,16 @@ a {
   border-radius: 9px;
   background: var(--bg-hover);
 }
-.wireless-saved-row > div:first-child,
+.wireless-saved-row > input {
+  flex: 0 0 auto;
+  margin: 0 2px 0 0;
+}
+.wireless-saved-row-content,
 .wireless-mdns-row > div:first-child {
   min-width: 0;
+}
+.wireless-saved-row-content {
+  flex: 1 1 auto;
 }
 .wireless-saved-row .mono,
 .wireless-mdns-row .mono {
@@ -2415,6 +2422,15 @@ a {
   color: var(--text);
   background: var(--bg-card);
   font-size: 11px;
+}
+.wireless-selection-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 .wireless-saved-status {
   display: inline-flex;
