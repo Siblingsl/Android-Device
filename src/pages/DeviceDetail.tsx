@@ -2678,7 +2678,7 @@ function Files({
 
   return (
     <div
-      className={`stack ${dragOver ? "file-drop-active" : ""}`}
+      className={`stack file-workbench ${dragOver ? "file-drop-active" : ""}`}
       onDragOver={(event) => {
         event.preventDefault();
         if (!disabled) setDragOver(true);
@@ -2690,8 +2690,8 @@ function Files({
     >
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
-        <div className="row-between" style={{ marginBottom: 12 }}>
-          <div className="row" style={{ flex: 1 }}>
+        <div className="file-location-strip">
+          <div className="row file-location-main">
             <Button size="sm" onClick={up}>
               {t("detail.files.up")}
             </Button>
@@ -2713,7 +2713,7 @@ function Files({
               {t("common.refresh")}
             </Button>
           </div>
-          <div className="row">
+          <div className="row file-command-rail">
             <Button
               size="sm"
               icon={<FolderPlus size={14} />}
@@ -2756,8 +2756,9 @@ function Files({
             </Button>
           </div>
         </div>
-        {transfer && (
-          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12, flexWrap: "wrap" }}>
+        <div className="file-transfer-strip">
+          {transfer && (
+            <div className="row" role="status" aria-live="polite" style={{ fontSize: 12, flexWrap: "wrap" }}>
             <span className={transfer.error ? "error" : "muted"}>
               {transfer.error
                 ? `${transfer.error} · ${transfer.label}`
@@ -2788,19 +2789,20 @@ function Files({
                 {transfer.kind === "upload" ? t("detail.files.retryUpload") : t("detail.files.retryDownload")}
               </Button>
             )}
-          </div>
-        )}
-        {batchTransfer && (
-          <div className="file-transfer-batch" role="status" aria-live="polite">
+            </div>
+          )}
+          {batchTransfer && (
+            <div className="file-transfer-batch" role="status" aria-live="polite">
             <span>
               {t(batchTransfer.kind === "upload" ? "detail.files.batchUpload" : "detail.files.batchDownload")} {batchTransfer.current}/{batchTransfer.total}
             </span>
             <span className="muted">
               {t("detail.files.batchSummary", { completed: batchTransfer.completed, failed: batchTransfer.failed })}
             </span>
-          </div>
-        )}
-        <div className="row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 10, fontSize: 12 }}>
+            </div>
+          )}
+        </div>
+        <div className="file-breadcrumb-rail row" style={{ flexWrap: "wrap", gap: 4 }}>
           <button type="button" className="muted" onClick={() => go("/")}>
             /
           </button>
@@ -2824,7 +2826,7 @@ function Files({
               );
             })}
         </div>
-        <div className="row" style={{ flexWrap: "wrap", marginBottom: 10 }}>
+        <div className="file-bookmark-rail row" style={{ flexWrap: "wrap" }}>
           {bookmarks.map((b) => (
             <span key={b} className="row" style={{ gap: 0 }}>
               <Button
@@ -2854,7 +2856,7 @@ function Files({
             {t("detail.files.bookmarkPath")}
           </Button>
         </div>
-        <div className="file-manager-toolbar">
+        <div className="file-manager-toolbar file-selection-rail" data-selected={selectedPaths.length ? "true" : "false"}>
           <div className="row" style={{ flexWrap: "wrap", gap: 5 }}>
             <Button size="sm" variant="ghost" disabled={!selectedPaths.length} onClick={() => setFileClipboard("copy")} icon={<Copy size={13} />}>
               {t("detail.files.copySelected")}
@@ -2880,10 +2882,11 @@ function Files({
             ))}
           </div>
         </div>
-        <div className="muted mono" style={{ fontSize: 12, marginBottom: 10, whiteSpace: "pre-wrap" }}>
-          {storage || t("detail.files.storagePlaceholder")}
-        </div>
-        <div className="row" style={{ marginBottom: 10 }}>
+        <div className="file-table-surface">
+          <div className="file-storage-line muted mono">
+            {storage || t("detail.files.storagePlaceholder")}
+          </div>
+          <div className="file-filter-row row">
           <input
             style={{ flex: 1, minWidth: 160 }}
             placeholder={t("detail.files.filterPlaceholder")}
@@ -2898,19 +2901,19 @@ function Files({
           <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
             {fileQuery ? t("detail.files.matchCount", { m: visibleFiles.length, n: files.length }) : t("detail.files.totalCount", { n: files.length })}
           </span>
-        </div>
-        {loading ? (
+          </div>
+          {loading ? (
           <Skeleton count={6} height={28} />
-        ) : files.length === 0 ? (
+          ) : files.length === 0 ? (
           <div className="empty-state">{t("detail.files.empty")}</div>
-        ) : visibleFiles.length === 0 ? (
+          ) : visibleFiles.length === 0 ? (
           <div className="empty-state">
             {t("detail.files.noMatch")}
             <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => setFileQuery("")}>
               {t("detail.files.clearFilter")}
             </Button>
           </div>
-        ) : (
+          ) : (
           <table className="table file-manager-table">
             <thead>
               <tr>
@@ -3033,7 +3036,8 @@ function Files({
               ))}
             </tbody>
           </table>
-        )}
+          )}
+        </div>
         {editor ? (
           <div className="file-editor" role="dialog" aria-label={editor.readOnly ? t("detail.files.preview") : t("detail.files.edit")}>
             <div className="file-editor-head">

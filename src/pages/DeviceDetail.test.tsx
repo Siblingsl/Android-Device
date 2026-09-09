@@ -214,6 +214,7 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.getLsposedScope).mockResolvedValue({ modules: [] });
     vi.mocked(DeviceService.getSuPolicies).mockResolvedValue([]);
     vi.mocked(DeviceService.storageInfo).mockResolvedValue("storage");
+    vi.mocked(DeviceService.listFiles).mockReset();
     vi.mocked(DeviceService.listFiles).mockResolvedValue([]);
     vi.mocked(DeviceService.listApps).mockResolvedValue([]);
     vi.mocked(DeviceService.getAppDetail).mockResolvedValue(app("默认应用"));
@@ -350,6 +351,24 @@ describe("DeviceDetail refresh ordering", () => {
     expect(document.querySelector(".control-workbench")).toBeTruthy();
     expect(document.querySelector(".control-action-dock")).toBeTruthy();
     expect(document.querySelectorAll(".control-action-shelf")).toHaveLength(4);
+  });
+
+  it("keeps the file workbench rails and table surface visible", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listFiles).mockResolvedValue([file("notes.txt")]);
+
+    renderDetail("files");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector(".file-workbench")).toBeTruthy();
+    expect(document.querySelector(".file-location-strip")).toBeTruthy();
+    expect(document.querySelector(".file-command-rail")).toBeTruthy();
+    expect(document.querySelector(".file-transfer-strip")).toBeTruthy();
+    expect(document.querySelector(".file-selection-rail")).toBeTruthy();
+    expect(document.querySelector(".file-table-surface")).toBeTruthy();
   });
 
   it("ignores an older file listing after navigating to a newer path", async () => {
