@@ -254,6 +254,23 @@ export interface AutomationScript {
   lastRunAt?: string;
 }
 
+export type AutomationRunStatus = "completed" | "failed" | "cancelled";
+
+export interface AutomationRunLog {
+  stepId: string;
+  label: string;
+  status: "completed" | "failed" | "skipped";
+  message?: string;
+  startedAt: string;
+  finishedAt: string;
+}
+
+export interface AutomationRunResult {
+  status: AutomationRunStatus;
+  completedSteps: number;
+  logs: AutomationRunLog[];
+}
+
 export interface ShellResult {
   success: boolean;
   stdout: string;
