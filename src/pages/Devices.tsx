@@ -1798,7 +1798,7 @@ export function Devices() {
                         </div>
                       </td>
                       <td className="devices-table-action-cell">
-                        <div className="devices-table-actions" aria-busy={rowActionBusy}>
+                        <div className="devices-table-actions devices-table-actions-compact" aria-busy={rowActionBusy}>
                           <Button
                             size="sm"
                             variant={online && !scrcpyOn ? "primary" : "secondary"}
@@ -1871,6 +1871,7 @@ export function Devices() {
                           </Button>
                           <select
                             aria-label={t("devices.table.actions")}
+                            className="device-row-action-more"
                             disabled={rowBusy}
                             defaultValue=""
                             onChange={(e) => {

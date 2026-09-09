@@ -1385,9 +1385,11 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     const row = await screen.findByRole("row", { name: /设备 one/ });
+    expect(within(row).getByRole("cell", { name: /投屏 ADB 连接 详情 更多/ }).querySelector(".devices-table-actions-compact")).toBeTruthy();
     expect(within(row).getByRole("button", { name: "投屏" }).classList.contains("device-row-action")).toBe(true);
     expect(within(row).getByRole("button", { name: "ADB 连接" }).classList.contains("device-row-action")).toBe(true);
     expect(within(row).getByRole("button", { name: "详情" }).classList.contains("device-row-action")).toBe(true);
+    expect(within(row).getByRole("combobox", { name: "行内操作" }).classList.contains("device-row-action-more")).toBe(true);
   });
 
   it("keeps the single-device serial copy failure in the status bar and alert", async () => {

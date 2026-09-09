@@ -1668,10 +1668,14 @@ a {
 .devices-table-runtime-secondary { display: flex; align-items: center; gap: 7px; }
 .devices-table-warning { width: fit-content; margin-top: 2px; font-size: 9px; }
 .devices-table-actions { display: flex; align-items: center; gap: 5px; min-width: max-content; }
+.devices-table-actions-compact { gap: 4px; }
 .devices-table-actions .btn { min-height: 28px; padding: 4px 7px; font-size: 11px; }
+.devices-table-actions-compact .btn { min-height: 27px; padding: 3px 6px; font-size: 10.5px; }
 .devices-table-actions .device-row-action { width: 30px; min-width: 30px; justify-content: center; gap: 0; padding: 4px; }
+.devices-table-actions-compact .device-row-action { width: 27px; min-width: 27px; padding: 3px; }
 .devices-table-actions .device-action-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .devices-table-actions select { height: 28px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--bg); font-size: 11px; }
+.devices-table-actions-compact .device-row-action-more { width: 58px; padding: 2px 4px; font-size: 10px; }
 .devices-table-actions select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .devices-table-action-cell { background: var(--bg-card); }
 .devices-table-row:hover .devices-table-action-cell { background: var(--bg-hover); }
@@ -1701,7 +1705,8 @@ a {
   .devices-toolbar-view input { flex: 1 1 220px; min-width: 0 !important; }
   .devices-table-responsive .devices-table { min-width: 700px; }
   .devices-table-responsive .devices-table-actions { gap: 3px; }
-  .devices-table-responsive .devices-table-actions .device-row-action { width: 28px; min-width: 28px; }
+  .devices-table-responsive .devices-table-actions .device-row-action { width: 25px; min-width: 25px; }
+  .devices-table-responsive .devices-table-actions-compact .device-row-action-more { width: 54px; }
 }
 .dashboard-page { max-width: 1680px; margin: 0 auto; }
 .device-board { padding: 4px 0 18px; }
