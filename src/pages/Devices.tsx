@@ -932,6 +932,7 @@ export function Devices() {
 
       {devices.length > 0 && (
         <div className="devices-toolbar">
+          <div className="devices-toolbar-main">
           <div className="devices-toolbar-view">
           <input
             value={query}
@@ -1000,12 +1001,14 @@ export function Devices() {
           >
             {allOnlineVisiblePicked ? t("devices.unselectOnline") : t("devices.selectAllOnline")}
           </Button>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {t("devices.selectedCount", { n: picked.length })}
-          </span>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
-          </span>
+          <div className="devices-toolbar-selection-summary">
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("devices.selectedCount", { n: picked.length })}
+            </span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
+            </span>
+          </div>
           </div>
           <div className="devices-toolbar-advanced">
           <details className="batch-layout-details">
@@ -1095,7 +1098,8 @@ export function Devices() {
             <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
           </details>
           </div>
-          <div className="devices-toolbar-batch">
+          </div>
+          <div className="devices-toolbar-batch devices-toolbar-batch-rail">
           <div className="devices-toolbar-batch-supporting">
           <DeviceBroadcastInput
             disabled={selectedDevices.length === 0}

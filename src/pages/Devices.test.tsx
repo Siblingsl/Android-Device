@@ -204,6 +204,23 @@ describe("Devices batch controls", () => {
     expect(screen.getByRole("combobox", { name: "更多操作" }).closest(".devices-toolbar-batch-utility")).toBeTruthy();
   }, 15_000);
 
+  it("organizes device controls into a compact main rail and batch rail", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const search = await screen.findByPlaceholderText("搜索名称 / Serial / 镜像");
+    expect(search.closest(".devices-toolbar-main")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "全选当前" }).closest(".devices-toolbar-main")).toBeTruthy();
+    expect(screen.getByText("窗口布局").closest(".devices-toolbar-main")).toBeTruthy();
+    expect(screen.getByText("已选 0").closest(".devices-toolbar-selection-summary")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量投屏" }).closest(".devices-toolbar-batch-rail")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "广播文本" }).closest(".devices-toolbar-batch-rail")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "更多操作" }).closest(".devices-toolbar-batch-rail")).toBeTruthy();
+  }, 15_000);
+
   it("shows devices in a compact table with row-level actions by default", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
       { ...device("one"), online: true, adbStatus: "device" },
