@@ -11,6 +11,7 @@ import {
 
 const MAX_OUTPUT_LENGTH = 200_000;
 const MAX_COMMAND_HISTORY = 50;
+const SESSION_REFRESH_INTERVAL_MS = 5000;
 
 export function TerminalPage() {
   const { t } = useI18n();
@@ -85,6 +86,29 @@ export function TerminalPage() {
     return () => {
       active = false;
       unlisten?.();
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    let active = true;
+    const refresh = () => {
+      void TerminalSessionService.list()
+        .then((nextSessions) => {
+          if (!active) return;
+          setSessions(nextSessions);
+          const current = nextSessions.find((item) => item.id === sessionId);
+          if (current) setSession(current);
+          else setSession((previous) => (previous ? { ...previous, status: "exited" } : previous));
+        })
+        .catch((cause) => {
+          if (active) setError(cause instanceof Error ? cause.message : String(cause));
+        });
+    };
+    const timer = window.setInterval(refresh, SESSION_REFRESH_INTERVAL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
     };
   }, [sessionId]);
 

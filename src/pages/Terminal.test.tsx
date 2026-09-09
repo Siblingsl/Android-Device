@@ -54,6 +54,7 @@ describe("TerminalPage", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -123,5 +124,28 @@ describe("TerminalPage", () => {
     expect((input as HTMLInputElement).value).toBe("second command");
     fireEvent.keyDown(input, { key: "ArrowDown" });
     expect((input as HTMLInputElement).value).toBe("");
+  });
+
+  it("refreshes the session status while the terminal is open", async () => {
+    vi.useFakeTimers();
+    vi.mocked(TerminalSessionService.list)
+      .mockResolvedValueOnce([session])
+      .mockResolvedValueOnce([{ ...session, status: "exited" }]);
+    renderTerminal();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("运行中")).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("已停止 · exited")).toBeTruthy();
+    expect(TerminalSessionService.list).toHaveBeenCalledTimes(2);
   });
 });

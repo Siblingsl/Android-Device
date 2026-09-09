@@ -1,4 +1,5 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { TerminalSessionService } from "../services/terminalSessionService";
 
 const terminalWindows = new Map<string, WebviewWindow>();
 const pendingWindows = new Map<string, Promise<WebviewWindow>>();
@@ -44,6 +45,7 @@ export async function openTerminalWindow(
     terminalWindows.set(label, terminalWindow);
     void terminalWindow.once("tauri://destroyed", () => {
       if (terminalWindows.get(label) === terminalWindow) terminalWindows.delete(label);
+      void TerminalSessionService.stop(sessionId).catch(() => undefined);
     });
     await terminalWindow.show();
     await terminalWindow.setFocus();
