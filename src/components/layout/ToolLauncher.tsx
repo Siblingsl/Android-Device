@@ -37,6 +37,7 @@ const tools: ToolItem[] = [
   { kind: "link", to: "/volumes", labelKey: "common.nav.volumes", descriptionKey: "common.tool.volumesHint", icon: Database },
   { kind: "link", to: "/monitor", labelKey: "common.nav.monitor", descriptionKey: "common.tool.monitorHint", icon: Activity },
   { kind: "link", to: "/automation", labelKey: "common.nav.automation", descriptionKey: "common.tool.automationHint", icon: Bot },
+  { kind: "link", to: "/copilot", labelKey: "common.nav.copilot", descriptionKey: "common.tool.copilotHint", icon: Bot },
   { kind: "link", to: "/logs", labelKey: "common.nav.logs", descriptionKey: "common.tool.logsHint", icon: ScrollText },
   { kind: "link", to: "/settings", labelKey: "common.nav.settings", descriptionKey: "common.tool.settingsHint", icon: Settings },
 ];

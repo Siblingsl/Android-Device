@@ -10,6 +10,7 @@ import { dockerZh, dockerEn } from "./pages/docker";
 import { deviceDetailZh, deviceDetailEn } from "./pages/deviceDetail";
 import { monitorZh, monitorEn } from "./pages/monitor";
 import { automationZh, automationEn } from "./pages/automation";
+import { copilotZh, copilotEn } from "./pages/copilot";
 
 export type Lang = "zh-CN" | "en-US";
 export type Dict = Record<string, string>;
@@ -27,6 +28,7 @@ export const zhDict: Dict = {
   ...deviceDetailZh,
   ...monitorZh,
   ...automationZh,
+  ...copilotZh,
 };
 
 export const enDict: Dict = {
@@ -42,6 +44,7 @@ export const enDict: Dict = {
   ...deviceDetailEn,
   ...monitorEn,
   ...automationEn,
+  ...copilotEn,
 };
 
 export function tStatic(key: string, vars?: Record<string, string | number>): string {
