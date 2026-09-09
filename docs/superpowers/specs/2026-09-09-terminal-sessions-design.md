@@ -112,4 +112,3 @@ The terminal window shows a small status badge, a stop button, a clear-output bu
 2. Add the frontend session service and terminal page with tests.
 3. Add the independent-window launcher and device/local entry points.
 4. Run the full regression suite, commit each stable slice, and push the branch.
-
