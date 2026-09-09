@@ -25,6 +25,8 @@ vi.mock("../services/deviceService", () => ({
     refreshDevices: vi.fn(),
     exportLogs: vi.fn(),
     revealInFolder: vi.fn(),
+    getDevice: vi.fn(),
+    screenshot: vi.fn(),
   },
 }));
 const storeState = vi.hoisted(() => ({
@@ -105,6 +107,8 @@ describe("Devices batch controls", () => {
     vi.mocked(open).mockReset();
     vi.mocked(DeviceService.exportLogs).mockReset();
     vi.mocked(DeviceService.revealInFolder).mockReset();
+    vi.mocked(DeviceService.getDevice).mockReset();
+    vi.mocked(DeviceService.screenshot).mockReset();
     vi.mocked(save).mockReset();
     vi.mocked(askConfirm).mockReset();
     vi.mocked(copyText).mockReset();
@@ -124,6 +128,8 @@ describe("Devices batch controls", () => {
     vi.mocked(open).mockResolvedValue(null);
     vi.mocked(DeviceService.exportLogs).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(DeviceService.revealInFolder).mockResolvedValue(undefined);
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(null);
+    vi.mocked(DeviceService.screenshot).mockResolvedValue({ success: false, path: "", base64: "", error: "" });
     vi.mocked(save).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(askConfirm).mockResolvedValue(true);
     vi.mocked(copyText).mockResolvedValue(undefined);
@@ -185,6 +191,45 @@ describe("Devices batch controls", () => {
     expect(within(onlineRow).getByRole("button", { name: "投屏" })).toBeTruthy();
     expect(within(onlineRow).getByRole("button", { name: "详情" })).toBeTruthy();
     expect(within(onlineRow).getByRole("combobox")).toBeTruthy();
+  }, 15_000);
+
+  it("shows telemetry and a screenshot when focusing a table device", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+    vi.mocked(DeviceService.getDevice).mockResolvedValue({
+      ...device("one"),
+      online: true,
+      adbStatus: "device",
+      batteryLevel: 84,
+      batteryCharging: true,
+      batteryTemperatureC: 32.4,
+      batteryVoltageV: 4.18,
+      batteryPowerSource: "USB",
+    });
+    vi.mocked(DeviceService.screenshot).mockResolvedValue({
+      success: true,
+      path: "device-one.png",
+      base64: "c2NyZWVu",
+    });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const onlineRow = await screen.findByRole("row", { name: /设备 one/ });
+    fireEvent.focus(within(onlineRow).getByRole("button", { name: "设备 one" }));
+
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    expect(await screen.findByText("84% · 充电中")).toBeTruthy();
+    expect(screen.getByText("32.4 °C · 4.18 V")).toBeTruthy();
+    expect(screen.getByText("USB")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "设备悬浮截图" })).toBeTruthy();
+    expect(DeviceService.getDevice).toHaveBeenCalledWith("one");
+    expect(DeviceService.screenshot).toHaveBeenCalledWith("one-serial");
   }, 15_000);
 
   it("keeps processing every device when the batch is not stopped", async () => {

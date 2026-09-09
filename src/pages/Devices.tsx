@@ -26,6 +26,7 @@ import {
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { DeviceBroadcastInput } from "../components/device/DeviceBroadcastInput";
+import { DeviceHoverCard } from "../components/device/DeviceHoverCard";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
@@ -204,6 +205,7 @@ export function Devices() {
   });
   const [filter, setFilter] = useState<"all" | "online" | "offline">(readFilter);
   const [devicesView, setDevicesView] = useState<DevicesView>(readDevicesView);
+  const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
   const [query, setQuery] = useState(() => {
     try {
       return sessionStorage.getItem(QUERY_KEY) ?? "";
@@ -1479,7 +1481,18 @@ export function Devices() {
                         />
                       </td>
                       <td>
-                        <div className="devices-table-identity">
+                        <div
+                          className="devices-table-identity devices-table-hover-anchor"
+                          onMouseEnter={() => setHoveredDeviceId(d.id)}
+                          onMouseLeave={() => setHoveredDeviceId(null)}
+                          onFocus={() => setHoveredDeviceId(d.id)}
+                          onBlur={(event) => {
+                            const next = event.relatedTarget;
+                            if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+                              setHoveredDeviceId(null);
+                            }
+                          }}
+                        >
                           <button
                             type="button"
                             className="devices-table-name"
@@ -1519,6 +1532,7 @@ export function Devices() {
                               {t("devices.card.noAdbMapping")}
                             </span>
                           ) : null}
+                          {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
                         </div>
                       </td>
                       <td>
