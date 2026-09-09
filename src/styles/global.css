@@ -1109,7 +1109,122 @@ a {
 .card-title { font-weight: 600; font-size: 14px; }
 .card-body { padding: 14px 16px 16px; }
 
-.settings-shortcuts-card { margin-top: 16px; }
+.settings-workbench {
+  min-width: 0;
+}
+
+.settings-header-rail {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-heading-rail {
+  min-width: 0;
+}
+
+.settings-heading-rail .page-title {
+  font-size: 20px;
+}
+
+.settings-heading-rail .page-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.settings-header-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-dirty-label {
+  font-size: 11px;
+}
+
+.settings-core-grid,
+.settings-ops-grid {
+  align-items: start;
+  gap: 10px;
+}
+
+.settings-core-grid > .card .card-body,
+.settings-ops-grid > .card .card-body {
+  padding: 12px;
+}
+
+.settings-core-grid .form-grid,
+.settings-monitor-card .form-grid {
+  gap: 10px;
+}
+
+.settings-paths-card .stack {
+  gap: 8px;
+}
+
+.settings-paths-card .field {
+  gap: 4px;
+}
+
+.settings-paths-card .field > .row {
+  min-width: 0;
+  gap: 5px;
+}
+
+.settings-paths-card .field > .row input {
+  min-width: 0;
+}
+
+.settings-paths-card .field > .row .btn {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.settings-shortcuts-card {
+  margin-top: 10px;
+}
+
+.settings-ops-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  margin-top: 10px;
+}
+
+.settings-autostart-card .empty-state {
+  padding: 24px 12px;
+}
+
+.settings-autostart-card > .card-body > .stack {
+  gap: 8px;
+}
+
+.settings-about-card {
+  margin-top: 10px;
+}
+
+.settings-about-card .stack {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 18px;
+}
+
+.settings-about-card .stack > div {
+  min-width: 0;
+}
+
+.settings-about-card .stack > div:nth-child(3) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .shortcut-system-controls {
   display: flex;
   align-items: center;
@@ -1204,6 +1319,28 @@ a {
 .shortcut-footnote { margin-top: 12px; font-size: 11px; }
 
 @media (max-width: 760px) {
+  .settings-header-rail {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .settings-ops-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-about-card .stack {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .settings-about-card .stack > div:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
   .shortcut-list { grid-template-columns: 1fr; }
   .shortcut-system-controls { align-items: flex-start; flex-direction: column; }
   .shortcut-system-summary { text-align: left; }

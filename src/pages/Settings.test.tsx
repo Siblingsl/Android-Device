@@ -144,4 +144,19 @@ describe("Settings shortcuts", () => {
     expect(screen.getByText(/1\/5 已注册/)).toBeTruthy();
     expect(screen.getByText("被占用")).toBeTruthy();
   });
+
+  it("keeps the settings workbench sections visible", () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+
+    expect(document.querySelector(".settings-workbench")).toBeTruthy();
+    expect(document.querySelector(".settings-header-actions")).toBeTruthy();
+    expect(document.querySelector(".settings-core-grid")).toBeTruthy();
+    expect(document.querySelector(".settings-shortcuts-card")).toBeTruthy();
+    expect(document.querySelector(".settings-ops-grid")).toBeTruthy();
+    expect(document.querySelector(".settings-about-card")).toBeTruthy();
+  });
 });

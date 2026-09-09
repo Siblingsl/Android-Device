@@ -212,54 +212,56 @@ export function SettingsPage() {
   };
 
   return (
-    <div>
-      <div className="page-header">
-        <div>
+    <div className="settings-workbench">
+      <div className="page-header settings-header-rail">
+        <div className="settings-heading-rail">
           <div className="page-title">{t("settings.title")}</div>
           <div className="page-subtitle">{t("settings.subtitle")}</div>
         </div>
-        {dirty && (
-          <>
-            <span className="muted" style={{ fontSize: 12 }}>{t("settings.unsaved")}</span>
-            <Button size="sm" variant="ghost" onClick={() => settings && setForm(settings)}>
-              {t("settings.discard")}
-            </Button>
-          </>
-        )}
-        <Button
-          variant="primary"
-          icon={<Save size={15} />}
-          disabled={!dirty}
-          onClick={async () => {
-            const live = new Set(devices.map((d) => d.id));
-            const monitor = normalizeMonitorPreferences(
-              form.resourceAlertThreshold,
-              form.deviceRefreshIntervalSecs,
-            );
-            const cleaned = {
-              ...form,
-              resourceAlertThreshold: monitor.alertThreshold,
-              deviceRefreshIntervalSecs: monitor.refreshIntervalSecs,
-              autoStartDeviceIds: (form.autoStartDeviceIds ?? []).filter((id) => live.has(id)),
-            };
-            setForm(cleaned);
-            try {
-              await saveSettings(cleaned);
-              setTheme(form.theme === "dark" ? "dark" : "light");
-              setStatusText(t("settings.saved"));
-            } catch (e) {
-              const err = e instanceof Error ? e.message : String(e);
-              setStatusText(t("settings.saveFailed", { err }));
-              void alert(t("settings.saveFailed", { err }));
-            }
-          }}
-        >
-          {t("common.save")}
-        </Button>
+        <div className="settings-header-actions">
+          {dirty && (
+            <>
+              <span className="muted settings-dirty-label">{t("settings.unsaved")}</span>
+              <Button size="sm" variant="ghost" onClick={() => settings && setForm(settings)}>
+                {t("settings.discard")}
+              </Button>
+            </>
+          )}
+          <Button
+            variant="primary"
+            icon={<Save size={15} />}
+            disabled={!dirty}
+            onClick={async () => {
+              const live = new Set(devices.map((d) => d.id));
+              const monitor = normalizeMonitorPreferences(
+                form.resourceAlertThreshold,
+                form.deviceRefreshIntervalSecs,
+              );
+              const cleaned = {
+                ...form,
+                resourceAlertThreshold: monitor.alertThreshold,
+                deviceRefreshIntervalSecs: monitor.refreshIntervalSecs,
+                autoStartDeviceIds: (form.autoStartDeviceIds ?? []).filter((id) => live.has(id)),
+              };
+              setForm(cleaned);
+              try {
+                await saveSettings(cleaned);
+                setTheme(form.theme === "dark" ? "dark" : "light");
+                setStatusText(t("settings.saved"));
+              } catch (e) {
+                const err = e instanceof Error ? e.message : String(e);
+                setStatusText(t("settings.saveFailed", { err }));
+                void alert(t("settings.saveFailed", { err }));
+              }
+            }}
+          >
+            {t("common.save")}
+          </Button>
+        </div>
       </div>
 
-      <div className="grid-2">
-        <Card title={t("settings.card.appearance")}>
+      <div className="grid-2 settings-core-grid">
+        <Card title={t("settings.card.appearance")} className="settings-appearance-card">
           <div className="form-grid">
             <div className="field">
               <label>{t("settings.theme")}</label>
@@ -322,6 +324,7 @@ export function SettingsPage() {
 
         <Card
           title={t("settings.card.paths")}
+          className="settings-paths-card"
           action={
             <Button size="sm" loading={probing === "all"} onClick={() => void runProbeAll()}>
               {t("settings.probeAll")}
@@ -476,48 +479,49 @@ export function SettingsPage() {
         <div className="muted shortcut-footnote">{t("settings.shortcuts.scope")}</div>
       </Card>
 
-      <Card title={t("settings.card.monitor")} className="settings-monitor-card">
-        <div className="form-grid">
-          <div className="field">
-            <label>{t("settings.resourceAlertThreshold")}</label>
-            <div className="row">
-              <input
-                type="number"
-                min={50}
-                max={100}
-                step={1}
-                value={monitorPreferences.alertThreshold}
-                onChange={(e) => set("resourceAlertThreshold", Number(e.target.value))}
-                onBlur={() => set("resourceAlertThreshold", monitorPreferences.alertThreshold)}
-              />
-              <span className="muted">%</span>
+      <div className="settings-ops-grid">
+        <Card title={t("settings.card.monitor")} className="settings-monitor-card">
+          <div className="form-grid">
+            <div className="field">
+              <label>{t("settings.resourceAlertThreshold")}</label>
+              <div className="row">
+                <input
+                  type="number"
+                  min={50}
+                  max={100}
+                  step={1}
+                  value={monitorPreferences.alertThreshold}
+                  onChange={(e) => set("resourceAlertThreshold", Number(e.target.value))}
+                  onBlur={() => set("resourceAlertThreshold", monitorPreferences.alertThreshold)}
+                />
+                <span className="muted">%</span>
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {t("settings.resourceAlertThresholdHint")}
+              </div>
             </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-              {t("settings.resourceAlertThresholdHint")}
+            <div className="field">
+              <label>{t("settings.deviceRefreshInterval")}</label>
+              <div className="row">
+                <input
+                  type="number"
+                  min={5}
+                  max={60}
+                  step={1}
+                  value={monitorPreferences.refreshIntervalSecs}
+                  onChange={(e) => set("deviceRefreshIntervalSecs", Number(e.target.value))}
+                  onBlur={() => set("deviceRefreshIntervalSecs", monitorPreferences.refreshIntervalSecs)}
+                />
+                <span className="muted">{t("settings.seconds")}</span>
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {t("settings.deviceRefreshIntervalHint")}
+              </div>
             </div>
           </div>
-          <div className="field">
-            <label>{t("settings.deviceRefreshInterval")}</label>
-            <div className="row">
-              <input
-                type="number"
-                min={5}
-                max={60}
-                step={1}
-                value={monitorPreferences.refreshIntervalSecs}
-                onChange={(e) => set("deviceRefreshIntervalSecs", Number(e.target.value))}
-                onBlur={() => set("deviceRefreshIntervalSecs", monitorPreferences.refreshIntervalSecs)}
-              />
-              <span className="muted">{t("settings.seconds")}</span>
-            </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-              {t("settings.deviceRefreshIntervalHint")}
-            </div>
-          </div>
-        </div>
-      </Card>
+        </Card>
 
-      <Card title={t("settings.card.autoStart")}>
+        <Card title={t("settings.card.autoStart")} className="settings-autostart-card">
         <label className="row" style={{ marginBottom: 12 }}>
           <input
             type="checkbox"
@@ -615,9 +619,10 @@ export function SettingsPage() {
             </div>
           </div>
         )}
-      </Card>
+        </Card>
+      </div>
 
-      <Card title={t("settings.card.about")} className="about-card">
+      <Card title={t("settings.card.about")} className="about-card settings-about-card">
         <div className="stack">
           <div>
             <strong>Redroid Device Center</strong>
