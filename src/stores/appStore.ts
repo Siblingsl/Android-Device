@@ -45,7 +45,7 @@ interface AppState {
   saveSettings: (s: AppSettings) => Promise<void>;
 }
 
-import { tStatic } from "../i18n";
+import { tStatic } from "../i18n/static";
 
 type MonitorAlertUndoKind = "dismiss" | "clear" | "cleanup";
 

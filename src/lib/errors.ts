@@ -1,4 +1,4 @@
-import { tStatic } from "../i18n";
+import { tStatic } from "../i18n/static";
 
 /**
  * Map raw internal exceptions to user-friendly messages.

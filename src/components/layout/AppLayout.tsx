@@ -1,11 +1,12 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { useEffect, useRef } from "react";
-import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { DetailPanel } from "./DetailPanel";
+import { WorkspaceHeader } from "./WorkspaceHeader";
+import { ActivityDrawer } from "./ActivityDrawer";
 import { useAppStore } from "../../stores/appStore";
 import { DeviceService } from "../../services/deviceService";
-import { tStatic } from "../../i18n";
+import { tStatic } from "../../i18n/static";
 import clsx from "clsx";
 
 async function runAutoStart() {
@@ -138,7 +139,7 @@ export function AppLayout() {
 
   return (
     <div className={clsx("app-shell", detailOpen && "detail-open")}>
-      <Sidebar />
+      <WorkspaceHeader />
       <div className="main-area">
         <div className="content">
           <div key={location.pathname} className="page-fade">
@@ -146,6 +147,7 @@ export function AppLayout() {
           </div>
         </div>
       </div>
+      <ActivityDrawer />
       <DetailPanel />
       <StatusBar />
     </div>

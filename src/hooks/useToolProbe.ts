@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { DeviceService } from "../services/deviceService";
-import { tStatic } from "../i18n";
+import { tStatic } from "../i18n/static";
 
 export type ToolKind = "docker" | "adb" | "scrcpy";
 
