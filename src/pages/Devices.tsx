@@ -8,11 +8,13 @@ import {
   Play,
   RefreshCw,
   Download,
+  Upload,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { createRequestSequence } from "../lib/requestSequence";
+import { batchFileName, batchRemotePath } from "../lib/batchOperations";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -760,6 +762,72 @@ export function Devices() {
           </Button>
           <Button
             size="sm"
+            icon={<Monitor size={13} />}
+            loading={busy === "batch"}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={() =>
+              void batch(
+                t("devices.batch.mirror"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  return DeviceService.scrcpyStart(d.serial);
+                },
+                "scrcpy",
+              )
+            }
+          >
+            {t("devices.batch.mirrorShort")}
+          </Button>
+          <Button
+            size="sm"
+            icon={<Upload size={13} />}
+            loading={busy === "batch"}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={async () => {
+              try {
+                const pickedFiles = await open({ multiple: true, directory: false });
+                const files = (Array.isArray(pickedFiles) ? pickedFiles : pickedFiles ? [pickedFiles] : [])
+                  .filter((path): path is string => typeof path === "string" && path.length > 0);
+                if (files.length === 0) return;
+                const target = prompt(t("devices.batch.pushPathPrompt"), "/sdcard/Download");
+                if (target === null) return;
+                const remoteDirectory = target.trim() || "/sdcard/Download";
+                if (!(await askConfirm(t("devices.batch.confirmPush", {
+                  n: files.length,
+                  target: remoteDirectory,
+                  devices: selectedDevices.length,
+                })))) return;
+                await batch(
+                  t("devices.batch.pushMany", { n: files.length }),
+                  async (d) => {
+                    const miss = await ensureOnline(d);
+                    if (miss) return miss;
+                    for (const file of files) {
+                      const result = await DeviceService.uploadFile(
+                        d.serial,
+                        file,
+                        batchRemotePath(remoteDirectory, file),
+                      );
+                      if (!result.success) return result;
+                    }
+                    return {
+                      success: true,
+                      stdout: t("devices.batch.pushedCount", { n: files.length }),
+                      stderr: "",
+                    };
+                  },
+                  "upload",
+                );
+              } catch {
+                /* cancelled */
+              }
+            }}
+          >
+            {t("devices.batch.pushShort")}
+          </Button>
+          <Button
+            size="sm"
             variant="primary"
             icon={<Package size={13} />}
             loading={busy === "batch"}
@@ -767,18 +835,34 @@ export function Devices() {
             onClick={async () => {
               try {
                 const apk = await open({
-                  multiple: false,
+                  multiple: true,
                   directory: false,
                   filters: [{ name: "APK", extensions: ["apk"] }],
                 });
-                if (typeof apk !== "string" || !apk) return;
-                const name = apk.split(/[/\\]/).pop() || apk;
-                if (!(await askConfirm(t("devices.confirmInstall", { name, n: selectedDevices.length })))) return;
-                await batch(t("devices.batch.installWith", { name }), async (d) => {
+                const apks = (Array.isArray(apk) ? apk : apk ? [apk] : [])
+                  .filter((path): path is string => typeof path === "string" && path.toLowerCase().endsWith(".apk"));
+                if (apks.length === 0) return;
+                const name = batchFileName(apks[0]);
+                const label = apks.length === 1
+                  ? t("devices.batch.installWith", { name })
+                  : t("devices.batch.installMany", { n: apks.length });
+                const confirmMessage = apks.length === 1
+                  ? t("devices.confirmInstall", { name, n: selectedDevices.length })
+                  : t("devices.batch.confirmInstallMany", { n: apks.length, devices: selectedDevices.length });
+                if (!(await askConfirm(confirmMessage))) return;
+                await batch(label, async (d) => {
                   const miss = await ensureOnline(d);
                   if (miss) return miss;
-                  setStatusText(t("devices.installing", { name: d.name }));
-                  return DeviceService.installApk(d.serial, apk, true);
+                  for (const path of apks) {
+                    setStatusText(t("devices.installing", { name: d.name }));
+                    const result = await DeviceService.installApk(d.serial, path, true);
+                    if (!result.success) return result;
+                  }
+                  return {
+                    success: true,
+                    stdout: t("devices.batch.installedCount", { n: apks.length }),
+                    stderr: "",
+                  };
                 });
               } catch {
                 /* cancelled */

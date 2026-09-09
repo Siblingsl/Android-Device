@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { Devices } from "./Devices";
 import type { DeviceInfo, ShellResult } from "../types";
 
@@ -16,6 +16,9 @@ vi.mock("../services/deviceService", () => ({
     disconnect: vi.fn(),
     restart: vi.fn(),
     stop: vi.fn(),
+    scrcpyStart: vi.fn(),
+    installApk: vi.fn(),
+    uploadFile: vi.fn(),
     refreshDevices: vi.fn(),
     exportLogs: vi.fn(),
     revealInFolder: vi.fn(),
@@ -90,6 +93,10 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.disconnect).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
+    vi.mocked(DeviceService.scrcpyStart).mockReset();
+    vi.mocked(DeviceService.installApk).mockReset();
+    vi.mocked(DeviceService.uploadFile).mockReset();
+    vi.mocked(open).mockReset();
     vi.mocked(DeviceService.exportLogs).mockReset();
     vi.mocked(DeviceService.revealInFolder).mockReset();
     vi.mocked(save).mockReset();
@@ -102,6 +109,10 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.disconnect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.scrcpyStart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.installApk).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.uploadFile).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(open).mockResolvedValue(null);
     vi.mocked(DeviceService.exportLogs).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(DeviceService.revealInFolder).mockResolvedValue(undefined);
     vi.mocked(save).mockResolvedValue("C:\\exports\\batch.csv");
@@ -177,7 +188,7 @@ describe("Devices batch controls", () => {
 
     await screen.findByRole("button", { name: "停止后续" });
     const loadingButtons = screen.getAllByRole("button", { name: "..." });
-    expect(loadingButtons).toHaveLength(3);
+    expect(loadingButtons).toHaveLength(5);
     expect(loadingButtons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
     expect(screen.getByRole("status").textContent).toContain("批量 ADB 连接");
 
@@ -189,6 +200,79 @@ describe("Devices batch controls", () => {
     expect(await screen.findByRole("button", { name: "批量连接" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "批量安装 APK" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "批量截图" })).toBeTruthy();
+  }, 15_000);
+
+  it("starts an independent scrcpy window for every selected online device", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      { ...device("two"), online: true, adbStatus: "device" },
+    ]);
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量投屏" }));
+
+    expect(await screen.findByText(/批量投屏 · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.scrcpyStart).toHaveBeenNthCalledWith(1, "one-serial");
+    expect(DeviceService.scrcpyStart).toHaveBeenNthCalledWith(2, "two-serial");
+  }, 15_000);
+
+  it("pushes multiple selected files to every selected device", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      { ...device("two"), online: true, adbStatus: "device" },
+    ]);
+    vi.mocked(open).mockResolvedValue(["C:\\payload\\one.txt", "C:\\payload\\two.txt"]);
+    vi.stubGlobal("prompt", vi.fn(() => "/sdcard/Download"));
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量推送" }));
+
+    expect(await screen.findByText(/批量推送 2 个文件 · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.uploadFile).toHaveBeenCalledTimes(4);
+    expect(DeviceService.uploadFile).toHaveBeenCalledWith(
+      "one-serial",
+      "C:\\payload\\one.txt",
+      "/sdcard/Download/one.txt",
+    );
+    expect(DeviceService.uploadFile).toHaveBeenCalledWith(
+      "two-serial",
+      "C:\\payload\\two.txt",
+      "/sdcard/Download/two.txt",
+    );
+  }, 15_000);
+
+  it("installs every selected APK on every selected device", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      { ...device("two"), online: true, adbStatus: "device" },
+    ]);
+    vi.mocked(open).mockResolvedValue(["C:\\apk\\one.apk", "C:\\apk\\two.apk"]);
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量安装 APK" }));
+
+    expect(await screen.findByText(/批量安装 2 个 APK · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.installApk).toHaveBeenCalledTimes(4);
+    expect(DeviceService.installApk).toHaveBeenCalledWith("one-serial", "C:\\apk\\one.apk", true);
+    expect(DeviceService.installApk).toHaveBeenCalledWith("two-serial", "C:\\apk\\two.apk", true);
   }, 15_000);
 
   it("retries only failed devices from the last batch", async () => {
