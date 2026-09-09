@@ -2078,6 +2078,37 @@ a {
   font-size: 10px;
 }
 
+.automation-run-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  font-size: 10px;
+}
+
+.automation-run-result.completed {
+  border-color: rgba(15, 159, 115, .24);
+  color: var(--success);
+  background: rgba(15, 159, 115, .08);
+}
+
+.automation-run-result.failed {
+  border-color: rgba(217, 83, 79, .24);
+  color: var(--danger);
+  background: rgba(217, 83, 79, .08);
+}
+
+.automation-run-result.cancelled {
+  border-color: rgba(231, 162, 59, .24);
+  color: var(--warning);
+  background: rgba(231, 162, 59, .08);
+}
+
 @media (max-width: 900px) {
   .automation-layout {
     grid-template-columns: 210px minmax(0, 1fr);

@@ -100,7 +100,7 @@ export function createAutomationScript(input: Partial<AutomationScript> & Pick<A
       : {},
     steps,
     createdAt: input.createdAt ?? timestamp,
-    updatedAt: timestamp,
+    updatedAt: input.updatedAt ?? timestamp,
     ...(input.lastRunAt ? { lastRunAt: input.lastRunAt } : {}),
   };
 }

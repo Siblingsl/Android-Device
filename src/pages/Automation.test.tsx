@@ -1,11 +1,20 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { I18nProvider } from "../i18n";
 import { AUTOMATION_STORAGE_KEY, defaultAutomationScript } from "../lib/automation";
 import { AutomationPage } from "./Automation";
+
+vi.mock("../services/automationService", () => ({
+  createDeviceAutomationRuntime: vi.fn(() => ({})),
+}));
+vi.mock("../lib/automationRunner", () => ({
+  runAutomationScript: vi.fn().mockResolvedValue({ status: "completed", completedSteps: 2, logs: [] }),
+}));
+
+const { runAutomationScript } = await import("../lib/automationRunner");
 
 function TestShell() {
   return (
@@ -47,5 +56,19 @@ describe("AutomationPage", () => {
     expect(JSON.parse(localStorage.getItem(AUTOMATION_STORAGE_KEY) ?? "[]")).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "批量巡检" })]),
     );
+  });
+
+  it("runs the selected script for the entered device serial", async () => {
+    render(<TestShell />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "执行设备" }), { target: { value: "serial-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行脚本" }));
+
+    await vi.waitFor(() => expect(runAutomationScript).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "设备巡检示例" }),
+      "serial-1",
+      expect.anything(),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
   });
 });

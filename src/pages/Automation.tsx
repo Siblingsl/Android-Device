@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Clock3,
   Download,
@@ -8,6 +8,7 @@ import {
   Play,
   Plus,
   Save,
+  Square,
   Trash2,
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
@@ -19,8 +20,10 @@ import {
   readAutomationScripts,
   writeAutomationScripts,
 } from "../lib/automation";
+import { runAutomationScript } from "../lib/automationRunner";
+import { createDeviceAutomationRuntime } from "../services/automationService";
 import { useAppStore } from "../stores/appStore";
-import type { AutomationScript, AutomationStep, AutomationStepKind, AutomationStepValue } from "../types";
+import type { AutomationRunResult, AutomationScript, AutomationStep, AutomationStepKind, AutomationStepValue } from "../types";
 
 const STEP_KINDS: AutomationStepKind[] = [
   "wait", "screenshot", "tap", "swipe", "text", "key", "shell", "record", "launch", "install", "imageMatch", "if", "loop",
@@ -46,12 +49,18 @@ function makeStep(kind: AutomationStepKind, index: number, t: (key: string) => s
 export function AutomationPage() {
   const { t } = useI18n();
   const setStatusText = useAppStore((s) => s.setStatusText);
+  const devices = useAppStore((s) => s.devices);
+  const selectedDeviceId = useAppStore((s) => s.selectedDeviceId);
   const [scripts, setScripts] = useState<AutomationScript[]>(() => {
     const saved = readAutomationScripts();
     return saved.length ? saved : [defaultAutomationScript()];
   });
   const [selectedId, setSelectedId] = useState(() => readAutomationScripts()[0]?.id ?? "");
   const [selectedStepId, setSelectedStepId] = useState("");
+  const [targetSerial, setTargetSerial] = useState("");
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<AutomationRunResult | null>(null);
+  const runController = useRef<AbortController | null>(null);
 
   const selected = useMemo(
     () => scripts.find((script) => script.id === selectedId) ?? scripts[0] ?? null,
@@ -64,9 +73,15 @@ export function AutomationPage() {
     if (selected && selectedStep && selectedStepId !== selectedStep.id) setSelectedStepId(selectedStep.id);
   }, [scripts, selected, selectedId, selectedStep, selectedStepId]);
 
+  useEffect(() => {
+    if (targetSerial) return;
+    const preferred = devices.find((device) => device.id === selectedDeviceId && device.online)?.serial;
+    setTargetSerial(preferred ?? devices.find((device) => device.online)?.serial ?? "");
+  }, [devices, selectedDeviceId, targetSerial]);
+
   const updateSelected = (patch: Partial<AutomationScript>) => {
     if (!selected) return;
-    setScripts((current) => current.map((script) => script.id === selected.id ? createAutomationScript({ ...script, ...patch, id: script.id, name: patch.name ?? script.name }) : script));
+    setScripts((current) => current.map((script) => script.id === selected.id ? createAutomationScript({ ...script, ...patch, updatedAt: undefined, id: script.id, name: patch.name ?? script.name }) : script));
   };
 
   const updateSelectedStep = (patch: Partial<AutomationStep>) => {
@@ -101,6 +116,24 @@ export function AutomationPage() {
     updateSelected({ steps: [...selected.steps, step] });
     setSelectedStepId(step.id);
   };
+
+  const run = async () => {
+    if (!selected || !targetSerial.trim() || running) return;
+    const controller = new AbortController();
+    runController.current = controller;
+    setRunning(true);
+    setRunResult(null);
+    try {
+      const result = await runAutomationScript(selected, targetSerial.trim(), createDeviceAutomationRuntime(), { signal: controller.signal });
+      setRunResult(result);
+      setStatusText(`${t("automation.run")}：${result.status}`);
+    } finally {
+      runController.current = null;
+      setRunning(false);
+    }
+  };
+
+  const cancelRun = () => runController.current?.abort();
 
   const exportScript = () => {
     if (!selected) return;
@@ -149,13 +182,14 @@ export function AutomationPage() {
                 </div>
                 <div className="row">
                   <Button variant="secondary" icon={<Trash2 size={14} />} onClick={remove}>{t("automation.delete")}</Button>
-                  <Button variant="secondary" icon={<Play size={14} />} onClick={() => setStatusText(`${t("automation.run")}：${selected.name}`)}>{t("automation.run")}</Button>
+                  <Button variant="secondary" icon={running ? <Square size={14} /> : <Play size={14} />} onClick={running ? cancelRun : () => void run()} disabled={!targetSerial.trim()}>{running ? "停止运行" : t("automation.run")}</Button>
                   <Button variant="primary" icon={<Save size={14} />} onClick={save}>{t("automation.save")}</Button>
                 </div>
               </div>
               <div className="automation-meta-form">
                 <label><span>{t("automation.name")}</span><input aria-label={t("automation.name")} value={selected.name} onChange={(event) => updateSelected({ name: event.target.value })} /></label>
                 <label className="wide"><span>{t("automation.description")}</span><input value={selected.description} onChange={(event) => updateSelected({ description: event.target.value })} /></label>
+                <label><span>执行设备</span><input aria-label="执行设备" placeholder="设备 Serial" value={targetSerial} onChange={(event) => setTargetSerial(event.target.value)} /></label>
                 <label className="switch-row"><input type="checkbox" checked={selected.enabled} onChange={(event) => updateSelected({ enabled: event.target.checked })} /><span>{t("automation.enabled")}</span></label>
               </div>
               <div className="automation-body">
@@ -175,6 +209,7 @@ export function AutomationPage() {
                 </section>
                 <section className="automation-detail-panel">
                   <div className="automation-panel-head"><strong>{t("automation.stepDetails")}</strong><span className="muted">{selectedStep ? selectedStep.id : "—"}</span></div>
+                  {runResult && <div className={`automation-run-result ${runResult.status}`}><strong>{runResult.status === "completed" ? "执行完成" : runResult.status === "cancelled" ? "已取消" : "执行失败"}</strong><span>{runResult.completedSteps}/{selected.steps.length} 步</span></div>}
                   {selectedStep ? <>
                     <h3>{selectedStep.label}</h3>
                     <label><span>{t("automation.stepType")}</span><select value={selectedStep.kind} onChange={(event) => updateSelectedStep({ kind: event.target.value as AutomationStepKind, label: t(`automation.step.${event.target.value}`) })}>{STEP_KINDS.map((kind) => <option key={kind} value={kind}>{t(`automation.step.${kind}`)}</option>)}</select></label>
