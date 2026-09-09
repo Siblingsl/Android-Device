@@ -15,6 +15,14 @@ import type { DeviceInfo, ShellResult } from "../types";
 
 const DEVICE_STORAGE_KEY = "rdc.controlWindow.deviceId";
 
+function getOptionalCurrentWindow() {
+  try {
+    return getCurrentWindow();
+  } catch {
+    return null;
+  }
+}
+
 function readStoredDeviceId(): string | null {
   try {
     return localStorage.getItem(DEVICE_STORAGE_KEY);
@@ -33,8 +41,8 @@ function persistDeviceId(deviceId: string): void {
 
 export function FloatingControlPage() {
   const { t } = useI18n();
-  const currentWindow = useMemo(() => getCurrentWindow(), []);
-  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const currentWindow = useMemo(getOptionalCurrentWindow, []);
+ const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preferences, setPreferences] = useState<ControlWindowPreferences>(() => readControlWindowPreferences());
   const [busy, setBusy] = useState<string | null>(null);
@@ -61,9 +69,11 @@ export function FloatingControlPage() {
     void loadDevices();
   }, []);
 
-  useEffect(() => {
-    let unlistenBlur: (() => void) | undefined;
-    let unlistenDeviceChange: (() => void) | undefined;
+ useEffect(() => {
+    if (!currentWindow) return;
+
+   let unlistenBlur: (() => void) | undefined;
+   let unlistenDeviceChange: (() => void) | undefined;
 
     void currentWindow.setAlwaysOnTop(preferences.alwaysOnTop).catch(() => undefined);
     void currentWindow
@@ -123,11 +133,11 @@ export function FloatingControlPage() {
   const updatePreference = (key: keyof ControlWindowPreferences, value: boolean) => {
     const next = { ...preferences, [key]: value };
     setPreferences(next);
-    persistControlWindowPreferences(next);
-    if (key === "alwaysOnTop") {
-      void currentWindow.setAlwaysOnTop(value).catch(() => undefined);
-    }
-  };
+   persistControlWindowPreferences(next);
+   if (key === "alwaysOnTop") {
+      void currentWindow?.setAlwaysOnTop(value).catch(() => undefined);
+   }
+ };
 
   const buttonDisabled = !actionable || Boolean(busy);
 
