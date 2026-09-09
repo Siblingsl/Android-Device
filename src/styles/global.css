@@ -1645,6 +1645,27 @@ a {
 .devices-table-actions .device-action-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .devices-table-actions select { height: 28px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--bg); font-size: 11px; }
 .devices-table-actions select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.devices-table-action-cell { background: var(--bg-card); }
+.devices-table-row:hover .devices-table-action-cell { background: var(--bg-hover); }
+.devices-table-hover-anchor[data-hover-placement="top-left"] .device-hover-card { top: auto; bottom: calc(100% + 7px); left: -6px; }
+.devices-table-hover-anchor[data-hover-placement="top-right"] .device-hover-card { top: auto; right: -6px; bottom: calc(100% + 7px); left: auto; }
+.devices-table-hover-anchor[data-hover-placement="bottom-right"] .device-hover-card { right: -6px; left: auto; }
+
+@media (max-width: 1100px) {
+  .devices-table-responsive { scrollbar-width: thin; overscroll-behavior-inline: contain; }
+  .devices-table-responsive .devices-table { min-width: 760px; }
+  .devices-table-responsive .devices-table th,
+  .devices-table-responsive .devices-table td { padding: 6px 8px; }
+  .devices-table-responsive .devices-table-identity { min-width: 190px; }
+  .devices-table-responsive .devices-table-action-cell { position: sticky; right: 0; z-index: 2; box-shadow: -8px 0 14px -14px var(--text); }
+  .devices-table-responsive thead .devices-table-action-cell { z-index: 3; }
+}
+
+@media (max-width: 720px) {
+  .devices-table-responsive .devices-table { min-width: 700px; }
+  .devices-table-responsive .devices-table-actions { gap: 3px; }
+  .devices-table-responsive .devices-table-actions .device-row-action { width: 28px; min-width: 28px; }
+}
 .dashboard-page { max-width: 1680px; margin: 0 auto; }
 .device-board { padding: 4px 0 18px; }
 .device-board-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
@@ -1769,7 +1790,7 @@ a {
 .batch-broadcast-text, .batch-broadcast-keys { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .batch-broadcast-text input { width: min(280px, 42vw); height: 28px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); font-size: 11px; }
 .batch-broadcast-keys .muted { margin-right: 2px; font-size: 10px; }
-.device-hover-card { position: absolute; z-index: 10; top: calc(100% + 7px); left: 0; width: min(300px, calc(100vw - 40px)); padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-hover); }
+.device-hover-card { position: absolute; z-index: 10; top: calc(100% + 7px); left: 0; width: min(300px, calc(100vw - 40px)); max-height: min(360px, calc(100vh - 24px)); overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-hover); }
 .device-hover-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; color: var(--text-secondary); }
 .device-hover-status { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; font-size: 9px; }
 .device-hover-status.online { color: var(--success); background: rgba(16, 185, 129, 0.12); }

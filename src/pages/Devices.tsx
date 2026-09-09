@@ -61,6 +61,16 @@ const MAX_BATCH_HISTORY = 10;
 const BATCH_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 type DevicesView = "table" | "cards";
+type HoverPlacement = "bottom-left" | "bottom-right" | "top-left" | "top-right";
+
+function getDeviceHoverPlacement(rect: DOMRect, viewportWidth: number, viewportHeight: number): HoverPlacement {
+  const cardWidth = 300;
+  const cardHeight = 310;
+  const edgeGap = 14;
+  const vertical = rect.bottom + cardHeight + edgeGap > viewportHeight && rect.top > cardHeight + edgeGap ? "top" : "bottom";
+  const horizontal = rect.left + cardWidth + edgeGap > viewportWidth && rect.right - cardWidth > edgeGap ? "right" : "left";
+  return `${vertical}-${horizontal}` as HoverPlacement;
+}
 
 function readDevicesView(): DevicesView {
   try {
@@ -287,6 +297,7 @@ export function Devices() {
   const [filter, setFilter] = useState<"all" | "online" | "offline">(readFilter);
   const [devicesView, setDevicesView] = useState<DevicesView>(readDevicesView);
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
+  const [hoverPlacement, setHoverPlacement] = useState<HoverPlacement>("bottom-left");
   const [query, setQuery] = useState(() => {
     try {
       return sessionStorage.getItem(QUERY_KEY) ?? "";
@@ -1629,7 +1640,7 @@ export function Devices() {
         </Card>
       ) : (
         devicesView === "table" ? (
-          <div className="devices-table-shell">
+          <div className="devices-table-shell devices-table-responsive">
             <table className="table devices-table">
               <thead>
                 <tr>
@@ -1638,7 +1649,7 @@ export function Devices() {
                   <th>{t("devices.table.status")}</th>
                   <th>{t("devices.table.services")}</th>
                   <th>{t("devices.table.runtime")}</th>
-                  <th>{t("devices.table.actions")}</th>
+                  <th className="devices-table-action-cell">{t("devices.table.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1669,9 +1680,16 @@ export function Devices() {
                       <td>
                         <div
                           className="devices-table-identity devices-table-hover-anchor"
-                          onMouseEnter={() => setHoveredDeviceId(d.id)}
+                          data-hover-placement={hoveredDeviceId === d.id ? hoverPlacement : undefined}
+                          onMouseEnter={(event) => {
+                            setHoveredDeviceId(d.id);
+                            setHoverPlacement(getDeviceHoverPlacement(event.currentTarget.getBoundingClientRect(), window.innerWidth, window.innerHeight));
+                          }}
                           onMouseLeave={() => setHoveredDeviceId(null)}
-                          onFocus={() => setHoveredDeviceId(d.id)}
+                          onFocus={(event) => {
+                            setHoveredDeviceId(d.id);
+                            setHoverPlacement(getDeviceHoverPlacement(event.currentTarget.getBoundingClientRect(), window.innerWidth, window.innerHeight));
+                          }}
                           onBlur={(event) => {
                             const next = event.relatedTarget;
                             if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
@@ -1726,7 +1744,7 @@ export function Devices() {
                           {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
                         </div>
                       </td>
-                      <td>
+                      <td className="devices-table-action-cell">
                         <div className="devices-table-status">
                           <StatusDot online={online} />
                           <span className="muted mono">{d.adbStatus}</span>

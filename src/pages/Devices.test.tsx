@@ -193,6 +193,52 @@ describe("Devices batch controls", () => {
     expect(within(onlineRow).getByRole("combobox")).toBeTruthy();
   }, 15_000);
 
+  it("keeps the table shell responsive and repositions the hover card near viewport edges", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("devices-table-hover-anchor")) {
+        return {
+          top: 560,
+          bottom: 590,
+          left: 760,
+          right: 980,
+          width: 220,
+          height: 30,
+          x: 760,
+          y: 560,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return {
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const tableShell = await screen.findByRole("table");
+    expect(tableShell.parentElement?.classList.contains("devices-table-responsive")).toBe(true);
+
+    const onlineRow = screen.getByRole("row", { name: /设备 one/ });
+    fireEvent.focus(within(onlineRow).getByRole("button", { name: "设备 one" }));
+
+    const anchor = within(onlineRow).getByRole("button", { name: "设备 one" }).parentElement;
+    expect(anchor?.getAttribute("data-hover-placement")).toBe("top-right");
+  }, 15_000);
+
   it("shows telemetry and a screenshot when focusing a table device", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
       { ...device("one"), online: true, adbStatus: "device" },
