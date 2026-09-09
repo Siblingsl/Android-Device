@@ -158,6 +158,31 @@ describe("AdbPage refresh ordering", () => {
     expect(screen.getByText("服务名")).toBeTruthy();
   });
 
+  it("imports an Android QR payload and pairs the matching mDNS service", async () => {
+    vi.mocked(DeviceService.adbMdnsServices).mockResolvedValue([
+      { instanceName: "phone-pair", serviceType: "_adb-tls-pairing._tcp", address: "192.168.1.20:37145" },
+      { instanceName: "phone-pair", serviceType: "_adb-tls-connect._tcp", address: "192.168.1.20:41123" },
+    ]);
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByLabelText("导入 QR 内容"), {
+      target: { value: "WIFI:T:ADB;S:phone-pair;P:515109;;" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "导入 QR 并配对" }));
+    await waitFor(() => expect(DeviceService.adbPair).toHaveBeenCalledWith("192.168.1.20:37145", "515109"));
+    expect(screen.getByLabelText("配对码 / QR 密钥")).toHaveProperty("value", "515109");
+    expect(screen.getByLabelText("配对服务地址")).toHaveProperty("value", "192.168.1.20:37145");
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]")[0].address).toBe("192.168.1.20:41123"));
+  });
+
   it("connects discovered mDNS services and saves the address", async () => {
     vi.mocked(DeviceService.adbMdnsServices).mockResolvedValue([
       { instanceName: "adb-device", serviceType: "_adb-tls-connect._tcp", address: "192.168.1.20:41123" },

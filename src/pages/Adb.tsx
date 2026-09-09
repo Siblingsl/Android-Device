@@ -20,6 +20,7 @@ import {
   DEFAULT_RECONNECT_CONCURRENCY,
   normalizeWirelessAddress,
   normalizeReconnectConcurrency,
+  parseAdbQrPayload,
   runWithConcurrency,
   upsertSavedWirelessAddress,
   type SavedWirelessAddress,
@@ -64,6 +65,7 @@ export function AdbPage() {
     dataUrl: string;
   } | null>(null);
   const [qrBusy, setQrBusy] = useState(false);
+  const [qrInput, setQrInput] = useState("");
   const [savedAddresses, setSavedAddresses] = useState<SavedWirelessAddress[]>(() => {
     try {
       const raw = localStorage.getItem("rdc.adb.savedWirelessAddresses");
@@ -285,6 +287,34 @@ export function AdbPage() {
       return;
     }
     await pairWirelessAddress(pairingService.address, qrPair.pairingSecret);
+  };
+
+  const importQrPairing = async () => {
+    const parsed = parseAdbQrPayload(qrInput);
+    if (!parsed) {
+      setStatusText(t("adb.wireless.qrImportInvalid"));
+      void alert(t("adb.wireless.qrImportInvalid"));
+      return;
+    }
+    setPairingCode(parsed.pairingSecret);
+    setStatusText(t("adb.wireless.qrImportSearching", { name: parsed.instanceName }));
+    const services = await refreshMdnsServices(true);
+    const pairingService = findPairingService(services, parsed.instanceName);
+    if (!pairingService) {
+      setStatusText(t("adb.wireless.qrServiceMissing", { name: parsed.instanceName }));
+      void alert(t("adb.wireless.qrServiceMissing", { name: parsed.instanceName }));
+      return;
+    }
+    setPairAddress(pairingService.address);
+    const paired = await pairWirelessAddress(pairingService.address, parsed.pairingSecret);
+    if (!paired) return;
+    const connectService = (await refreshMdnsServices(true)).find(
+      (service) => isAdbConnectService(service) && service.instanceName === parsed.instanceName,
+    );
+    if (connectService) {
+      setSavedAddresses((entries) => upsertSavedWirelessAddress(entries, connectService.address, parsed.instanceName));
+      setStatusText(t("adb.wireless.qrImportSaved", { address: connectService.address }));
+    }
   };
 
   const saveWirelessAddress = () => {
@@ -622,6 +652,21 @@ export function AdbPage() {
               </div>
               <Button size="sm" variant="ghost" icon={<QrCode size={14} />} loading={qrBusy} disabled={!adbOk} onClick={() => void createQrPairing()}>
                 {t("adb.wireless.generateQr")}
+              </Button>
+            </div>
+            <div className="wireless-qr-import">
+              <div className="wireless-section-title"><QrCode size={14} />{t("adb.wireless.qrImportTitle")}</div>
+              <div className="muted wireless-help">{t("adb.wireless.qrImportHint")}</div>
+              <textarea
+                aria-label={t("adb.wireless.qrImportLabel")}
+                value={qrInput}
+                onChange={(event) => setQrInput(event.target.value)}
+                placeholder="WIFI:T:ADB;S:device;P:secret;;"
+                rows={2}
+                disabled={pairingBusy}
+              />
+              <Button size="sm" variant="secondary" loading={pairingBusy} disabled={!adbOk || pairingBusy || !qrInput.trim()} onClick={() => void importQrPairing()}>
+                {t("adb.wireless.qrImportButton")}
               </Button>
             </div>
             {qrPair ? (

@@ -2336,6 +2336,20 @@ a {
 .wireless-qr-meta .mono {
   overflow-wrap: anywhere;
 }
+.wireless-qr-import {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.wireless-qr-import textarea {
+  width: 100%;
+  min-height: 52px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
 .wireless-saved-list,
 .wireless-mdns-list {
   display: flex;
