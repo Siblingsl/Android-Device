@@ -390,4 +390,90 @@ describe("AdbPage refresh ordering", () => {
     const labels = [...container.querySelectorAll(".wireless-saved-label span")].map((node) => node.textContent);
     expect(labels).toEqual(["Phone B", "Phone A"]);
   });
+
+  it("keeps legacy saved addresses compatible and toggles favorites", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
+    const { container } = render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "收藏 Phone A" })).toBeTruthy());
+    expect(container.querySelectorAll(".wireless-saved-group-input")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "收藏 Phone A" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]")[0]).toMatchObject({
+      address: "192.168.1.20:5555",
+      favorite: true,
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "仅看收藏" }));
+    expect(screen.getByText("Phone A")).toBeTruthy();
+    expect(screen.queryByText("Phone B")).toBeNull();
+  });
+
+  it("filters saved addresses by search and live status", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "主手机", lastConnectedAt: "", favorite: true, group: "工作" },
+      { address: "192.168.1.21:5555", label: "测试机", lastConnectedAt: "", favorite: false, group: "测试" },
+    ]));
+    vi.mocked(DeviceService.getAdbInfo).mockResolvedValue({
+      version: "ADB",
+      serverRunning: true,
+      devices: [{ serial: "192.168.1.20:5555", state: "device", product: "", model: "", device: "", transportId: "" }],
+    });
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText("在线")).toBeTruthy());
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索保存地址" }), { target: { value: "测试" } });
+    expect(screen.getByText("测试机")).toBeTruthy();
+    expect(screen.queryByText("主手机")).toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索保存地址" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "仅看在线" }));
+    expect(screen.getByText("主手机")).toBeTruthy();
+    expect(screen.queryByText("测试机")).toBeNull();
+  });
+
+  it("edits a saved address group and persists the group label", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "", group: "工作" },
+    ]));
+    const { container } = render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(container.querySelector(".wireless-saved-group-input")).toBeTruthy());
+    const groupInput = container.querySelector(".wireless-saved-group-input") as HTMLInputElement;
+    fireEvent.change(groupInput, { target: { value: "测试" } });
+    fireEvent.keyDown(groupInput, { key: "Enter" });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]")[0].group).toBe("测试"));
+    expect(screen.getByText("测试")).toBeTruthy();
+  });
+
+  it("preserves favorite and group metadata after reconnecting", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "", favorite: true, group: "工作" },
+    ]));
+    const { container } = render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(container.querySelector(".wireless-saved-row .btn")).toBeTruthy());
+    const reconnectButton = [...container.querySelectorAll(".wireless-saved-row .btn")]
+      .find((button) => button.textContent?.trim() === "连接");
+    expect(reconnectButton).toBeTruthy();
+    fireEvent.click(reconnectButton!);
+    await waitFor(() => expect(DeviceService.adbConnect).toHaveBeenCalledWith("192.168.1.20:5555"));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]")[0].lastConnectedAt).not.toBe(""));
+    expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]")[0]).toMatchObject({
+      favorite: true,
+      group: "工作",
+    });
+  });
 });

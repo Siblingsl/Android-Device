@@ -9,6 +9,8 @@ export interface SavedWirelessAddress {
   address: string;
   label: string;
   lastConnectedAt: string;
+  favorite?: boolean;
+  group?: string;
 }
 
 export type SavedWirelessAddressStatus = "online" | "connecting" | "offline" | "failed";
@@ -110,9 +112,16 @@ export function upsertSavedWirelessAddress(
 ): SavedWirelessAddress[] {
   const address = normalizeWirelessAddress(rawAddress);
   if (!address) return entries;
+  const existing = entries.find((entry) => entry.address === address);
   const next = entries.filter((entry) => entry.address !== address);
   return [
-    { address, label: label.trim() || address, lastConnectedAt: new Date().toISOString() },
+    {
+      address,
+      label: label.trim() || address,
+      lastConnectedAt: new Date().toISOString(),
+      ...(existing?.favorite !== undefined ? { favorite: existing.favorite } : {}),
+      ...(existing?.group ? { group: existing.group } : {}),
+    },
     ...next,
   ].slice(0, 32);
 }

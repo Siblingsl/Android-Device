@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookmarkPlus, Cable, Camera, Check, ChevronDown, ChevronUp, GripVertical, ImagePlus, Link2, Pencil, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench, X } from "lucide-react";
+import { Bookmark, BookmarkCheck, BookmarkPlus, Cable, Camera, Check, ChevronDown, ChevronUp, GripVertical, ImagePlus, Link2, Pencil, QrCode, Radio, RefreshCw, Search, Trash2, Unplug, Usb, Wrench, X } from "lucide-react";
 import QRCode from "qrcode";
 import { copyText } from "../lib/clipboard";
 import { decodeQrImageFile, decodeQrVideoFrame } from "../lib/qrScanner";
@@ -33,6 +33,7 @@ import type { AdbInfo, AdbMdnsService, LanScanResult } from "../types";
 type SavedReconnectStatus = "connecting" | "success" | "failed";
 type SavedReconnectResult = { status: SavedReconnectStatus; message: string };
 type SavedAddressSort = "manual" | "recent";
+type SavedAddressFilter = "all" | "favorite" | "online" | "offline" | "failed";
 
 export function AdbPage() {
   const [info, setInfo] = useState<AdbInfo | null>(null);
@@ -87,6 +88,8 @@ export function AdbPage() {
           address: normalizeWirelessAddress(typeof entry.address === "string" ? entry.address : "") || "",
           label: typeof entry.label === "string" ? entry.label : "",
           lastConnectedAt: typeof entry.lastConnectedAt === "string" ? entry.lastConnectedAt : "",
+          ...(typeof entry.favorite === "boolean" ? { favorite: entry.favorite } : {}),
+          ...(typeof entry.group === "string" && entry.group.trim() ? { group: entry.group.trim() } : {}),
         }))
         .filter((entry) => entry.address);
     } catch {
@@ -110,6 +113,8 @@ export function AdbPage() {
       return "manual";
     }
   });
+  const [savedAddressFilter, setSavedAddressFilter] = useState<SavedAddressFilter>("all");
+  const [savedAddressSearch, setSavedAddressSearch] = useState("");
   const [draggingSavedAddress, setDraggingSavedAddress] = useState<string | null>(null);
   const draggingSavedAddressRef = useRef<string | null>(null);
   const dragTargetAddressRef = useRef<string | null>(null);
@@ -456,6 +461,19 @@ export function AdbPage() {
     setEditingLabel("");
   };
 
+  const toggleSavedAddressFavorite = (targetAddress: string) => {
+    setSavedAddresses((entries) => entries.map((entry) => (
+      entry.address === targetAddress ? { ...entry, favorite: !entry.favorite } : entry
+    )));
+  };
+
+  const updateSavedAddressGroup = (targetAddress: string, rawGroup: string) => {
+    const group = rawGroup.trim();
+    setSavedAddresses((entries) => entries.map((entry) => (
+      entry.address === targetAddress ? { ...entry, group: group || undefined } : entry
+    )));
+  };
+
   const reconnectSavedAddresses = async (entries = savedAddresses) => {
     if (!entries.length || reconnectBusy) return;
     setReconnectBusy(true);
@@ -514,9 +532,10 @@ export function AdbPage() {
   };
 
   const toggleAllSavedAddresses = () => {
-    setSelectedSavedAddresses((current) => current.length === savedAddresses.length
-      ? []
-      : savedAddresses.map((entry) => entry.address));
+    const visibleAddresses = displayedSavedAddresses.map((entry) => entry.address);
+    setSelectedSavedAddresses((current) => allSavedAddressesSelected
+      ? current.filter((address) => !visibleSavedAddressSet.has(address))
+      : Array.from(new Set([...current, ...visibleAddresses])));
   };
 
   const deleteSelectedSavedAddresses = async () => {
@@ -673,14 +692,30 @@ export function AdbPage() {
     (entry) => reconnectResults[entry.address]?.status === "failed",
   ).length;
   const selectedSavedEntries = savedAddresses.filter((entry) => selectedSavedAddresses.includes(entry.address));
-  const allSavedAddressesSelected = Boolean(savedAddresses.length) && selectedSavedEntries.length === savedAddresses.length;
+  const getSavedAddressGroup = (entry: SavedWirelessAddress) => entry.group?.trim() || t("adb.wireless.ungrouped");
+  const savedAddressGroups = Array.from(new Set(savedAddresses.map(getSavedAddressGroup)));
+  const savedAddressSearchValue = savedAddressSearch.trim().toLocaleLowerCase();
+  const filteredSavedAddresses = savedAddresses.filter((entry) => {
+    const status = getSavedWirelessAddressStatus(entry, info?.devices || [], mdnsServices, reconnectResults);
+    const matchesFilter = savedAddressFilter === "all"
+      || (savedAddressFilter === "favorite" && entry.favorite === true)
+      || status === savedAddressFilter;
+    if (!matchesFilter) return false;
+    if (!savedAddressSearchValue) return true;
+    return [entry.label, entry.address, getSavedAddressGroup(entry)].some((value) => value.toLocaleLowerCase().includes(savedAddressSearchValue));
+  });
   const displayedSavedAddresses = savedAddressSort === "recent"
-    ? [...savedAddresses].sort((left, right) => {
+    ? [...filteredSavedAddresses].sort((left, right) => {
+      if (Boolean(left.favorite) !== Boolean(right.favorite)) return left.favorite ? -1 : 1;
       const leftTime = Date.parse(left.lastConnectedAt) || 0;
       const rightTime = Date.parse(right.lastConnectedAt) || 0;
       return rightTime - leftTime;
     })
-    : savedAddresses;
+    : filteredSavedAddresses;
+  const scopedSavedAddressView = Boolean(savedAddressSearchValue) || savedAddressFilter !== "all";
+  const visibleSavedAddressSet = new Set(displayedSavedAddresses.map((entry) => entry.address));
+  const allSavedAddressesSelected = Boolean(displayedSavedAddresses.length)
+    && displayedSavedAddresses.every((entry) => selectedSavedAddresses.includes(entry.address));
 
   return (
     <div>
@@ -955,6 +990,37 @@ export function AdbPage() {
           }
         >
           {savedAddresses.length ? (
+            <>
+              <div className="wireless-saved-toolbar">
+                <label className="wireless-saved-search">
+                  <Search size={14} aria-hidden="true" />
+                  <input
+                    type="search"
+                    aria-label={t("adb.wireless.search")}
+                    placeholder={t("adb.wireless.searchPlaceholder")}
+                    value={savedAddressSearch}
+                    onChange={(event) => setSavedAddressSearch(event.target.value)}
+                  />
+                </label>
+                <div className="wireless-saved-filters" role="group" aria-label={t("adb.wireless.filter")}>
+                  {(["all", "favorite", "online", "offline", "failed"] as SavedAddressFilter[]).map((filter) => (
+                    <Button
+                      key={filter}
+                      size="sm"
+                      variant={savedAddressFilter === filter ? "secondary" : "ghost"}
+                      onClick={() => setSavedAddressFilter(filter)}
+                    >
+                      {t(`adb.wireless.filter.${filter}`)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div className="wireless-saved-summary muted">
+                {t("adb.wireless.showing", { shown: displayedSavedAddresses.length, total: savedAddresses.length })}
+              </div>
+            </>
+          ) : null}
+          {savedAddresses.length ? (
             <div className="wireless-selection-bar">
               <Button size="sm" variant="ghost" onClick={toggleAllSavedAddresses}>
                 {allSavedAddressesSelected ? t("adb.wireless.cancelSelectAll") : t("adb.wireless.selectAll")}
@@ -979,115 +1045,146 @@ export function AdbPage() {
                 const result = reconnectResults[entry.address];
                 const status = getSavedWirelessAddressStatus(entry, info?.devices || [], mdnsServices, reconnectResults);
                 const isEditing = editingAddress === entry.address;
+                const group = getSavedAddressGroup(entry);
+                const previousGroup = index > 0 ? getSavedAddressGroup(displayedSavedAddresses[index - 1]) : null;
                 return (
-                  <div
-                    className={`wireless-saved-row${draggingSavedAddress === entry.address ? " is-dragging" : ""}`}
-                    key={entry.address}
-                    draggable={savedAddressSort === "manual" && !reconnectBusy}
-                    onDragStart={() => {
-                      draggingSavedAddressRef.current = entry.address;
-                      setDraggingSavedAddress(entry.address);
-                    }}
-                    onDragEnter={(event) => {
-                      if (savedAddressSort === "manual" && draggingSavedAddressRef.current && draggingSavedAddressRef.current !== entry.address) {
-                        event.preventDefault();
-                        dragTargetAddressRef.current = entry.address;
-                      }
-                    }}
-                    onDragOver={(event) => {
-                      if (savedAddressSort === "manual" && draggingSavedAddressRef.current && draggingSavedAddressRef.current !== entry.address) {
-                        event.preventDefault();
-                        dragTargetAddressRef.current = entry.address;
-                      }
-                    }}
-                    onDrop={() => dropSavedAddress(entry.address)}
-                    onDragEnd={finishSavedAddressDrag}
-                  >
-                    <input
-                      type="checkbox"
-                      aria-label={t("adb.wireless.selectAddress", { label: entry.label })}
-                      checked={selectedSavedAddresses.includes(entry.address)}
-                      onChange={() => toggleSavedAddressSelection(entry.address)}
-                      disabled={reconnectBusy}
-                    />
-                    <div className="wireless-saved-row-content">
-                      {isEditing ? (
-                        <div className="wireless-saved-edit">
+                  <Fragment key={entry.address}>
+                    {group !== previousGroup ? <div className="wireless-saved-group-title">{group}</div> : null}
+                    <div
+                      className={`wireless-saved-row${draggingSavedAddress === entry.address ? " is-dragging" : ""}`}
+                      draggable={savedAddressSort === "manual" && !reconnectBusy && !scopedSavedAddressView}
+                      onDragStart={() => {
+                        draggingSavedAddressRef.current = entry.address;
+                        setDraggingSavedAddress(entry.address);
+                      }}
+                      onDragEnter={(event) => {
+                        if (savedAddressSort === "manual" && !scopedSavedAddressView && draggingSavedAddressRef.current && draggingSavedAddressRef.current !== entry.address) {
+                          event.preventDefault();
+                          dragTargetAddressRef.current = entry.address;
+                        }
+                      }}
+                      onDragOver={(event) => {
+                        if (savedAddressSort === "manual" && !scopedSavedAddressView && draggingSavedAddressRef.current && draggingSavedAddressRef.current !== entry.address) {
+                          event.preventDefault();
+                          dragTargetAddressRef.current = entry.address;
+                        }
+                      }}
+                      onDrop={() => dropSavedAddress(entry.address)}
+                      onDragEnd={finishSavedAddressDrag}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={t("adb.wireless.selectAddress", { label: entry.label })}
+                        checked={selectedSavedAddresses.includes(entry.address)}
+                        onChange={() => toggleSavedAddressSelection(entry.address)}
+                        disabled={reconnectBusy}
+                      />
+                      <div className="wireless-saved-row-content">
+                        {isEditing ? (
+                          <div className="wireless-saved-edit">
+                            <input
+                              aria-label={t("adb.wireless.labelInput")}
+                              value={editingLabel}
+                              onChange={(event) => setEditingLabel(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") finishEditingSavedAddress();
+                                if (event.key === "Escape") {
+                                  setEditingAddress(null);
+                                  setEditingLabel("");
+                                }
+                              }}
+                              autoFocus
+                            />
+                            <Button size="sm" variant="primary" icon={<Check size={14} />} title={t("adb.wireless.saveLabel")} onClick={finishEditingSavedAddress} />
+                            <Button size="sm" variant="ghost" icon={<X size={14} />} title={t("adb.wireless.cancelLabel")} onClick={() => { setEditingAddress(null); setEditingLabel(""); }} />
+                          </div>
+                        ) : (
+                          <div className="wireless-saved-label">
+                            <span>{entry.label}</span>
+                            <Button size="sm" variant="ghost" icon={<Pencil size={13} />} title={t("adb.wireless.editLabel", { label: entry.label })} aria-label={t("adb.wireless.editLabel", { label: entry.label })} onClick={() => startEditingSavedAddress(entry)} />
+                          </div>
+                        )}
+                        <div className="muted mono">{entry.address}</div>
+                        <div className="wireless-saved-meta">
                           <input
-                            aria-label={t("adb.wireless.labelInput")}
-                            value={editingLabel}
-                            onChange={(event) => setEditingLabel(event.target.value)}
+                            className="wireless-saved-group-input"
+                            aria-label={t("adb.wireless.setGroup", { label: entry.label })}
+                            list="saved-wireless-groups"
+                            value={entry.group || ""}
+                            placeholder={t("adb.wireless.ungrouped")}
+                            onChange={(event) => updateSavedAddressGroup(entry.address, event.target.value)}
                             onKeyDown={(event) => {
-                              if (event.key === "Enter") finishEditingSavedAddress();
-                              if (event.key === "Escape") {
-                                setEditingAddress(null);
-                                setEditingLabel("");
-                              }
+                              if (event.key === "Enter") event.currentTarget.blur();
                             }}
-                            autoFocus
+                            onBlur={(event) => updateSavedAddressGroup(entry.address, event.target.value)}
+                            disabled={reconnectBusy}
                           />
-                          <Button size="sm" variant="primary" icon={<Check size={14} />} title={t("adb.wireless.saveLabel")} onClick={finishEditingSavedAddress} />
-                          <Button size="sm" variant="ghost" icon={<X size={14} />} title={t("adb.wireless.cancelLabel")} onClick={() => { setEditingAddress(null); setEditingLabel(""); }} />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={entry.favorite ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+                            title={t(entry.favorite ? "adb.wireless.unfavorite" : "adb.wireless.favorite", { label: entry.label })}
+                            aria-label={t(entry.favorite ? "adb.wireless.unfavorite" : "adb.wireless.favorite", { label: entry.label })}
+                            onClick={() => toggleSavedAddressFavorite(entry.address)}
+                            disabled={reconnectBusy}
+                          />
                         </div>
-                      ) : (
-                        <div className="wireless-saved-label">
-                          <span>{entry.label}</span>
-                          <Button size="sm" variant="ghost" icon={<Pencil size={13} />} title={t("adb.wireless.editLabel", { label: entry.label })} aria-label={t("adb.wireless.editLabel", { label: entry.label })} onClick={() => startEditingSavedAddress(entry)} />
+                        <div className={`wireless-saved-status ${status}`}>
+                          <span className="wireless-status-dot" aria-hidden="true" />
+                          {t(`adb.wireless.status.${status}`)}
+                          {status === "failed" && result?.message ? <span className="muted"> · {result.message}</span> : null}
+                          {entry.lastConnectedAt ? <span className="muted"> · {t("adb.wireless.lastSeen", { time: new Date(entry.lastConnectedAt).toLocaleString() })}</span> : null}
                         </div>
-                      )}
-                      <div className="muted mono">{entry.address}</div>
-                      <div className={`wireless-saved-status ${status}`}>
-                        <span className="wireless-status-dot" aria-hidden="true" />
-                        {t(`adb.wireless.status.${status}`)}
-                        {status === "failed" && result?.message ? <span className="muted"> · {result.message}</span> : null}
-                        {entry.lastConnectedAt ? <span className="muted"> · {t("adb.wireless.lastSeen", { time: new Date(entry.lastConnectedAt).toLocaleString() })}</span> : null}
+                      </div>
+                      <div className="row">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<GripVertical size={14} />}
+                          title={t("adb.wireless.dragToReorder")}
+                          aria-label={t("adb.wireless.dragToReorder")}
+                          disabled={savedAddressSort !== "manual" || reconnectBusy || scopedSavedAddressView}
+                          draggable={savedAddressSort === "manual" && !reconnectBusy && !scopedSavedAddressView}
+                          onDragStart={() => {
+                            draggingSavedAddressRef.current = entry.address;
+                            dragTargetAddressRef.current = null;
+                            setDraggingSavedAddress(entry.address);
+                          }}
+                          onDragEnd={finishSavedAddressDrag}
+                        />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<ChevronUp size={14} />}
+                          title={t("adb.wireless.moveUp", { label: entry.label })}
+                          aria-label={t("adb.wireless.moveUp", { label: entry.label })}
+                          disabled={savedAddressSort !== "manual" || reconnectBusy || scopedSavedAddressView || index === 0}
+                          onClick={() => moveSavedAddress(entry.address, -1)}
+                        />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<ChevronDown size={14} />}
+                          title={t("adb.wireless.moveDown", { label: entry.label })}
+                          aria-label={t("adb.wireless.moveDown", { label: entry.label })}
+                          disabled={savedAddressSort !== "manual" || reconnectBusy || scopedSavedAddressView || index === displayedSavedAddresses.length - 1}
+                          onClick={() => moveSavedAddress(entry.address, 1)}
+                        />
+                        <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy || isEditing} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
+                          {t("adb.connect")}
+                        </Button>
+                        <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => {
+                          setSavedAddresses((items) => items.filter((item) => item.address !== entry.address));
+                          setSelectedSavedAddresses((items) => items.filter((address) => address !== entry.address));
+                        }} />
                       </div>
                     </div>
-                    <div className="row">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<GripVertical size={14} />}
-                        title={t("adb.wireless.dragToReorder")}
-                        aria-label={t("adb.wireless.dragToReorder")}
-                        disabled={savedAddressSort !== "manual" || reconnectBusy}
-                        draggable={savedAddressSort === "manual" && !reconnectBusy}
-                        onDragStart={() => {
-                          draggingSavedAddressRef.current = entry.address;
-                          dragTargetAddressRef.current = null;
-                          setDraggingSavedAddress(entry.address);
-                        }}
-                        onDragEnd={finishSavedAddressDrag}
-                      />
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<ChevronUp size={14} />}
-                        title={t("adb.wireless.moveUp", { label: entry.label })}
-                        aria-label={t("adb.wireless.moveUp", { label: entry.label })}
-                        disabled={savedAddressSort !== "manual" || reconnectBusy || index === 0}
-                        onClick={() => moveSavedAddress(entry.address, -1)}
-                      />
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<ChevronDown size={14} />}
-                        title={t("adb.wireless.moveDown", { label: entry.label })}
-                        aria-label={t("adb.wireless.moveDown", { label: entry.label })}
-                        disabled={savedAddressSort !== "manual" || reconnectBusy || index === displayedSavedAddresses.length - 1}
-                        onClick={() => moveSavedAddress(entry.address, 1)}
-                      />
-                      <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy || isEditing} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
-                        {t("adb.connect")}
-                      </Button>
-                      <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => {
-                        setSavedAddresses((items) => items.filter((item) => item.address !== entry.address));
-                        setSelectedSavedAddresses((items) => items.filter((address) => address !== entry.address));
-                      }} />
-                    </div>
-                  </div>
+                  </Fragment>
                 );
               })}
+              <datalist id="saved-wireless-groups">
+                {savedAddressGroups.map((group) => <option key={group} value={group} />)}
+              </datalist>
             </div>
           ) : (
             <div className="empty-state">{t("adb.wireless.noSaved")}</div>
