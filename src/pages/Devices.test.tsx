@@ -232,6 +232,54 @@ describe("Devices batch controls", () => {
     expect(DeviceService.screenshot).toHaveBeenCalledWith("one-serial");
   }, 15_000);
 
+  it("edits and persists a device note inline", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    fireEvent.click(within(row).getByRole("button", { name: "编辑备注 设备 one" }));
+    const input = screen.getByRole("textbox", { name: "设备备注 设备 one" });
+    fireEvent.change(input, { target: { value: "测试机房" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存备注" }));
+
+    expect(await screen.findByText("测试机房")).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem("rdc.devices.notes") ?? "{}")).toEqual({ one: "测试机房" });
+  }, 15_000);
+
+  it("shows and manages historical offline devices", async () => {
+    localStorage.setItem(
+      "rdc.devices.offlineHistory",
+      JSON.stringify([
+        {
+          device: { ...device("ghost"), name: "已离线设备" },
+          lastSeenAt: Date.now() - 60 * 60 * 1000,
+        },
+      ]),
+    );
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "离线记录 1" }));
+    expect(screen.getByText("已离线设备")).toBeTruthy();
+    expect(screen.getByText(/最后出现/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "移除记录 已离线设备" }));
+    expect(screen.queryByText("已离线设备")).toBeNull();
+    const storedHistory = JSON.parse(localStorage.getItem("rdc.devices.offlineHistory") ?? "[]") as Array<{ device?: { id?: string } }>;
+    expect(storedHistory.some((entry) => entry.device?.id === "ghost")).toBe(false);
+  }, 15_000);
+
   it("keeps processing every device when the batch is not stopped", async () => {
     render(
       <MemoryRouter>

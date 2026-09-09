@@ -11,12 +11,29 @@ import {
   Upload,
   LayoutGrid,
   List,
+  Pencil,
+  Check,
+  X,
+  History,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { createRequestSequence } from "../lib/requestSequence";
 import { batchFileName, batchRemotePath } from "../lib/batchOperations";
+import {
+  readDeviceNotes,
+  persistDeviceNotes,
+  updateDeviceNote,
+  readOfflineDeviceHistory,
+  persistOfflineDeviceHistory,
+  rememberDevices,
+  removeOfflineDevice,
+  type DeviceNoteMap,
+  type OfflineDeviceHistoryEntry,
+} from "../lib/deviceMetadata";
 import {
   DEFAULT_SCRCPY_LAYOUT,
   normalizeScrcpyLayout,
@@ -138,6 +155,70 @@ function readBatchHistory(): BatchHistoryItem[] {
   }
 }
 
+function DeviceNoteEditor({
+  deviceName,
+  value,
+  onSave,
+}: {
+  deviceName: string;
+  value?: string;
+  onSave: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+
+  const startEditing = () => {
+    setDraft(value ?? "");
+    setEditing(true);
+  };
+
+  if (editing) {
+    return (
+      <form
+        className="device-note-editor"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(draft);
+          setEditing(false);
+        }}
+      >
+        <input
+          autoFocus
+          value={draft}
+          maxLength={80}
+          aria-label={`${t("devices.note.input")} ${deviceName}`}
+          placeholder={t("devices.note.placeholder")}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button type="submit" size="sm" variant="primary" icon={<Check size={12} />} aria-label={t("devices.note.save")} />
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<X size={12} />}
+          aria-label={t("devices.note.cancel")}
+          onClick={() => setEditing(false)}
+        />
+      </form>
+    );
+  }
+
+  return (
+    <div className="device-note-line">
+      {value ? <span className="device-note-value" title={value}>{value}</span> : <span className="device-note-empty">{t("devices.note.empty")}</span>}
+      <button
+        type="button"
+        className="device-note-edit"
+        aria-label={`${t("devices.note.edit")} ${deviceName}`}
+        title={t("devices.note.edit")}
+        onClick={startEditing}
+      >
+        <Pencil size={11} />
+      </button>
+    </div>
+  );
+}
+
 function persistBatchHistory(history: BatchHistoryItem[]) {
   try {
     localStorage.setItem(BATCH_HISTORY_KEY, JSON.stringify(history.slice(0, MAX_BATCH_HISTORY)));
@@ -218,6 +299,9 @@ export function Devices() {
   const [batchFilter, setBatchFilter] = useState<BatchResultFilter>("all");
   const [batchReasonFilter, setBatchReasonFilter] = useState<BatchReasonFilter>("all");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [deviceNotes, setDeviceNotes] = useState<DeviceNoteMap>(readDeviceNotes);
+  const [offlineHistory, setOfflineHistory] = useState<OfflineDeviceHistoryEntry[]>(readOfflineDeviceHistory);
+  const [offlineHistoryOpen, setOfflineHistoryOpen] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{
     label: string;
     current: number;
@@ -261,6 +345,9 @@ export function Devices() {
       const list = await DeviceService.listDevices();
       if (!loadSequence.isCurrent(token)) return;
       setDevices(list);
+      const nextOfflineHistory = rememberDevices(readOfflineDeviceHistory(), list);
+      setOfflineHistory(nextOfflineHistory);
+      persistOfflineDeviceHistory(nextOfflineHistory);
       const ids = new Set(list.map((d) => d.id));
       setPicked((prev) => prev.filter((id) => ids.has(id)));
       await refreshDevices();
@@ -318,6 +405,14 @@ export function Devices() {
   useEffect(() => {
     persistBatchHistory(batchHistory);
   }, [batchHistory]);
+
+  useEffect(() => {
+    persistDeviceNotes(deviceNotes);
+  }, [deviceNotes]);
+
+  useEffect(() => {
+    persistOfflineDeviceHistory(offlineHistory);
+  }, [offlineHistory]);
 
   const run = async (
     id: string,
@@ -650,6 +745,20 @@ export function Devices() {
     failedBatchItems.filter((item) => classifyBatchFailure(item.detail) === reason).length;
   const selectedReasonFailedCount =
     batchReasonFilter === "all" ? 0 : batchFailureReasonCount(batchReasonFilter);
+  const historicalOffline = offlineHistory
+    .filter((entry) => !devices.some((device) => device.id === entry.device.id))
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const saveDeviceNote = (id: string, value: string) => {
+    setDeviceNotes((current) => updateDeviceNote(current, id, value));
+  };
+  const removeOfflineHistory = (id: string) => {
+    setOfflineHistory((current) => removeOfflineDevice(current, id));
+  };
+  const clearOfflineHistory = async () => {
+    if (!(await askConfirm(t("devices.offlineHistory.confirmClear")))) return;
+    setOfflineHistory([]);
+    setOfflineHistoryOpen(false);
+  };
 
   return (
     <div>
@@ -659,6 +768,16 @@ export function Devices() {
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
         <div className="row">
+          {historicalOffline.length > 0 && (
+            <Button
+              variant="ghost"
+              icon={<History size={15} />}
+              aria-expanded={offlineHistoryOpen}
+              onClick={() => setOfflineHistoryOpen((open) => !open)}
+            >
+              {t("devices.offlineHistory.button", { n: historicalOffline.length })}
+            </Button>
+          )}
           {batchHistory.length > 0 && (
             <Button
               variant="ghost"
@@ -678,6 +797,73 @@ export function Devices() {
           </Button>
         </div>
       </div>
+
+      {offlineHistoryOpen && historicalOffline.length > 0 && (
+        <Card
+          className="offline-device-history-card"
+          title={t("devices.offlineHistory.title")}
+          action={
+            <div className="row">
+              <Button size="sm" variant="danger" onClick={() => void clearOfflineHistory()}>
+                {t("devices.offlineHistory.clear")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setOfflineHistoryOpen(false)}>
+                {t("common.close")}
+              </Button>
+            </div>
+          }
+        >
+          <div className="offline-device-history-list">
+            {historicalOffline.map((entry) => {
+              const historicalDevice = entry.device;
+              const historicalBusy = busy === historicalDevice.id;
+              return (
+                <div className="offline-device-history-item" key={historicalDevice.id}>
+                  <div className="offline-device-history-identity">
+                    <div className="offline-device-history-name">{historicalDevice.name}</div>
+                    <div className="muted mono">{historicalDevice.serial || "—"}</div>
+                    <div className="muted offline-device-history-time">
+                      {t("devices.offlineHistory.lastSeen", { time: new Date(entry.lastSeenAt).toLocaleString() })}
+                    </div>
+                    {deviceNotes[historicalDevice.id] ? (
+                      <div className="device-note-history">{deviceNotes[historicalDevice.id]}</div>
+                    ) : null}
+                  </div>
+                  <div className="offline-device-history-actions">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<RotateCcw size={12} />}
+                      loading={historicalBusy}
+                      disabled={!historicalDevice.serial}
+                      title={!historicalDevice.serial ? t("devices.offlineHistory.noSerial") : undefined}
+                      onClick={() =>
+                        void run(
+                          historicalDevice.id,
+                          () => DeviceService.connect(historicalDevice.serial),
+                          t("devices.status.connecting", { name: historicalDevice.name }),
+                          t("devices.status.adbReady"),
+                        )
+                      }
+                    >
+                      {t("devices.offlineHistory.reconnect")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<Trash2 size={12} />}
+                      aria-label={`${t("devices.offlineHistory.remove")} ${historicalDevice.name}`}
+                      onClick={() => removeOfflineHistory(historicalDevice.id)}
+                    >
+                      {t("devices.offlineHistory.remove")}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {historyOpen && (
         <Card
@@ -1504,6 +1690,11 @@ export function Devices() {
                           >
                             {d.name}
                           </button>
+                          <DeviceNoteEditor
+                            deviceName={d.name}
+                            value={deviceNotes[d.id]}
+                            onSave={(value) => saveDeviceNote(d.id, value)}
+                          />
                           <span className="devices-table-serial mono">
                             {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
                           </span>
@@ -1720,6 +1911,11 @@ export function Devices() {
                   </label>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 16 }}>{d.name}</div>
+                    <DeviceNoteEditor
+                      deviceName={d.name}
+                      value={deviceNotes[d.id]}
+                      onSave={(value) => saveDeviceNote(d.id, value)}
+                    />
                     <div className="muted mono" style={{ fontSize: 12, marginTop: 2 }}>
                       {d.serial || "—"}
                       {d.adbPort ? ` · ADB :${d.adbPort}` : ""}
