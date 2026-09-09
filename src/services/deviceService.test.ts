@@ -64,4 +64,28 @@ describe("DeviceService tracked file transfers", () => {
     expect(invoke).toHaveBeenNthCalledWith(2, "adb_mdns_services", undefined);
     expect(invoke).toHaveBeenNthCalledWith(3, "adb_tcpip", { serial: "usb-serial", port: 5555 });
   });
+
+  it("maps scrcpy window placement without changing the legacy start command", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      success: true,
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    await DeviceService.scrcpyStartLayout("serial-1", {
+      x: 496,
+      y: 0,
+      width: 480,
+      height: 800,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("scrcpy_start_layout", {
+      serial: "serial-1",
+      maxSize: 1080,
+      bitRate: 8,
+      extra: "",
+      placement: { x: 496, y: 0, width: 480, height: 800 },
+    });
+  });
 });

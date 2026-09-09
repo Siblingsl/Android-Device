@@ -243,6 +243,13 @@ export interface ScrcpyInputOptions {
   gamepad: boolean;
 }
 
+export interface ScrcpyWindowPlacement {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ScrcpyRecordingOptions extends ScrcpyCameraOptions {
   outputPath: string;
   format: ScrcpyRecordingFormat;

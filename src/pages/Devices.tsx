@@ -9,12 +9,19 @@ import {
   RefreshCw,
   Download,
   Upload,
+  LayoutGrid,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { createRequestSequence } from "../lib/requestSequence";
 import { batchFileName, batchRemotePath } from "../lib/batchOperations";
+import {
+  DEFAULT_SCRCPY_LAYOUT,
+  normalizeScrcpyLayout,
+  scrcpyWindowPlacement,
+  type ScrcpyLayoutConfig,
+} from "../lib/scrcpyWindowLayout";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -28,8 +35,20 @@ const FILTER_KEY = "rdc.devices.filter";
 const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
 const BATCH_HISTORY_KEY = "rdc.devices.batchHistory";
+const SCRCPY_LAYOUT_KEY = "rdc.devices.scrcpyLayout";
 const MAX_BATCH_HISTORY = 10;
 const BATCH_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function readScrcpyLayout(): ScrcpyLayoutConfig {
+  try {
+    const raw = localStorage.getItem(SCRCPY_LAYOUT_KEY);
+    if (!raw) return DEFAULT_SCRCPY_LAYOUT;
+    const parsed = JSON.parse(raw) as Partial<ScrcpyLayoutConfig>;
+    return normalizeScrcpyLayout(parsed);
+  } catch {
+    return DEFAULT_SCRCPY_LAYOUT;
+  }
+}
 
 type BatchAction = (device: DeviceInfo) => Promise<unknown>;
 type BatchReportItem = { id: string; name: string; ok: boolean; detail: string };
@@ -195,11 +214,24 @@ export function Devices() {
   const setStatusText = useAppStore((s) => s.setStatusText);
   const refreshDevices = useAppStore((s) => s.refreshDevices);
   const screenshotDir = useAppStore((s) => s.settings?.screenshotPath);
+  const [scrcpyLayout, setScrcpyLayout] = useState<ScrcpyLayoutConfig>(readScrcpyLayout);
   const { t } = useI18n();
   const loadSequence = useRef(createRequestSequence()).current;
   const localLoadActive = useRef(false);
   const loadingRequest = useRef<number | null>(null);
   const batchCancelRequested = useRef(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SCRCPY_LAYOUT_KEY, JSON.stringify(scrcpyLayout));
+    } catch {
+      /* ignore unavailable or full local storage */
+    }
+  }, [scrcpyLayout]);
+
+  const updateScrcpyLayout = (key: keyof ScrcpyLayoutConfig, value: string) => {
+    setScrcpyLayout((current) => normalizeScrcpyLayout({ ...current, [key]: Number(value) }));
+  };
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -729,6 +761,92 @@ export function Devices() {
           <span className="muted" style={{ fontSize: 12 }}>
             {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
           </span>
+          <details className="batch-layout-details">
+            <summary>{t("devices.layout.title")}</summary>
+            <div className="batch-layout-fields">
+              <label>
+                {t("devices.layout.columns")}
+                <input
+                  aria-label={t("devices.layout.columns")}
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={scrcpyLayout.columns}
+                  onChange={(event) => updateScrcpyLayout("columns", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.width")}
+                <input
+                  aria-label={t("devices.layout.width")}
+                  type="number"
+                  min={240}
+                  max={1600}
+                  value={scrcpyLayout.width}
+                  onChange={(event) => updateScrcpyLayout("width", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.height")}
+                <input
+                  aria-label={t("devices.layout.height")}
+                  type="number"
+                  min={240}
+                  max={1600}
+                  value={scrcpyLayout.height}
+                  onChange={(event) => updateScrcpyLayout("height", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.gap")}
+                <input
+                  aria-label={t("devices.layout.gap")}
+                  type="number"
+                  min={0}
+                  max={120}
+                  value={scrcpyLayout.gap}
+                  onChange={(event) => updateScrcpyLayout("gap", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.originX")}
+                <input
+                  aria-label={t("devices.layout.originX")}
+                  type="number"
+                  min={-10000}
+                  max={10000}
+                  value={scrcpyLayout.originX}
+                  onChange={(event) => updateScrcpyLayout("originX", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.originY")}
+                <input
+                  aria-label={t("devices.layout.originY")}
+                  type="number"
+                  min={-10000}
+                  max={10000}
+                  value={scrcpyLayout.originY}
+                  onChange={(event) => updateScrcpyLayout("originY", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy === "batch"}
+                onClick={() => setScrcpyLayout(DEFAULT_SCRCPY_LAYOUT)}
+              >
+                {t("devices.layout.reset")}
+              </Button>
+            </div>
+            <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
+          </details>
           <Button
             size="sm"
             variant="ghost"
@@ -778,6 +896,31 @@ export function Devices() {
             }
           >
             {t("devices.batch.mirrorShort")}
+          </Button>
+          <Button
+            size="sm"
+            icon={<LayoutGrid size={13} />}
+            loading={busy === "batch"}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={() => {
+              const layoutDevices = selectedDevices;
+              void batch(
+                t("devices.batch.layoutMirror"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  const index = layoutDevices.findIndex((item) => item.id === d.id);
+                  return DeviceService.scrcpyStartLayout(
+                    d.serial,
+                    scrcpyWindowPlacement(index, scrcpyLayout),
+                  );
+                },
+                "scrcpy-layout",
+                layoutDevices,
+              );
+            }}
+          >
+            {t("devices.batch.layoutMirrorShort")}
           </Button>
           <Button
             size="sm"

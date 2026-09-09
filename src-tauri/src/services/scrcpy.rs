@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use crate::models::{ScrcpyInputOptions, ScrcpyRecordingOptions, ShellResult};
+use crate::models::{ScrcpyInputOptions, ScrcpyRecordingOptions, ScrcpyWindowPlacement, ShellResult};
 use crate::services::{adb, log, settings};
 
 static PROCESSES: Lazy<Mutex<HashMap<String, Child>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -332,6 +332,29 @@ fn input_args(mode: &str, options: &ScrcpyInputOptions) -> Result<Vec<String>, S
     }
 }
 
+fn validate_window_layout(x: i32, y: i32, width: u32, height: u32) -> Result<(), String> {
+    if !(-10000..=10000).contains(&x) || !(-10000..=10000).contains(&y) {
+        return Err("窗口起始坐标无效".into());
+    }
+    if !(240..=1600).contains(&width) || !(240..=1600).contains(&height) {
+        return Err("窗口尺寸应为 240-1600 像素".into());
+    }
+    Ok(())
+}
+
+fn window_layout_args(x: i32, y: i32, width: u32, height: u32) -> Vec<String> {
+    vec![
+        "--window-x".into(),
+        x.to_string(),
+        "--window-y".into(),
+        y.to_string(),
+        "--window-width".into(),
+        width.to_string(),
+        "--window-height".into(),
+        height.to_string(),
+    ]
+}
+
 pub fn start_input(
     serial: &str,
     mode: &str,
@@ -452,6 +475,16 @@ pub fn stop_camera(serial: &str) -> ShellResult {
 }
 
 pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellResult {
+    start_with_layout(serial, max_size, bit_rate, extra, None)
+}
+
+pub fn start_with_layout(
+    serial: &str,
+    max_size: u32,
+    bit_rate: u32,
+    extra: &str,
+    placement: Option<ScrcpyWindowPlacement>,
+) -> ShellResult {
     stop(serial);
     log::info("Scrcpy", &format!("Starting scrcpy for {}", serial));
 
@@ -480,6 +513,11 @@ pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellRe
             stderr: msg,
             exit_code: -1,
         };
+    }
+    if let Some(layout) = &placement {
+        if let Err(error) = validate_window_layout(layout.x, layout.y, layout.width, layout.height) {
+            return scrcpy_error(error);
+        }
     }
 
     let max_size_s = max_size.to_string();
@@ -522,6 +560,9 @@ pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellRe
             continue;
         }
         args.push(f);
+    }
+    if let Some(layout) = placement {
+        args.extend(window_layout_args(layout.x, layout.y, layout.width, layout.height));
     }
 
     match cmd.args(args)
@@ -672,5 +713,22 @@ mod tests {
     fn input_mode_rejects_unknown_modes_without_starting_a_process() {
         let options = ScrcpyInputOptions { keyboard: true, mouse: true, gamepad: false };
         assert!(input_args("unknown", &options).is_err());
+    }
+
+    #[test]
+    fn window_layout_args_keep_negative_origins_and_explicit_dimensions() {
+        assert_eq!(
+            window_layout_args(10, -20, 480, 800),
+            vec![
+                "--window-x", "10", "--window-y", "-20", "--window-width", "480",
+                "--window-height", "800"
+            ]
+        );
+    }
+
+    #[test]
+    fn window_layout_rejects_unusable_dimensions_before_spawning() {
+        assert!(validate_window_layout(0, 0, 239, 800).is_err());
+        assert!(validate_window_layout(0, 0, 480, 1601).is_err());
     }
 }

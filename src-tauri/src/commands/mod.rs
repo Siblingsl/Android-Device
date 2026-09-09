@@ -647,6 +647,26 @@ pub async fn scrcpy_start(
 }
 
 #[tauri::command]
+pub async fn scrcpy_start_layout(
+    serial: String,
+    max_size: u32,
+    bit_rate: u32,
+    extra: Option<String>,
+    placement: ScrcpyWindowPlacement,
+) -> ShellResult {
+    blocking(move || {
+        scrcpy::start_with_layout(
+            &serial,
+            max_size,
+            bit_rate,
+            extra.as_deref().unwrap_or(""),
+            Some(placement),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn scrcpy_stop(serial: String) -> ShellResult {
     blocking(move || scrcpy::stop(&serial)).await
 }

@@ -20,6 +20,7 @@ import type {
   ScrcpyInputMode,
   ScrcpyInputOptions,
   ScrcpyRecordingOptions,
+  ScrcpyWindowPlacement,
   ScreenshotResult,
   ShellResult,
   SuPolicyEntry,
@@ -219,6 +220,20 @@ export const DeviceService = {
   // Scrcpy
   scrcpyStart: (serial: string, maxSize = 1080, bitRate = 8, extra = "") =>
     invoke<ShellResult>("scrcpy_start", { serial, maxSize, bitRate, extra }),
+  scrcpyStartLayout: (
+    serial: string,
+    placement: ScrcpyWindowPlacement,
+    maxSize = 1080,
+    bitRate = 8,
+    extra = "",
+  ) =>
+    invoke<ShellResult>("scrcpy_start_layout", {
+      serial,
+      maxSize,
+      bitRate,
+      extra,
+      placement,
+    }),
   scrcpyStop: (serial: string) => invoke<ShellResult>("scrcpy_stop", { serial }),
   scrcpyRestart: (serial: string) => invoke<ShellResult>("scrcpy_restart", { serial }),
   scrcpyStatus: (serial: string) => invoke<string>("scrcpy_status", { serial }),

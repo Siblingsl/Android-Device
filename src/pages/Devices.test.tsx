@@ -17,6 +17,7 @@ vi.mock("../services/deviceService", () => ({
     restart: vi.fn(),
     stop: vi.fn(),
     scrcpyStart: vi.fn(),
+    scrcpyStartLayout: vi.fn(),
     installApk: vi.fn(),
     uploadFile: vi.fn(),
     refreshDevices: vi.fn(),
@@ -94,6 +95,7 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
     vi.mocked(DeviceService.scrcpyStart).mockReset();
+    vi.mocked(DeviceService.scrcpyStartLayout).mockReset();
     vi.mocked(DeviceService.installApk).mockReset();
     vi.mocked(DeviceService.uploadFile).mockReset();
     vi.mocked(open).mockReset();
@@ -110,6 +112,7 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.scrcpyStart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.scrcpyStartLayout).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.installApk).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.uploadFile).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(open).mockResolvedValue(null);
@@ -188,7 +191,7 @@ describe("Devices batch controls", () => {
 
     await screen.findByRole("button", { name: "停止后续" });
     const loadingButtons = screen.getAllByRole("button", { name: "..." });
-    expect(loadingButtons).toHaveLength(5);
+    expect(loadingButtons).toHaveLength(6);
     expect(loadingButtons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
     expect(screen.getByRole("status").textContent).toContain("批量 ADB 连接");
 
@@ -220,6 +223,39 @@ describe("Devices batch controls", () => {
     expect(await screen.findByText(/批量投屏 · 2\/2 成功/)).toBeTruthy();
     expect(DeviceService.scrcpyStart).toHaveBeenNthCalledWith(1, "one-serial");
     expect(DeviceService.scrcpyStart).toHaveBeenNthCalledWith(2, "two-serial");
+  }, 15_000);
+
+  it("arranges selected scrcpy windows using the saved grid layout", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      { ...device("two"), online: true, adbStatus: "device" },
+    ]);
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByText("窗口布局"));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "列数" }), {
+      target: { value: "1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "按布局投屏" }));
+
+    expect(await screen.findByText(/按布局投屏 · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.scrcpyStartLayout).toHaveBeenNthCalledWith(
+      1,
+      "one-serial",
+      { x: 0, y: 0, width: 480, height: 800 },
+    );
+    expect(DeviceService.scrcpyStartLayout).toHaveBeenNthCalledWith(
+      2,
+      "two-serial",
+      { x: 0, y: 816, width: 480, height: 800 },
+    );
+    expect(localStorage.getItem("rdc.devices.scrcpyLayout")).toContain('"columns":1');
   }, 15_000);
 
   it("pushes multiple selected files to every selected device", async () => {

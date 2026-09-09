@@ -128,6 +128,7 @@ pub fn run() {
             adb_tcpip,
             // Scrcpy
             scrcpy_start,
+            scrcpy_start_layout,
             scrcpy_stop,
             scrcpy_restart,
             scrcpy_status,
