@@ -1,4 +1,5 @@
 import { authorizeCopilotToolCall, COPILOT_TOOLS, type CopilotToolCall } from "../lib/copilotTools";
+import { DeviceService, type CopilotCompletionResponse } from "./deviceService";
 
 export interface CopilotProviderConfig {
   baseUrl: string;
@@ -39,10 +40,6 @@ export interface CopilotTaskResult {
   error?: string;
 }
 
-function endpointFor(baseUrl: string): string {
-  return `${baseUrl.trim().replace(/\/+$/, "")}/chat/completions`;
-}
-
 function toolDescriptor(toolId: string) {
   const tool = COPILOT_TOOLS.find((entry) => entry.id === toolId);
   return {
@@ -61,26 +58,39 @@ export async function requestCopilotCompletion(
   allowedToolIds: string[],
   signal?: AbortSignal,
 ): Promise<CopilotCompletion> {
-  const controller = new AbortController();
-  const timeout = globalThis.setTimeout(() => controller.abort(), Math.max(1000, config.timeoutMs));
-  const abort = () => controller.abort();
-  signal?.addEventListener("abort", abort, { once: true });
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
   try {
-    const response = await fetch(endpointFor(config.baseUrl), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
-      body: JSON.stringify({
+    const payload = await new Promise<CopilotCompletionResponse>((resolve, reject) => {
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId);
+        if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+        callback();
+      };
+      const rejectCancelled = () => finish(() => reject(new Error("AI 服务请求超时或已取消")));
+      abortHandler = rejectCancelled;
+      if (signal?.aborted) {
+        rejectCancelled();
+        return;
+      }
+      signal?.addEventListener("abort", abortHandler, { once: true });
+      timeoutId = globalThis.setTimeout(rejectCancelled, Math.max(1000, config.timeoutMs));
+      void DeviceService.copilotCompletion({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
         model: config.model,
-        messages,
-        max_tokens: config.maxTokens,
-        temperature: 0.2,
-        tools: allowedToolIds.map(toolDescriptor),
-        tool_choice: "auto",
-      }),
-      signal: controller.signal,
+        maxTokens: config.maxTokens,
+        timeoutMs: config.timeoutMs,
+        messages: messages as unknown as Array<Record<string, unknown>>,
+        tools: allowedToolIds.map(toolDescriptor) as Array<Record<string, unknown>>,
+      }).then(
+        (value) => finish(() => resolve(value)),
+        (error) => finish(() => reject(error)),
+      );
     });
-    if (!response.ok) throw new Error(`AI 服务请求失败（${response.status}）`);
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> } }> };
     const message = payload.choices?.[0]?.message;
     const toolCalls = (message?.tool_calls ?? []).flatMap((call) => {
       const toolId = call.function?.name;
@@ -91,12 +101,11 @@ export async function requestCopilotCompletion(
     });
     return { content: message?.content || "", toolCalls };
   } catch (cause) {
-    if (cause instanceof Error && cause.message.startsWith("AI 服务请求失败")) throw cause;
-    if (cause instanceof DOMException && cause.name === "AbortError") throw new Error("AI 服务请求超时或已取消");
+    if (cause instanceof Error && (cause.message.startsWith("AI 服务请求失败") || cause.message.includes("超时或已取消") || cause.message.includes("桌面后端不可用"))) throw cause;
     throw new Error("AI 服务暂时不可用，请检查接口地址、模型和网络连接");
   } finally {
-    globalThis.clearTimeout(timeout);
-    signal?.removeEventListener("abort", abort);
+    if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId);
+    if (abortHandler) signal?.removeEventListener("abort", abortHandler);
   }
 }
 

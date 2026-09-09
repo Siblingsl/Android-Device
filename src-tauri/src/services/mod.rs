@@ -1,5 +1,6 @@
 pub mod adb;
 pub mod cache;
+pub mod copilot;
 pub mod device;
 pub mod docker;
 pub mod log;

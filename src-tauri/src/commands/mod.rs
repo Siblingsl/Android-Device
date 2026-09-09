@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::services::{
-    adb, device, docker, log, root, scrcpy, settings, terminal, transfer, wsl_kernel,
+    adb, copilot, device, docker, log, root, scrcpy, settings, terminal, transfer, wsl_kernel,
 };
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -20,6 +20,15 @@ async fn blocking_res<T: Send + 'static, E: Send + 'static + Default>(
         Ok(v) => v,
         Err(_) => Err(E::default()),
     }
+}
+
+// ---- AI provider boundary ----
+
+#[tauri::command]
+pub async fn copilot_completion(
+    request: copilot::CopilotCompletionRequest,
+) -> Result<serde_json::Value, String> {
+    copilot::completion(request).await
 }
 
 // ---- System / Dashboard ----

@@ -22,6 +22,7 @@ pub fn run() {
         .manage(services::transfer::TransferRegistry::default())
         .invoke_handler(tauri::generate_handler![
             // System
+            copilot_completion,
             get_dashboard,
             get_system_status,
             // Devices

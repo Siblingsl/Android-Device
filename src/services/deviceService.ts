@@ -28,6 +28,28 @@ import type {
   WslKernelStatus,
 } from "../types";
 
+export interface CopilotCompletionRequest {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+  timeoutMs: number;
+  messages: Array<Record<string, unknown>>;
+  tools: Array<Record<string, unknown>>;
+}
+
+export interface CopilotCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
+}
+
 /** Unified Device Service — all device capabilities go through here */
 const invoke = async <T,>(
   cmd: string,
@@ -41,6 +63,10 @@ const invoke = async <T,>(
 };
 
 export const DeviceService = {
+  // The native command owns the provider request boundary; the key is never logged by the UI.
+  copilotCompletion: (request: CopilotCompletionRequest) =>
+    invoke<CopilotCompletionResponse>("copilot_completion", { request }),
+
   // System
   getDashboard: () => invoke<DashboardData>("get_dashboard"),
   getSystemStatus: () => invoke<SystemStatus>("get_system_status"),
