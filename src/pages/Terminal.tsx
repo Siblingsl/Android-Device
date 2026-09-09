@@ -170,7 +170,7 @@ export function TerminalPage() {
   };
 
   return (
-    <div className="terminal-page">
+    <div className="terminal-page terminal-workbench">
       <header className="terminal-header">
         <div className="terminal-title-wrap">
           <span className="terminal-title-icon"><SquareTerminal size={18} /></span>

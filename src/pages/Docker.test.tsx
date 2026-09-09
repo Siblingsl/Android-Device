@@ -92,6 +92,7 @@ describe("DockerPage refresh ordering", () => {
         <DockerPage />
       </MemoryRouter>,
     );
+    expect(document.querySelector(".docker-workbench")).toBeTruthy();
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();

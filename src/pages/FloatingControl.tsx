@@ -142,7 +142,7 @@ export function FloatingControlPage() {
   const buttonDisabled = !actionable || Boolean(busy);
 
   return (
-    <main className="control-window-page">
+    <main className="control-window-page control-window-workbench">
       <div className="control-window-header">
         <div>
           <div className="control-window-kicker">Redroid</div>

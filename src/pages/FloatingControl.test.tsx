@@ -120,6 +120,7 @@ describe("FloatingControlPage", () => {
       </MemoryRouter>,
     );
 
+    expect(document.querySelector(".control-window-workbench")).toBeTruthy();
     await waitFor(() => expect(screen.getByRole("option", { name: /Pixel One/ })).toBeTruthy());
 
     const selector = screen.getByRole("combobox", { name: "设备" });

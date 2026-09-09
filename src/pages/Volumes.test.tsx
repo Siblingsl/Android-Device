@@ -60,6 +60,7 @@ describe("VolumesPage refresh ordering", () => {
         <VolumesPage />
       </MemoryRouter>,
     );
+    expect(document.querySelector(".volumes-workbench")).toBeTruthy();
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();

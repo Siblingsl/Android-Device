@@ -361,8 +361,8 @@ export function DockerPage() {
   const isLinuxHost = kernel?.strategy === "host-binder";
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="docker-workbench">
+      <div className="page-header docker-header-rail">
         <div>
           <div className="page-title">{t("docker.title")}</div>
           <div className="page-subtitle">{t("docker.subtitle")}</div>

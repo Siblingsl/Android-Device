@@ -167,8 +167,8 @@ export function ApkPage() {
   };
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="apk-workbench">
+      <div className="page-header apk-header-rail">
         <div>
           <div className="page-title">{t("apk.page.title")}</div>
           <div className="page-subtitle">{t("apk.page.subtitle")}</div>

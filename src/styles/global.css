@@ -206,6 +206,25 @@ a {
   font-size: 13px;
 }
 
+.apk-header-rail,
+.docker-header-rail,
+.volumes-header-rail {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 11px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.apk-workbench,
+.docker-workbench,
+.volumes-workbench,
+.terminal-workbench,
+.control-window-workbench,
+.monitor-alert-workbench {
+  min-width: 0;
+}
+
 .device-detail-workbench {
   min-width: 0;
 }

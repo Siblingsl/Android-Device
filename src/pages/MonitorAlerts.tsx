@@ -158,7 +158,7 @@ export function MonitorAlertsPage() {
   };
 
   return (
-    <div className="monitor-alert-page">
+    <div className="monitor-alert-page monitor-alert-workbench">
       <div className="page-header monitor-alert-header">
         <div>
           <div className="monitor-alert-eyebrow">

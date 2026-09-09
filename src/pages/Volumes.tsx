@@ -156,8 +156,8 @@ export function VolumesPage() {
   };
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="volumes-workbench">
+      <div className="page-header volumes-header-rail">
         <div>
           <div className="page-title">{t("volumes.page.title")}</div>
           <div className="page-subtitle">{t("volumes.page.subtitle")}</div>

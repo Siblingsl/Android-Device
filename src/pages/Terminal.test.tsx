@@ -61,6 +61,7 @@ describe("TerminalPage", () => {
   it("restores the requested session and renders matching output events", async () => {
     renderTerminal();
 
+    expect(document.querySelector(".terminal-workbench")).toBeTruthy();
     expect(await screen.findByText(session.title, { selector: ".terminal-title" })).toBeTruthy();
     expect(TerminalSessionService.list).toHaveBeenCalledTimes(1);
     expect(TerminalSessionService.subscribe).toHaveBeenCalledTimes(1);
