@@ -50,6 +50,7 @@ vi.mock("../services/deviceService", () => ({
     getAppPermissions: vi.fn(),
     getAppActivities: vi.fn(),
     startApp: vi.fn(),
+    startAppOnDisplay: vi.fn(),
     stopApp: vi.fn(),
     clearAppData: vi.fn(),
     uninstallApp: vi.fn(),
@@ -961,6 +962,31 @@ describe("DeviceDetail refresh ordering", () => {
     });
 
     expect(alert).toHaveBeenCalledWith("start unavailable");
+  });
+
+  it("launches an app on the selected Android display", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("测试应用")]);
+    vi.mocked(DeviceService.startAppOnDisplay).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: "显示屏编号" }), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "启动到显示屏" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.startAppOnDisplay).toHaveBeenCalledWith(
+      "device-1-serial",
+      "com.example.测试应用",
+      2,
+    );
   });
 
   it("reports an app stop error instead of leaving an unhandled rejection", async () => {

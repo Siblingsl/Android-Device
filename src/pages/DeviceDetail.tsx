@@ -3086,6 +3086,7 @@ function Apps({
   const [detail, setDetail] = useState("");
   const [detailBusy, setDetailBusy] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
+  const [displayId, setDisplayId] = useState("1");
   const [installing, setInstalling] = useState(false);
   const [installRetry, setInstallRetry] = useState<InstallRetry | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
@@ -3194,6 +3195,20 @@ function Apps({
           </div>
         </div>
         <div className="app-install-rail">
+            <label className="row muted" style={{ fontSize: 12 }}>
+              {t("detail.apps.displayId")}
+              <input
+                aria-label={t("detail.apps.displayId")}
+                type="number"
+                min={0}
+                max={100}
+                inputMode="numeric"
+                value={displayId}
+                onChange={(e) => setDisplayId(e.target.value)}
+                placeholder={t("detail.apps.displayIdHint")}
+                style={{ width: 74, height: 30, padding: "0 8px", borderRadius: 8 }}
+              />
+            </label>
             <Button
               size="sm"
               variant="primary"
@@ -3312,6 +3327,31 @@ function Apps({
                         }}
                       >
                         {t("detail.apps.startBtn")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={appBusy === `display:${a.packageName}`}
+                        disabled={appBusy !== null || !/^\d+$/.test(displayId) || Number(displayId) > 100}
+                        onClick={async () => {
+                          const targetDisplay = Number(displayId);
+                          setAppBusy(`display:${a.packageName}`);
+                          setStatusText(t("detail.apps.startingOnDisplay", { pkg: a.packageName, display: targetDisplay }));
+                          try {
+                            const r = await DeviceService.startAppOnDisplay(serial, a.packageName, targetDisplay);
+                            if (r.success) setStatusText(t("detail.apps.startedOnDisplay", { pkg: a.packageName, display: targetDisplay }));
+                            else {
+                              setStatusText(r.stderr || r.stdout || t("detail.apps.startOnDisplayFailed"));
+                              void alert(r.stderr || r.stdout || t("detail.apps.startOnDisplayFailed"));
+                            }
+                          } catch (e) {
+                            reportOperationError(e, t("detail.apps.startOnDisplayFailed"), setStatusText);
+                          } finally {
+                            setAppBusy(null);
+                          }
+                        }}
+                      >
+                        {t("detail.apps.startOnDisplay")}
                       </Button>
                       <Button
                         size="sm"

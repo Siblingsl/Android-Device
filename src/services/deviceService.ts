@@ -151,6 +151,8 @@ export const DeviceService = {
     invoke<ShellResult>("uninstall_app", { serial, package: packageName }),
   startApp: (serial: string, packageName: string) =>
     invoke<ShellResult>("start_app", { serial, package: packageName }),
+  startAppOnDisplay: (serial: string, packageName: string, displayId: number) =>
+    invoke<ShellResult>("start_app_on_display", { serial, package: packageName, displayId }),
   stopApp: (serial: string, packageName: string) =>
     invoke<ShellResult>("stop_app", { serial, package: packageName }),
   clearAppData: (serial: string, packageName: string) =>

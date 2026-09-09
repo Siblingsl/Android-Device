@@ -655,6 +655,68 @@ pub fn start_app(serial: &str, package: &str) -> ShellResult {
     r
 }
 
+pub fn valid_display_launch_package(package: &str) -> bool {
+    !package.is_empty()
+        && package.as_bytes().first().is_some_and(|b| b.is_ascii_alphanumeric())
+        && package
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_'))
+}
+
+pub fn valid_display_id(display_id: i32) -> bool {
+    (0..=100).contains(&display_id)
+}
+
+pub fn resolved_launcher_component(output: &str) -> Option<String> {
+    output.lines().map(str::trim).find_map(|line| {
+        let (package, activity) = line.split_once('/')?;
+        if package.is_empty()
+            || activity.is_empty()
+            || !valid_display_launch_package(package)
+            || !activity
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'$'))
+        {
+            return None;
+        }
+        Some(line.to_string())
+    })
+}
+
+pub fn start_app_on_display(serial: &str, package: &str, display_id: i32) -> ShellResult {
+    if !valid_display_launch_package(package) {
+        return ShellResult {
+            stderr: "应用包名格式无效".into(),
+            ..ShellResult::default()
+        };
+    }
+    if !valid_display_id(display_id) {
+        return ShellResult {
+            stderr: "显示屏编号必须在 0 到 100 之间".into(),
+            ..ShellResult::default()
+        };
+    }
+
+    let resolved = adb::shell(
+        serial,
+        &format!("cmd package resolve-activity --brief {}", package),
+    );
+    if !resolved.success {
+        return resolved;
+    }
+    let Some(component) = resolved_launcher_component(&resolved.stdout) else {
+        return ShellResult {
+            stderr: format!("{} 没有可启动的界面", package),
+            ..resolved
+        };
+    };
+
+    adb::shell(
+        serial,
+        &format!("am start --display {} -n {}", display_id, component),
+    )
+}
+
 pub fn stop_app(serial: &str, package: &str) -> ShellResult {
     adb::shell(serial, &format!("am force-stop {}", package))
 }
@@ -1647,5 +1709,24 @@ mod metrics_tests {
         assert_eq!(rotation_command("auto"), Some("settings put system accelerometer_rotation 1"));
         assert_eq!(rotation_command("lock"), Some("settings put system accelerometer_rotation 0"));
         assert_eq!(rotation_command("settings put system"), None);
+    }
+
+    #[test]
+    fn parses_resolved_launcher_component_for_display_launch() {
+        assert_eq!(
+            resolved_launcher_component("priority=0\npreferredOrder=0\ndefaultOnly=true\ncom.demo/.MainActivity\n"),
+            Some("com.demo/.MainActivity".to_string())
+        );
+        assert_eq!(resolved_launcher_component("No activity found"), None);
+    }
+
+    #[test]
+    fn validates_display_launch_package_and_id() {
+        assert!(valid_display_launch_package("com.example.demo"));
+        assert!(!valid_display_launch_package("com.example; reboot"));
+        assert!(valid_display_id(0));
+        assert!(valid_display_id(100));
+        assert!(!valid_display_id(-1));
+        assert!(!valid_display_id(101));
     }
 }

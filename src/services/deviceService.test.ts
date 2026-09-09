@@ -88,4 +88,21 @@ describe("DeviceService tracked file transfers", () => {
       placement: { x: 496, y: 0, width: 480, height: 800 },
     });
   });
+
+  it("maps launching an app on a selected Android display", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      success: true,
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    await DeviceService.startAppOnDisplay("serial-1", "com.example.demo", 2);
+
+    expect(invoke).toHaveBeenCalledWith("start_app_on_display", {
+      serial: "serial-1",
+      package: "com.example.demo",
+      displayId: 2,
+    });
+  });
 });

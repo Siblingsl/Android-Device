@@ -267,6 +267,11 @@ pub async fn start_app(serial: String, package: String) -> ShellResult {
 }
 
 #[tauri::command]
+pub async fn start_app_on_display(serial: String, package: String, display_id: i32) -> ShellResult {
+    blocking(move || device::start_app_on_display(&serial, &package, display_id)).await
+}
+
+#[tauri::command]
 pub async fn stop_app(serial: String, package: String) -> ShellResult {
     blocking(move || device::stop_app(&serial, &package)).await
 }

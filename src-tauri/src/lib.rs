@@ -67,6 +67,7 @@ pub fn run() {
             install_apk,
             uninstall_app,
             start_app,
+            start_app_on_display,
             stop_app,
             clear_app_data,
             list_apps,
