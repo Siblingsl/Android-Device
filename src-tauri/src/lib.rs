@@ -137,6 +137,9 @@ pub fn run() {
             scrcpy_start_camera,
             scrcpy_stop_camera,
             scrcpy_camera_status,
+            scrcpy_start_input,
+            scrcpy_stop_input,
+            scrcpy_input_status,
             // Logs
             get_system_logs,
             clear_system_logs,

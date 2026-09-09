@@ -697,6 +697,25 @@ pub async fn scrcpy_camera_status(serial: String) -> String {
     blocking(move || scrcpy::camera_status(&serial)).await
 }
 
+#[tauri::command]
+pub async fn scrcpy_start_input(
+    serial: String,
+    mode: String,
+    options: ScrcpyInputOptions,
+) -> ShellResult {
+    blocking(move || scrcpy::start_input(&serial, &mode, options)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stop_input(serial: String) -> ShellResult {
+    blocking(move || scrcpy::stop_input(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_input_status(serial: String) -> String {
+    blocking(move || scrcpy::input_status(&serial)).await
+}
+
 // ---- System logs ----
 
 #[tauri::command]

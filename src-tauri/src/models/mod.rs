@@ -233,6 +233,14 @@ pub struct ScrcpyRecordingOptions {
     pub time_limit_secs: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrcpyInputOptions {
+    pub keyboard: bool,
+    pub mouse: bool,
+    pub gamepad: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotResult {

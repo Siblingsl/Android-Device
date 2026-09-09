@@ -72,6 +72,7 @@ import {
 import { DevicePreview } from "../components/device/DevicePreview";
 import { ScrcpyControlBar } from "../components/device/ScrcpyControlBar";
 import { DeviceMediaControls, type DeviceMediaAction, type RotationMode } from "../components/device/DeviceMediaControls";
+import { DeviceInputModes } from "../components/device/DeviceInputModes";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
@@ -88,11 +89,13 @@ import type {
   SuPolicyEntry,
   FileTransferProgress,
   ScrcpyCameraOptions,
+  ScrcpyInputMode,
+  ScrcpyInputOptions,
   ScrcpyRecordingOptions,
 } from "../types";
 
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
-type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture" | "recording" | "camera" | "rotation" | DeviceMediaAction;
+type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture" | "recording" | "camera" | "rotation" | "input" | DeviceMediaAction;
 type PreviewOutcome = { success: boolean; message: string };
 type FileTransferState = {
   kind: "upload" | "download";
@@ -1951,6 +1954,25 @@ function Control({
               return runExtendedAction(t(`detail.media.${action}`), operations[action], action);
             })();
           }}
+        />
+        <DeviceInputModes
+          disabled={disabled}
+          busy={actionBusy || scrcpyBusy}
+          onStart={(mode: ScrcpyInputMode, options: ScrcpyInputOptions) =>
+            runExtendedAction(
+              t(`detail.input.start.${mode}`),
+              () => DeviceService.scrcpyStartInput(serial, mode, options),
+              "input",
+            )
+          }
+          onStop={() =>
+            runExtendedAction(
+              t("detail.input.stop"),
+              () => DeviceService.scrcpyStopInput(serial),
+              "input",
+            )
+          }
+          onStatus={() => DeviceService.scrcpyInputStatus(serial)}
         />
         <DeviceControlPanel
           disabled={disabled}

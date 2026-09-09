@@ -6,13 +6,15 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use crate::models::{ScrcpyRecordingOptions, ShellResult};
+use crate::models::{ScrcpyInputOptions, ScrcpyRecordingOptions, ShellResult};
 use crate::services::{adb, log, settings};
 
 static PROCESSES: Lazy<Mutex<HashMap<String, Child>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static RECORDING_PROCESSES: Lazy<Mutex<HashMap<String, Child>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static CAMERA_PROCESSES: Lazy<Mutex<HashMap<String, Child>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static INPUT_PROCESSES: Lazy<Mutex<HashMap<String, Child>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static LAST_ARGS: Lazy<Mutex<HashMap<String, (u32, u32, String)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -57,6 +59,10 @@ pub fn recording_status(serial: &str) -> String {
 
 pub fn camera_status(serial: &str) -> String {
     status_for(&CAMERA_PROCESSES, serial)
+}
+
+pub fn input_status(serial: &str) -> String {
+    status_for(&INPUT_PROCESSES, serial)
 }
 
 fn status_for(map: &Mutex<HashMap<String, Child>>, serial: &str) -> String {
@@ -299,6 +305,61 @@ fn camera_args(options: &ScrcpyRecordingOptions) -> Vec<String> {
         args.push("--camera-torch".into());
     }
     args
+}
+
+fn input_args(mode: &str, options: &ScrcpyInputOptions) -> Result<Vec<String>, String> {
+    let keyboard = if options.keyboard { "aoa" } else { "disabled" };
+    let mouse = if options.mouse { "aoa" } else { "disabled" };
+    match mode {
+        "otg" => {
+            let mut args = vec![
+                "--otg".into(),
+                format!("--keyboard={keyboard}"),
+                format!("--mouse={mouse}"),
+            ];
+            if options.gamepad {
+                args.push("--gamepad=aoa".into());
+            }
+            Ok(args)
+        }
+        "uhid" => Ok(vec![
+            "--no-video".into(),
+            "--no-audio".into(),
+            format!("--keyboard={}", if options.keyboard { "uhid" } else { "disabled" }),
+            format!("--mouse={}", if options.mouse { "uhid" } else { "disabled" }),
+        ]),
+        _ => Err("输入控制模式无效".into()),
+    }
+}
+
+pub fn start_input(
+    serial: &str,
+    mode: &str,
+    options: ScrcpyInputOptions,
+) -> ShellResult {
+    let args = match input_args(mode, &options) {
+        Ok(args) => args,
+        Err(error) => return scrcpy_error(error),
+    };
+    if serial.trim().is_empty() {
+        return scrcpy_error("设备序列号不能为空");
+    }
+    if mode == "uhid" {
+        if let Err(error) = ensure_device_ready(serial) {
+            return scrcpy_error(error);
+        }
+    }
+    stop_input(serial);
+    let mut args = args;
+    args.splice(0..0, ["-s".into(), serial.into()]);
+    if mode == "uhid" {
+        args.push("--stay-awake".into());
+    }
+    spawn_managed(serial, args, &INPUT_PROCESSES, "Scrcpy input")
+}
+
+pub fn stop_input(serial: &str) -> ShellResult {
+    stop_managed(serial, &INPUT_PROCESSES, "Scrcpy input")
 }
 
 pub fn start_recording(serial: &str, options: ScrcpyRecordingOptions) -> ShellResult {
@@ -594,5 +655,22 @@ mod tests {
         let mut invalid = options();
         invalid.camera_size = "1280;rmx720".into();
         assert!(validate_camera_options(&invalid).is_err());
+    }
+
+    #[test]
+    fn input_modes_build_the_expected_native_scrcpy_arguments() {
+        let options = ScrcpyInputOptions { keyboard: true, mouse: true, gamepad: false };
+        assert_eq!(input_args("uhid", &options).unwrap(), vec![
+            "--no-video", "--no-audio", "--keyboard=uhid", "--mouse=uhid"
+        ]);
+        assert_eq!(input_args("otg", &options).unwrap(), vec![
+            "--otg", "--keyboard=aoa", "--mouse=aoa"
+        ]);
+    }
+
+    #[test]
+    fn input_mode_rejects_unknown_modes_without_starting_a_process() {
+        let options = ScrcpyInputOptions { keyboard: true, mouse: true, gamepad: false };
+        assert!(input_args("unknown", &options).is_err());
     }
 }

@@ -235,6 +235,14 @@ export interface ScrcpyCameraOptions {
   cameraZoom: number;
 }
 
+export type ScrcpyInputMode = "uhid" | "otg";
+
+export interface ScrcpyInputOptions {
+  keyboard: boolean;
+  mouse: boolean;
+  gamepad: boolean;
+}
+
 export interface ScrcpyRecordingOptions extends ScrcpyCameraOptions {
   outputPath: string;
   format: ScrcpyRecordingFormat;

@@ -17,6 +17,8 @@ import type {
   MagiskAssets,
   RootStatus,
   ScrcpyCameraOptions,
+  ScrcpyInputMode,
+  ScrcpyInputOptions,
   ScrcpyRecordingOptions,
   ScreenshotResult,
   ShellResult,
@@ -228,6 +230,10 @@ export const DeviceService = {
     invoke<ShellResult>("scrcpy_start_camera", { serial, options: { ...options, outputPath: "", format: "mp4", audio: false, audioOnly: false, audioSource: "output", videoSource: "camera", timeLimitSecs: 0 } }),
   scrcpyStopCamera: (serial: string) => invoke<ShellResult>("scrcpy_stop_camera", { serial }),
   scrcpyCameraStatus: (serial: string) => invoke<string>("scrcpy_camera_status", { serial }),
+  scrcpyStartInput: (serial: string, mode: ScrcpyInputMode, options: ScrcpyInputOptions) =>
+    invoke<ShellResult>("scrcpy_start_input", { serial, mode, options }),
+  scrcpyStopInput: (serial: string) => invoke<ShellResult>("scrcpy_stop_input", { serial }),
+  scrcpyInputStatus: (serial: string) => invoke<string>("scrcpy_input_status", { serial }),
 
   // System logs
   getLogs: (opts?: {

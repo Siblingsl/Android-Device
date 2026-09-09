@@ -452,6 +452,7 @@ pub fn disconnect_device(serial: &str) -> ShellResult {
     let _ = scrcpy::stop(serial);
     let _ = scrcpy::stop_recording(serial);
     let _ = scrcpy::stop_camera(serial);
+    let _ = scrcpy::stop_input(serial);
     let r = adb::disconnect(serial);
     cache::invalidate_adb();
     r
@@ -465,6 +466,10 @@ fn find_device_light(id: &str) -> Option<DeviceInfo> {
 
 pub fn restart_device(id: &str) -> ShellResult {
     if let Some(d) = find_device_light(id) {
+        let _ = scrcpy::stop(&d.serial);
+        let _ = scrcpy::stop_recording(&d.serial);
+        let _ = scrcpy::stop_camera(&d.serial);
+        let _ = scrcpy::stop_input(&d.serial);
         let r = if !d.container_id.is_empty() {
             docker::restart_container(&d.container_id)
         } else {
@@ -487,6 +492,7 @@ pub fn stop_device(id: &str) -> ShellResult {
         let _ = scrcpy::stop(&d.serial);
         let _ = scrcpy::stop_recording(&d.serial);
         let _ = scrcpy::stop_camera(&d.serial);
+        let _ = scrcpy::stop_input(&d.serial);
         let r = if !d.container_id.is_empty() {
             docker::stop_container(&d.container_id)
         } else {
