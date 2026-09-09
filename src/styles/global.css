@@ -1632,7 +1632,17 @@ a {
 .devices-toolbar-batch select { height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--bg-card); }
 .devices-toolbar-batch select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .devices-table-shell { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); }
-.devices-table { min-width: 920px; }
+.devices-table { width: 100%; min-width: 860px; table-layout: fixed; }
+.devices-table-identity-cell { width: 34%; min-width: 220px; }
+.devices-table-status-cell { width: 12%; min-width: 86px; }
+.devices-table-services-cell { width: 17%; min-width: 118px; }
+.devices-table-runtime-cell { width: 17%; min-width: 124px; }
+.devices-table-identity-cell,
+.devices-table-services-cell,
+.devices-table-runtime-cell { overflow: hidden; }
+.devices-table-identity-cell > *,
+.devices-table-services-cell > *,
+.devices-table-runtime-cell > * { min-width: 0; }
 .devices-table th, .devices-table td { padding: 8px 10px; vertical-align: middle; }
 .devices-table th { white-space: nowrap; }
 .devices-table-row:hover td { background: var(--bg-hover); }
@@ -1688,7 +1698,11 @@ a {
   .devices-table-responsive .devices-table { min-width: 760px; }
   .devices-table-responsive .devices-table th,
   .devices-table-responsive .devices-table td { padding: 6px 8px; }
-  .devices-table-responsive .devices-table-identity { min-width: 190px; }
+  .devices-table-responsive .devices-table-identity-cell { min-width: 190px; }
+  .devices-table-responsive .devices-table-status-cell { min-width: 82px; }
+  .devices-table-responsive .devices-table-services-cell { min-width: 108px; }
+  .devices-table-responsive .devices-table-runtime-cell { min-width: 112px; }
+  .devices-table-responsive .devices-table-identity { min-width: 0; }
   .devices-table-responsive .devices-table-primary { gap: 4px; }
   .devices-table-responsive .devices-table-secondary { gap: 1px; }
   .devices-table-responsive .devices-table-service { padding: 2px 4px; }

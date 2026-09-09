@@ -1663,10 +1663,10 @@ export function Devices() {
               <thead>
                 <tr>
                   <th aria-label={t("devices.table.select")} />
-                  <th>{t("devices.table.device")}</th>
-                  <th>{t("devices.table.status")}</th>
-                  <th>{t("devices.table.services")}</th>
-                  <th>{t("devices.table.runtime")}</th>
+                  <th className="devices-table-identity-head">{t("devices.table.device")}</th>
+                  <th className="devices-table-status-head">{t("devices.table.status")}</th>
+                  <th className="devices-table-services-head">{t("devices.table.services")}</th>
+                  <th className="devices-table-runtime-head">{t("devices.table.runtime")}</th>
                   <th className="devices-table-action-cell">{t("devices.table.actions")}</th>
                 </tr>
               </thead>
@@ -1697,7 +1697,7 @@ export function Devices() {
                           onChange={() => togglePick(d.id)}
                         />
                       </td>
-                      <td>
+                      <td className="devices-table-identity-cell">
                         <div
                           className="devices-table-identity devices-table-hover-anchor"
                           data-hover-placement={hoveredDeviceId === d.id ? hoverPlacement : undefined}
@@ -1768,7 +1768,7 @@ export function Devices() {
                           {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
                         </div>
                       </td>
-                      <td>
+                      <td className="devices-table-status-cell">
                         <div className={`devices-table-status devices-table-status-${statusTone}`} data-device-status={statusTone}>
                           <div className="devices-table-status-main">
                             <StatusDot online={online} />
@@ -1776,7 +1776,7 @@ export function Devices() {
                           <span className="muted mono">{d.adbStatus}</span>
                         </div>
                       </td>
-                      <td>
+                      <td className="devices-table-services-cell">
                         <div className="devices-table-services">
                           <span className={`devices-table-service ${scrcpyOn ? "active" : "idle"}`} data-service="scrcpy">
                             <span className="devices-table-service-name">scrcpy</span>
@@ -1788,7 +1788,7 @@ export function Devices() {
                           </span>
                         </div>
                       </td>
-                      <td>
+                      <td className="devices-table-runtime-cell">
                         <div className="devices-table-runtime">
                           <span className="devices-table-runtime-main mono">{d.ip || "—"}</span>
                           <span className="devices-table-runtime-secondary">

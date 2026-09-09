@@ -1392,6 +1392,25 @@ describe("Devices batch controls", () => {
     expect(within(row).getByRole("combobox", { name: "行内操作" }).classList.contains("device-row-action-more")).toBe(true);
   });
 
+  it("keeps identity flexible while marking supporting columns for responsive sizing", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    const table = row.closest("table");
+    expect(table?.querySelector(".devices-table-identity-head")).toBeTruthy();
+    expect(table?.querySelector(".devices-table-status-head")).toBeTruthy();
+    expect(table?.querySelector(".devices-table-services-head")).toBeTruthy();
+    expect(table?.querySelector(".devices-table-runtime-head")).toBeTruthy();
+    expect(row.querySelector(".devices-table-identity-cell")).toBeTruthy();
+    expect(row.querySelector(".devices-table-status-cell")).toBeTruthy();
+    expect(row.querySelector(".devices-table-services-cell")).toBeTruthy();
+    expect(row.querySelector(".devices-table-runtime-cell")).toBeTruthy();
+    expect(row.querySelector(".devices-table-action-cell")).toBeTruthy();
+  });
+
   it("keeps the single-device serial copy failure in the status bar and alert", async () => {
     const alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);
