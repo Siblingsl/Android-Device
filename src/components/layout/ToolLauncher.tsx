@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bot,
   Cable,
   Container,
   Database,
@@ -35,6 +36,7 @@ const tools: ToolItem[] = [
   { kind: "link", to: "/apk", labelKey: "common.nav.apk", descriptionKey: "common.tool.apkHint", icon: Package },
   { kind: "link", to: "/volumes", labelKey: "common.nav.volumes", descriptionKey: "common.tool.volumesHint", icon: Database },
   { kind: "link", to: "/monitor", labelKey: "common.nav.monitor", descriptionKey: "common.tool.monitorHint", icon: Activity },
+  { kind: "link", to: "/automation", labelKey: "common.nav.automation", descriptionKey: "common.tool.automationHint", icon: Bot },
   { kind: "link", to: "/logs", labelKey: "common.nav.logs", descriptionKey: "common.tool.logsHint", icon: ScrollText },
   { kind: "link", to: "/settings", labelKey: "common.nav.settings", descriptionKey: "common.tool.settingsHint", icon: Settings },
 ];

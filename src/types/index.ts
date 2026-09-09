@@ -214,6 +214,46 @@ export interface LogEntry {
   message: string;
 }
 
+export type AutomationStepKind =
+  | "tap"
+  | "swipe"
+  | "text"
+  | "key"
+  | "shell"
+  | "wait"
+  | "screenshot"
+  | "record"
+  | "launch"
+  | "install"
+  | "imageMatch"
+  | "if"
+  | "loop";
+
+export type AutomationStepValue = string | number | boolean | string[];
+
+export interface AutomationStep {
+  id: string;
+  kind: AutomationStepKind;
+  label: string;
+  enabled: boolean;
+  continueOnError?: boolean;
+  params: Record<string, AutomationStepValue>;
+}
+
+export interface AutomationScript {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  enabled: boolean;
+  tags: string[];
+  variables: Record<string, string>;
+  steps: AutomationStep[];
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;
+}
+
 export interface ShellResult {
   success: boolean;
   stdout: string;

@@ -12,6 +12,7 @@ import { SettingsPage } from "./pages/Settings";
 import { MonitorAlertsPage } from "./pages/MonitorAlerts";
 import { TerminalPage } from "./pages/Terminal";
 import { FloatingControlPage } from "./pages/FloatingControl";
+import { AutomationPage } from "./pages/Automation";
 import { I18nProvider } from "./i18n";
 
 export default function App() {
@@ -32,6 +33,7 @@ export default function App() {
             <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="monitor" element={<MonitorAlertsPage />} />
+            <Route path="automation" element={<AutomationPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
