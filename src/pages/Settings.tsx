@@ -11,11 +11,21 @@ import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import { normalizeMonitorPreferences } from "../lib/monitorPreferences";
 import {
+  GLOBAL_SHORTCUT_STATUS_CHANGED_EVENT,
+  GLOBAL_SHORTCUTS_CHANGED_EVENT,
+  notifyGlobalShortcutsChanged,
+  readGlobalShortcutStatus,
+  type GlobalShortcutStatus,
+} from "../lib/globalShortcuts";
+import {
   DEFAULT_SHORTCUTS,
   findShortcutConflict,
   formatShortcut,
+  persistGlobalShortcutsEnabled,
   persistShortcuts,
+  readGlobalShortcutsEnabled,
   readShortcuts,
+  SHORTCUT_ACTIONS,
   type ShortcutAction,
   type ShortcutBindings,
 } from "../lib/shortcuts";
@@ -56,6 +66,8 @@ export function SettingsPage() {
   const [shortcuts, setShortcuts] = useState<ShortcutBindings>(() => readShortcuts());
   const [capturingShortcut, setCapturingShortcut] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
+  const [globalShortcutsEnabled, setGlobalShortcutsEnabled] = useState(() => readGlobalShortcutsEnabled());
+  const [globalShortcutStatus, setGlobalShortcutStatus] = useState<GlobalShortcutStatus | null>(() => readGlobalShortcutStatus());
 
   useEffect(() => {
     loadSettings();
@@ -106,6 +118,19 @@ export function SettingsPage() {
     ]);
   }, [form, probeMany]);
 
+  useEffect(() => {
+    const syncGlobalShortcuts = () => {
+      setGlobalShortcutsEnabled(readGlobalShortcutsEnabled());
+      setGlobalShortcutStatus(readGlobalShortcutStatus());
+    };
+    window.addEventListener(GLOBAL_SHORTCUTS_CHANGED_EVENT, syncGlobalShortcuts);
+    window.addEventListener(GLOBAL_SHORTCUT_STATUS_CHANGED_EVENT, syncGlobalShortcuts);
+    return () => {
+      window.removeEventListener(GLOBAL_SHORTCUTS_CHANGED_EVENT, syncGlobalShortcuts);
+      window.removeEventListener(GLOBAL_SHORTCUT_STATUS_CHANGED_EVENT, syncGlobalShortcuts);
+    };
+  }, []);
+
   if (!form) {
     return <div className="empty-state">{t("settings.loading")}</div>;
   }
@@ -152,6 +177,23 @@ export function SettingsPage() {
     setCapturingShortcut(null);
     setShortcutError("");
     setStatusText(t("settings.shortcuts.reset"));
+  };
+
+  const globalShortcutSummary = !globalShortcutsEnabled
+    ? t("settings.shortcuts.systemDisabled")
+    : globalShortcutStatus?.available === false
+      ? t("settings.shortcuts.systemUnavailable")
+      : globalShortcutStatus
+        ? t("settings.shortcuts.systemSummary", {
+            registered: globalShortcutStatus.registered.length,
+            total: SHORTCUT_ACTIONS.length,
+          })
+        : t("settings.shortcuts.systemEnabled");
+
+  const globalShortcutState = (action: ShortcutAction) => {
+    if (!globalShortcutsEnabled) return "disabled";
+    if (globalShortcutStatus?.registered.includes(action)) return "registered";
+    return globalShortcutStatus?.failed[action] ?? "notRegistered";
   };
 
   const pathFor = (key: "dockerPath" | "adbPath" | "scrcpyPath") =>
@@ -376,6 +418,24 @@ export function SettingsPage() {
         }
         className="settings-shortcuts-card"
       >
+        <div className="shortcut-system-controls">
+          <label className="shortcut-enable">
+            <input
+              type="checkbox"
+              checked={globalShortcutsEnabled}
+              aria-label={t("settings.shortcuts.enableSystem")}
+              onChange={(event) => {
+                const enabled = event.target.checked;
+                setGlobalShortcutsEnabled(enabled);
+                persistGlobalShortcutsEnabled(enabled);
+                notifyGlobalShortcutsChanged();
+                setStatusText(t(enabled ? "settings.shortcuts.enabled" : "settings.shortcuts.disabled"));
+              }}
+            />
+            {t("settings.shortcuts.enableSystem")}
+          </label>
+          <span className="shortcut-system-summary">{globalShortcutSummary}</span>
+        </div>
         <div className="settings-shortcuts-intro">
           <Keyboard size={17} aria-hidden="true" />
           <span>{t("settings.shortcuts.intro")}</span>
@@ -389,20 +449,25 @@ export function SettingsPage() {
                   <div className="shortcut-label">{t(label)}</div>
                   <div className="muted">{t(hint)}</div>
                 </div>
-                <button
-                  type="button"
-                  className={`shortcut-capture${active ? " active" : ""}`}
-                  aria-label={t("settings.shortcuts.capture", { action: t(label) })}
-                  onClick={() => {
-                    setCapturingShortcut(action);
-                    setShortcutError("");
-                  }}
-                  onKeyDown={(event) => {
-                    if (active) assignShortcut(action, event);
-                  }}
-                >
-                  {active ? t("settings.shortcuts.press") : shortcuts[action]}
-                </button>
+                <div className="shortcut-row-actions">
+                  <span className={`shortcut-status ${globalShortcutState(action)}`}>
+                    {t(`settings.shortcuts.status.${globalShortcutState(action)}`)}
+                  </span>
+                  <button
+                    type="button"
+                    className={`shortcut-capture${active ? " active" : ""}`}
+                    aria-label={t("settings.shortcuts.capture", { action: t(label) })}
+                    onClick={() => {
+                      setCapturingShortcut(action);
+                      setShortcutError("");
+                    }}
+                    onKeyDown={(event) => {
+                      if (active) assignShortcut(action, event);
+                    }}
+                  >
+                    {active ? t("settings.shortcuts.press") : shortcuts[action]}
+                  </button>
+                </div>
               </div>
             );
           })}

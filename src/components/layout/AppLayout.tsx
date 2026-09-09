@@ -11,11 +11,15 @@ import { tStatic } from "../../i18n/static";
 import clsx from "clsx";
 import {
   GLOBAL_SHORTCUTS_CHANGED_EVENT,
-  readGlobalShortcutsEnabled,
   registerGlobalShortcuts,
   unregisterGlobalShortcuts,
 } from "../../lib/globalShortcuts";
-import { readShortcuts, shortcutActionForEvent, type ShortcutAction } from "../../lib/shortcuts";
+import {
+  readGlobalShortcutsEnabled,
+  readShortcuts,
+  shortcutActionForEvent,
+  type ShortcutAction,
+} from "../../lib/shortcuts";
 
 async function runAutoStart() {
   const { settings, devices, setStatusText } = useAppStore.getState();

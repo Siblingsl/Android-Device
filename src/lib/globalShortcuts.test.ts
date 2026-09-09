@@ -81,7 +81,7 @@ describe("native global shortcuts", () => {
       enabled: false,
       registered: [],
       failed: {},
-    } as const;
+    };
     const listener = vi.fn();
     window.addEventListener("rdc:global-shortcuts-changed", listener);
 

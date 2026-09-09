@@ -95,4 +95,53 @@ describe("Settings shortcuts", () => {
     fireEvent.click(screen.getByRole("button", { name: "恢复默认快捷键" }));
     expect(screen.getByRole("button", { name: "录入 打开仪表盘快捷键" }).textContent).toBe("Ctrl+1");
   });
+
+  it("shows system shortcut registration as enabled by default", () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+
+    expect((screen.getByRole("checkbox", { name: "启用系统级快捷键" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/系统快捷键已启用/)).toBeTruthy();
+  });
+
+  it("persists disabling system shortcuts and requests re-registration", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用系统级快捷键" }));
+
+    expect(localStorage.getItem("rdc.shortcuts.enabled")).toBe("0");
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "rdc:global-shortcuts-changed" }),
+    );
+    dispatchSpy.mockRestore();
+  });
+
+  it("renders the registered count and an occupied shortcut state", () => {
+    localStorage.setItem(
+      "rdc.shortcuts.status",
+      JSON.stringify({
+        available: true,
+        enabled: true,
+        registered: ["openDashboard"],
+        failed: { openDevices: "occupied" },
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/1\/5 已注册/)).toBeTruthy();
+    expect(screen.getByText("被占用")).toBeTruthy();
+  });
 });

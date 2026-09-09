@@ -721,6 +721,29 @@ a {
 .card-body { padding: 14px 16px 16px; }
 
 .settings-shortcuts-card { margin-top: 16px; }
+.shortcut-system-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+}
+.shortcut-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.shortcut-enable input { accent-color: var(--primary); }
+.shortcut-system-summary { color: var(--text-secondary); font-size: 11px; text-align: right; }
 .settings-shortcuts-intro {
   display: flex;
   align-items: center;
@@ -747,6 +770,21 @@ a {
 .shortcut-copy { min-width: 0; }
 .shortcut-label { color: var(--text); font-size: 13px; font-weight: 600; }
 .shortcut-copy .muted { margin-top: 3px; font-size: 11px; overflow-wrap: anywhere; }
+.shortcut-row-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.shortcut-status {
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.shortcut-status.registered { color: var(--success); background: rgba(34, 197, 94, 0.1); }
+.shortcut-status.occupied,
+.shortcut-status.invalid { color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+.shortcut-status.unavailable,
+.shortcut-status.disabled,
+.shortcut-status.notRegistered { color: var(--text-secondary); }
 .shortcut-capture {
   flex: 0 0 auto;
   min-width: 92px;
@@ -778,6 +816,9 @@ a {
 
 @media (max-width: 760px) {
   .shortcut-list { grid-template-columns: 1fr; }
+  .shortcut-system-controls { align-items: flex-start; flex-direction: column; }
+  .shortcut-system-summary { text-align: left; }
+  .shortcut-row-actions { gap: 5px; }
 }
 
 .device-monitor { margin-bottom: 16px; }
