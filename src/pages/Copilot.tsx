@@ -5,12 +5,20 @@ import { Card } from "../components/ui/Card";
 import { useI18n } from "../i18n";
 import { authorizeCopilotToolCall, COPILOT_TOOLS, type CopilotToolCall } from "../lib/copilotTools";
 import { readCopilotPolicy, writeCopilotPolicy } from "../lib/copilotPolicy";
-import { requestCopilotCompletion, type CopilotChatMessage } from "../services/copilotService";
+import { runCopilotTask, type CopilotChatMessage } from "../services/copilotService";
 import { executeCopilotToolCall } from "../services/copilotToolExecutor";
 import { useAppStore } from "../stores/appStore";
 
 type Message = { id: string; role: "assistant" | "user"; content: string };
 type PendingCall = { call: CopilotToolCall; reason: string; label: string };
+
+function visibleMessages(protocolMessages: CopilotChatMessage[]): Message[] {
+  return protocolMessages.flatMap((message, index) => {
+    if (!message.content.trim()) return [];
+    const content = message.role === "tool" ? `工具结果：${message.content}` : message.content;
+    return [{ id: `protocol-${index}`, role: message.role === "user" ? "user" : "assistant", content }];
+  });
+}
 
 export function CopilotPage() {
   const { t } = useI18n();
@@ -18,6 +26,7 @@ export function CopilotPage() {
   const readOnlyIds = COPILOT_TOOLS.filter((tool) => tool.risk === "read").map((tool) => tool.id);
   const [allowedToolIds, setAllowedToolIds] = useState(() => readCopilotPolicy(readOnlyIds).allowedToolIds);
   const [request, setRequest] = useState("");
+  const [protocolMessages, setProtocolMessages] = useState<CopilotChatMessage[]>([{ role: "assistant", content: t("copilot.welcome") }]);
   const [messages, setMessages] = useState<Message[]>([{ id: "welcome", role: "assistant", content: t("copilot.welcome") }]);
   const [endpoint, setEndpoint] = useState("http://127.0.0.1:11434/v1");
   const [model, setModel] = useState("qwen2.5");
@@ -32,45 +41,44 @@ export function CopilotPage() {
     writeCopilotPolicy({ allowedToolIds });
     setStatusText(t("copilot.saved"));
   };
-  const appendAssistant = (content: string) => setMessages((current) => [...current, { id: `assistant-${Date.now()}-${Math.random()}`, role: "assistant", content }]);
 
-  const handleToolCalls = async (toolCalls: CopilotToolCall[]) => {
-    const call = toolCalls[0];
-    if (!call) return;
-    const authorization = authorizeCopilotToolCall(call, { allowedToolIds, confirmed: false });
-    if (authorization.status === "blocked") {
-      appendAssistant(authorization.reason);
+  const applyTaskResult = (result: Awaited<ReturnType<typeof runCopilotTask>>) => {
+    setProtocolMessages(result.messages);
+    setMessages(visibleMessages(result.messages));
+    if (result.status === "awaiting_confirmation" && result.pendingCall) {
+      const tool = COPILOT_TOOLS.find((item) => item.id === result.pendingCall?.toolId);
+      setPendingCall({ call: result.pendingCall, reason: result.pendingReason || "该操作需要确认", label: tool?.label || result.pendingCall.toolId });
       return;
     }
-    if (authorization.status === "confirmation_required") {
-      setPendingCall({ call, reason: authorization.reason, label: authorization.tool.label });
-      return;
+    setPendingCall(null);
+    if (result.status !== "completed" && result.status !== "cancelled") {
+      const message = result.error || `任务状态：${result.status}`;
+      setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant", content: t("copilot.requestFailed", { message }) }]);
     }
-    const output = await executeCopilotToolCall(call, targetSerial.trim());
-    appendAssistant(`${authorization.tool.label}：${output}`);
   };
 
   const send = async () => {
     const content = request.trim();
     if (!content || busy) return;
     const nextMessage: Message = { id: `user-${Date.now()}`, role: "user", content };
-    const nextMessages = [...messages, nextMessage];
-    setMessages(nextMessages);
+    const nextProtocolMessages: CopilotChatMessage[] = [...protocolMessages, { role: "user", content }];
+    setProtocolMessages(nextProtocolMessages);
+    setMessages([...messages, nextMessage]);
     setRequest("");
     setBusy(true);
     const controller = new AbortController();
     requestController.current = controller;
     try {
-      const result = await requestCopilotCompletion(
+      const result = await runCopilotTask(
         { baseUrl: endpoint, apiKey, model, maxTokens: 1200, timeoutMs: 60000 },
-        nextMessages.map((message): CopilotChatMessage => ({ role: message.role, content: message.content })),
+        nextProtocolMessages,
         allowedToolIds,
-        controller.signal,
+        (call) => executeCopilotToolCall(call, targetSerial.trim()),
+        { maxSteps: 8, totalTimeoutMs: 120000, signal: controller.signal },
       );
-      if (result.content) appendAssistant(result.content);
-      await handleToolCalls(result.toolCalls);
+      applyTaskResult(result);
     } catch (cause) {
-      appendAssistant(t("copilot.requestFailed", { message: cause instanceof Error ? cause.message : String(cause) }));
+      setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant", content: t("copilot.requestFailed", { message: cause instanceof Error ? cause.message : String(cause) }) }]);
     } finally {
       requestController.current = null;
       setBusy(false);
@@ -82,14 +90,29 @@ export function CopilotPage() {
     const authorization = authorizeCopilotToolCall(pendingCall.call, { allowedToolIds, confirmed: true });
     setPendingCall(null);
     if (authorization.status !== "allowed") {
-      appendAssistant(authorization.status === "blocked" ? authorization.reason : authorization.reason);
+      setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant", content: authorization.reason }]);
       return;
     }
+    setBusy(true);
+    const controller = new AbortController();
+    requestController.current = controller;
     try {
       const output = await executeCopilotToolCall(pendingCall.call, targetSerial.trim());
-      appendAssistant(`${authorization.tool.label}：${output}`);
+      const toolMessage: CopilotChatMessage = { role: "tool", content: output, tool_call_id: pendingCall.call.id || "confirmed-call", name: pendingCall.call.toolId };
+      const nextProtocolMessages = [...protocolMessages, toolMessage];
+      const result = await runCopilotTask(
+        { baseUrl: endpoint, apiKey, model, maxTokens: 1200, timeoutMs: 60000 },
+        nextProtocolMessages,
+        allowedToolIds,
+        (call) => executeCopilotToolCall(call, targetSerial.trim()),
+        { maxSteps: 8, totalTimeoutMs: 120000, signal: controller.signal },
+      );
+      applyTaskResult(result);
     } catch (cause) {
-      appendAssistant(`执行失败：${cause instanceof Error ? cause.message : String(cause)}`);
+      setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: "assistant", content: `执行失败：${cause instanceof Error ? cause.message : String(cause)}` }]);
+    } finally {
+      requestController.current = null;
+      setBusy(false);
     }
   };
 
@@ -107,7 +130,7 @@ export function CopilotPage() {
           </div>
           <div className="copilot-composer">
             <textarea aria-label={t("copilot.request")} value={request} onChange={(event) => setRequest(event.target.value)} placeholder={t("copilot.placeholder")} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) send(); }} />
-            <div className="copilot-composer-foot"><span>{busy ? t("copilot.busy") : "Ctrl / ⌘ + Enter"}</span><Button variant="primary" icon={<Send size={14} />} onClick={() => void send()} disabled={busy}>{t("copilot.send")}</Button></div>
+            <div className="copilot-composer-foot"><span>{busy ? t("copilot.busy") : "Ctrl / ⌘ + Enter"}</span>{busy && <Button variant="secondary" icon={<X size={14} />} onClick={() => requestController.current?.abort()}>{t("copilot.cancel")}</Button>}<Button variant="primary" icon={<Send size={14} />} onClick={() => void send()} disabled={busy}>{t("copilot.send")}</Button></div>
             {pendingCall && <div className="copilot-confirmation"><div><strong>{t("copilot.pending")}</strong><span>{pendingCall.label} · {pendingCall.reason}</span></div><div className="row"><Button variant="secondary" icon={<X size={14} />} onClick={() => setPendingCall(null)}>{t("copilot.reject")}</Button><Button variant="primary" icon={<Check size={14} />} onClick={() => void confirmToolCall()}>{t("copilot.confirm")}</Button></div></div>}
           </div>
         </Card>

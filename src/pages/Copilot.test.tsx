@@ -8,13 +8,22 @@ import { COPILOT_POLICY_STORAGE_KEY } from "../lib/copilotPolicy";
 import { CopilotPage } from "./Copilot";
 
 vi.mock("../services/copilotService", () => ({
-  requestCopilotCompletion: vi.fn().mockResolvedValue({ content: "已读取设备状态。", toolCalls: [] }),
+  runCopilotTask: vi.fn().mockResolvedValue({
+    status: "completed",
+    content: "已读取设备状态。",
+    messages: [
+      { role: "assistant", content: "我会先读取上下文，再给出可确认的设备操作计划。" },
+      { role: "user", content: "查看当前设备状态" },
+      { role: "assistant", content: "已读取设备状态。" },
+    ],
+    stepCount: 0,
+  }),
 }));
 vi.mock("../services/copilotToolExecutor", () => ({
   executeCopilotToolCall: vi.fn().mockResolvedValue("工具执行成功"),
 }));
 
-const { requestCopilotCompletion } = await import("../services/copilotService");
+const { runCopilotTask } = await import("../services/copilotService");
 const { executeCopilotToolCall } = await import("../services/copilotToolExecutor");
 
 function TestShell() {
@@ -49,13 +58,21 @@ describe("CopilotPage", () => {
         expect.objectContaining({ allowedToolIds: expect.arrayContaining(["device.installApk"]) }),
     );
     await vi.waitFor(() => expect(screen.getByText("已读取设备状态。")).toBeTruthy());
-    expect(requestCopilotCompletion).toHaveBeenCalled();
+    expect(runCopilotTask).toHaveBeenCalled();
   });
 
   it("does not execute a write tool until the user confirms it", async () => {
-    vi.mocked(requestCopilotCompletion).mockResolvedValueOnce({
+    vi.mocked(runCopilotTask).mockResolvedValueOnce({
+      status: "awaiting_confirmation",
       content: "我准备启动应用，需要确认。",
-      toolCalls: [{ id: "call-1", toolId: "device.startApp", args: { packageName: "com.demo" } }],
+      messages: [
+        { role: "assistant", content: "我会先读取上下文，再给出可确认的设备操作计划。" },
+        { role: "user", content: "启动应用" },
+        { role: "assistant", content: "我准备启动应用，需要确认。" },
+      ],
+      stepCount: 1,
+      pendingCall: { id: "call-1", toolId: "device.startApp", args: { packageName: "com.demo" } },
+      pendingReason: "启动应用会改变设备状态，需要确认后执行",
     });
     vi.mocked(executeCopilotToolCall).mockClear();
     render(<TestShell />);

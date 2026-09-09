@@ -9,6 +9,7 @@ export interface CopilotToolDefinition {
 }
 
 export interface CopilotToolCall {
+  id?: string;
   toolId: string;
   args: Record<string, unknown>;
 }
