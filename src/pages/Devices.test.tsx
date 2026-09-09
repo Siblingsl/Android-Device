@@ -209,8 +209,37 @@ describe("Devices batch controls", () => {
     expect(within(row).getByText(/one-serial/).parentElement?.classList.contains("devices-table-secondary")).toBe(true);
     expect(within(row).getByText("Android 13 · 2 CPU · 2g RAM")).toBeTruthy();
     expect(within(row).getByText(/data-one/)).toBeTruthy();
-    expect(within(row).getByText("scrcpy · stopped")).toBeTruthy();
+    expect(row.querySelector('[data-service="scrcpy"]')?.textContent).toContain("scrcpy");
+    expect(row.querySelector('[data-service="scrcpy"]')?.textContent).toContain("stopped");
     expect(within(row).getByText("1080x1920")).toBeTruthy();
+  }, 15_000);
+
+  it("groups status, services, and runtime details while preserving their values", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      {
+        ...device("one"),
+        online: true,
+        adbStatus: "device",
+        scrcpyStatus: "running",
+        dockerStatus: "running",
+        ip: "192.168.1.20",
+        uptime: "18m",
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    expect(row.querySelector('[data-device-status="online"]')).toBeTruthy();
+    expect(row.querySelector('[data-service="scrcpy"] .devices-table-service-name')?.textContent).toBe("scrcpy");
+    expect(row.querySelector('[data-service="docker"] .devices-table-service-name')?.textContent).toBe("Docker");
+    expect(row.querySelector(".devices-table-runtime-main")?.textContent).toBe("192.168.1.20");
+    expect(row.querySelector(".devices-table-runtime-secondary")?.textContent).toContain("1080x1920");
+    expect(row.querySelector(".devices-table-runtime-secondary")?.textContent).toContain("18m");
   }, 15_000);
 
   it("keeps the table shell responsive and repositions the hover card near viewport edges", async () => {

@@ -1638,10 +1638,19 @@ a {
 .devices-table-link { width: fit-content; padding: 0; border: 0; color: var(--primary); background: transparent; font-size: 10px; text-align: left; cursor: pointer; }
 .devices-table-link:hover { text-decoration: underline; }
 .devices-table-status, .devices-table-services, .devices-table-runtime { display: flex; flex-direction: column; gap: 2px; line-height: 1.2; white-space: nowrap; }
+.devices-table-status-main { display: flex; align-items: center; }
+.devices-table-status-unauthorized .muted { color: var(--warning); }
 .devices-table-status .badge { width: fit-content; }
-.devices-table-services { color: var(--text-secondary); font-size: 10px; }
-.devices-table-service.active { color: var(--success); }
+.devices-table-services { gap: 3px; color: var(--text-secondary); font-size: 10px; }
+.devices-table-service { display: inline-flex; align-items: center; gap: 3px; width: fit-content; padding: 3px 5px; border-radius: 5px; background: var(--bg-hover); }
+.devices-table-service-name { color: var(--text); font-weight: 650; }
+.devices-table-service-state { color: var(--text-secondary); }
+.devices-table-service.active { color: var(--success); background: rgba(16, 185, 129, 0.1); }
+.devices-table-service.active .devices-table-service-name,
+.devices-table-service.active .devices-table-service-state { color: var(--success); }
 .devices-table-runtime { color: var(--text-secondary); font-size: 10px; }
+.devices-table-runtime-main { color: var(--text); font-weight: 650; }
+.devices-table-runtime-secondary { display: flex; align-items: center; gap: 7px; }
 .devices-table-warning { width: fit-content; margin-top: 2px; font-size: 9px; }
 .devices-table-actions { display: flex; align-items: center; gap: 5px; min-width: max-content; }
 .devices-table-actions .btn { min-height: 28px; padding: 4px 7px; font-size: 11px; }
@@ -1663,6 +1672,8 @@ a {
   .devices-table-responsive .devices-table-identity { min-width: 190px; }
   .devices-table-responsive .devices-table-primary { gap: 4px; }
   .devices-table-responsive .devices-table-secondary { gap: 1px; }
+  .devices-table-responsive .devices-table-service { padding: 2px 4px; }
+  .devices-table-responsive .devices-table-runtime-secondary { gap: 5px; }
   .devices-table-responsive .devices-table-action-cell { position: sticky; right: 0; z-index: 2; box-shadow: -8px 0 14px -14px var(--text); }
   .devices-table-responsive thead .devices-table-action-cell { z-index: 3; }
 }

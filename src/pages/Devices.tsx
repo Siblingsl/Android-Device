@@ -1666,6 +1666,8 @@ export function Devices() {
                   const canRestart = offline && hasContainer && !rowBusy;
                   const canStop = offline && hasContainer && !rowBusy;
                   const canDetail = !rowBusy;
+                  const statusTone = online ? "online" : d.adbStatus === "unauthorized" ? "unauthorized" : "offline";
+                  const dockerRunning = d.dockerStatus === "running";
 
                   return (
                     <tr key={d.id} className="devices-table-row">
@@ -1748,26 +1750,36 @@ export function Devices() {
                           {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
                         </div>
                       </td>
-                      <td className="devices-table-action-cell">
-                        <div className="devices-table-status">
-                          <StatusDot online={online} />
+                      <td>
+                        <div className={`devices-table-status devices-table-status-${statusTone}`} data-device-status={statusTone}>
+                          <div className="devices-table-status-main">
+                            <StatusDot online={online} />
+                          </div>
                           <span className="muted mono">{d.adbStatus}</span>
                         </div>
                       </td>
                       <td>
                         <div className="devices-table-services">
-                          <span className={scrcpyOn ? "devices-table-service active" : "devices-table-service"}>
-                            scrcpy · {d.scrcpyStatus}
+                          <span className={`devices-table-service ${scrcpyOn ? "active" : "idle"}`} data-service="scrcpy">
+                            <span className="devices-table-service-name">scrcpy</span>
+                            <span className="devices-table-service-state">· {d.scrcpyStatus}</span>
                           </span>
-                          <span className="devices-table-service">Docker · {d.dockerStatus || "—"}</span>
+                          <span className={`devices-table-service ${dockerRunning ? "active" : "idle"}`} data-service="docker">
+                            <span className="devices-table-service-name">Docker</span>
+                            <span className="devices-table-service-state">· {d.dockerStatus || "—"}</span>
+                          </span>
                         </div>
                       </td>
-                      <td className="devices-table-runtime">
-                        <span className="mono">{d.ip || "—"}</span>
-                        <span className="muted">{d.resolution || "—"}</span>
-                        <span className="muted">{d.uptime || "—"}</span>
-                      </td>
                       <td>
+                        <div className="devices-table-runtime">
+                          <span className="devices-table-runtime-main mono">{d.ip || "—"}</span>
+                          <span className="devices-table-runtime-secondary">
+                            <span className="muted">{d.resolution || "—"}</span>
+                            <span className="muted">{d.uptime || "—"}</span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="devices-table-action-cell">
                         <div className="devices-table-actions" aria-busy={rowActionBusy}>
                           <Button
                             size="sm"
