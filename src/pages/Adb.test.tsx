@@ -336,4 +336,58 @@ describe("AdbPage refresh ordering", () => {
       { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
     ]));
   });
+
+  it("reorders saved addresses with keyboard controls and persists manual order", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
+    const { container } = render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "无线地址排序" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "下移 Phone A" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]").map((entry: { label: string }) => entry.label)).toEqual([
+      "Phone B",
+      "Phone A",
+    ]));
+    const labels = [...container.querySelectorAll(".wireless-saved-label span")].map((node) => node.textContent);
+    expect(labels).toEqual(["Phone B", "Phone A"]);
+  });
+
+  it("exposes drag handles and disables manual dragging in recent mode", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "2026-09-01T00:00:00.000Z" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "2026-09-02T00:00:00.000Z" },
+    ]));
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText("Phone A")).toBeTruthy());
+    const handles = screen.getAllByRole("button", { name: "拖拽调整顺序" });
+    expect(handles).toHaveLength(2);
+    expect(handles[0].getAttribute("draggable")).toBe("true");
+    fireEvent.change(screen.getByRole("combobox", { name: "无线地址排序" }), { target: { value: "recent" } });
+    expect((handles[0] as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows saved addresses by most recent connection when selected", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "2026-09-01T00:00:00.000Z" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "2026-09-02T00:00:00.000Z" },
+    ]));
+    const { container } = render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "无线地址排序" })).toBeTruthy());
+    fireEvent.change(screen.getByRole("combobox", { name: "无线地址排序" }), { target: { value: "recent" } });
+    const labels = [...container.querySelectorAll(".wireless-saved-label span")].map((node) => node.textContent);
+    expect(labels).toEqual(["Phone B", "Phone A"]);
+  });
 });

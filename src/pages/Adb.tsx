@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookmarkPlus, Cable, Camera, Check, ImagePlus, Link2, Pencil, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench, X } from "lucide-react";
+import { BookmarkPlus, Cable, Camera, Check, ChevronDown, ChevronUp, GripVertical, ImagePlus, Link2, Pencil, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench, X } from "lucide-react";
 import QRCode from "qrcode";
 import { copyText } from "../lib/clipboard";
 import { decodeQrImageFile, decodeQrVideoFrame } from "../lib/qrScanner";
@@ -32,6 +32,7 @@ import type { AdbInfo, AdbMdnsService, LanScanResult } from "../types";
 
 type SavedReconnectStatus = "connecting" | "success" | "failed";
 type SavedReconnectResult = { status: SavedReconnectStatus; message: string };
+type SavedAddressSort = "manual" | "recent";
 
 export function AdbPage() {
   const [info, setInfo] = useState<AdbInfo | null>(null);
@@ -102,6 +103,16 @@ export function AdbPage() {
   });
   const [reconnectResults, setReconnectResults] = useState<Record<string, SavedReconnectResult>>({});
   const [selectedSavedAddresses, setSelectedSavedAddresses] = useState<string[]>([]);
+  const [savedAddressSort, setSavedAddressSort] = useState<SavedAddressSort>(() => {
+    try {
+      return localStorage.getItem("rdc.adb.savedWirelessSort") === "recent" ? "recent" : "manual";
+    } catch {
+      return "manual";
+    }
+  });
+  const [draggingSavedAddress, setDraggingSavedAddress] = useState<string | null>(null);
+  const draggingSavedAddressRef = useRef<string | null>(null);
+  const dragTargetAddressRef = useRef<string | null>(null);
   const [editingAddress, setEditingAddress] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
   const [tcpipSerial, setTcpipSerial] = useState("");
@@ -523,6 +534,43 @@ export function AdbPage() {
     setStatusText(t("adb.wireless.batchDeleted", { n: targets.length }));
   };
 
+  const moveSavedAddress = (targetAddress: string, direction: -1 | 1) => {
+    if (savedAddressSort !== "manual") return;
+    setSavedAddresses((entries) => {
+      const index = entries.findIndex((entry) => entry.address === targetAddress);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= entries.length) return entries;
+      const next = entries.slice();
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+  };
+
+  const dropSavedAddress = (targetAddress: string) => {
+    const sourceAddress = draggingSavedAddressRef.current;
+    if (savedAddressSort !== "manual" || !sourceAddress || sourceAddress === targetAddress) return;
+    setSavedAddresses((entries) => {
+      const fromIndex = entries.findIndex((entry) => entry.address === sourceAddress);
+      const targetIndex = entries.findIndex((entry) => entry.address === targetAddress);
+      if (fromIndex < 0 || targetIndex < 0) return entries;
+      const next = entries.slice();
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(next.findIndex((entry) => entry.address === targetAddress), 0, moved);
+      return next;
+    });
+    draggingSavedAddressRef.current = null;
+    dragTargetAddressRef.current = null;
+    setDraggingSavedAddress(null);
+  };
+
+  const finishSavedAddressDrag = () => {
+    const targetAddress = dragTargetAddressRef.current;
+    if (targetAddress) dropSavedAddress(targetAddress);
+    dragTargetAddressRef.current = null;
+    draggingSavedAddressRef.current = null;
+    setDraggingSavedAddress(null);
+  };
+
   const switchTcpip = async () => {
     const port = Number(tcpipPort);
     if (!tcpipSerial || !Number.isInteger(port) || port < 1 || port > 65535) {
@@ -600,6 +648,14 @@ export function AdbPage() {
   }, [reconnectConcurrency]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem("rdc.adb.savedWirelessSort", savedAddressSort);
+    } catch {
+      /* ignore */
+    }
+  }, [savedAddressSort]);
+
+  useEffect(() => {
     if (!adbOk) return;
     const refresh = () => void refreshMdnsServices(true);
     void refresh();
@@ -618,6 +674,13 @@ export function AdbPage() {
   ).length;
   const selectedSavedEntries = savedAddresses.filter((entry) => selectedSavedAddresses.includes(entry.address));
   const allSavedAddressesSelected = Boolean(savedAddresses.length) && selectedSavedEntries.length === savedAddresses.length;
+  const displayedSavedAddresses = savedAddressSort === "recent"
+    ? [...savedAddresses].sort((left, right) => {
+      const leftTime = Date.parse(left.lastConnectedAt) || 0;
+      const rightTime = Date.parse(right.lastConnectedAt) || 0;
+      return rightTime - leftTime;
+    })
+    : savedAddresses;
 
   return (
     <div>
@@ -858,6 +921,18 @@ export function AdbPage() {
           action={
             <div className="row wireless-saved-actions">
               <label>
+                <span className="muted">{t("adb.wireless.sort")}</span>
+                <select
+                  aria-label={t("adb.wireless.sort")}
+                  value={savedAddressSort}
+                  onChange={(event) => setSavedAddressSort(event.target.value as SavedAddressSort)}
+                  disabled={!savedAddresses.length}
+                >
+                  <option value="manual">{t("adb.wireless.sortManual")}</option>
+                  <option value="recent">{t("adb.wireless.sortRecent")}</option>
+                </select>
+              </label>
+              <label>
                 <span className="muted">{t("adb.wireless.concurrency")}</span>
                 <select
                   aria-label={t("adb.wireless.concurrency")}
@@ -900,12 +975,34 @@ export function AdbPage() {
           ) : null}
           {savedAddresses.length ? (
             <div className="wireless-saved-list">
-              {savedAddresses.map((entry) => {
+              {displayedSavedAddresses.map((entry, index) => {
                 const result = reconnectResults[entry.address];
                 const status = getSavedWirelessAddressStatus(entry, info?.devices || [], mdnsServices, reconnectResults);
                 const isEditing = editingAddress === entry.address;
                 return (
-                  <div className="wireless-saved-row" key={entry.address}>
+                  <div
+                    className={`wireless-saved-row${draggingSavedAddress === entry.address ? " is-dragging" : ""}`}
+                    key={entry.address}
+                    draggable={savedAddressSort === "manual" && !reconnectBusy}
+                    onDragStart={() => {
+                      draggingSavedAddressRef.current = entry.address;
+                      setDraggingSavedAddress(entry.address);
+                    }}
+                    onDragEnter={(event) => {
+                      if (savedAddressSort === "manual" && draggingSavedAddressRef.current && draggingSavedAddressRef.current !== entry.address) {
+                        event.preventDefault();
+                        dragTargetAddressRef.current = entry.address;
+                      }
+                    }}
+                    onDragOver={(event) => {
+                      if (savedAddressSort === "manual" && draggingSavedAddressRef.current && draggingSavedAddressRef.current !== entry.address) {
+                        event.preventDefault();
+                        dragTargetAddressRef.current = entry.address;
+                      }
+                    }}
+                    onDrop={() => dropSavedAddress(entry.address)}
+                    onDragEnd={finishSavedAddressDrag}
+                  >
                     <input
                       type="checkbox"
                       aria-label={t("adb.wireless.selectAddress", { label: entry.label })}
@@ -947,6 +1044,39 @@ export function AdbPage() {
                       </div>
                     </div>
                     <div className="row">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<GripVertical size={14} />}
+                        title={t("adb.wireless.dragToReorder")}
+                        aria-label={t("adb.wireless.dragToReorder")}
+                        disabled={savedAddressSort !== "manual" || reconnectBusy}
+                        draggable={savedAddressSort === "manual" && !reconnectBusy}
+                        onDragStart={() => {
+                          draggingSavedAddressRef.current = entry.address;
+                          dragTargetAddressRef.current = null;
+                          setDraggingSavedAddress(entry.address);
+                        }}
+                        onDragEnd={finishSavedAddressDrag}
+                      />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<ChevronUp size={14} />}
+                        title={t("adb.wireless.moveUp", { label: entry.label })}
+                        aria-label={t("adb.wireless.moveUp", { label: entry.label })}
+                        disabled={savedAddressSort !== "manual" || reconnectBusy || index === 0}
+                        onClick={() => moveSavedAddress(entry.address, -1)}
+                      />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<ChevronDown size={14} />}
+                        title={t("adb.wireless.moveDown", { label: entry.label })}
+                        aria-label={t("adb.wireless.moveDown", { label: entry.label })}
+                        disabled={savedAddressSort !== "manual" || reconnectBusy || index === displayedSavedAddresses.length - 1}
+                        onClick={() => moveSavedAddress(entry.address, 1)}
+                      />
                       <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy || isEditing} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
                         {t("adb.connect")}
                       </Button>

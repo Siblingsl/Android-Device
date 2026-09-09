@@ -2383,6 +2383,17 @@ a {
   border-radius: 9px;
   background: var(--bg-hover);
 }
+.wireless-saved-row[draggable="true"] {
+  cursor: grab;
+}
+.wireless-saved-row[draggable="true"]:active,
+.wireless-saved-row.is-dragging {
+  cursor: grabbing;
+}
+.wireless-saved-row.is-dragging {
+  opacity: 0.55;
+  border-style: dashed;
+}
 .wireless-saved-row > input {
   flex: 0 0 auto;
   margin: 0 2px 0 0;
