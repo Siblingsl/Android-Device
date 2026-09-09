@@ -186,6 +186,24 @@ describe("Devices batch controls", () => {
     expect(screen.getByRole("button", { name: "广播文本" }).closest(".devices-toolbar-batch")).toBeTruthy();
   }, 15_000);
 
+  it("prioritizes batch actions into primary, supporting, and utility groups", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const batchToolbar = await screen.findByRole("button", { name: "批量投屏" });
+    expect(batchToolbar.closest(".devices-toolbar-batch-primary")).toBeTruthy();
+    expect(batchToolbar.classList.contains("primary")).toBe(true);
+    expect(screen.getByRole("button", { name: "批量连接" }).closest(".devices-toolbar-batch-primary")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量推送" }).closest(".devices-toolbar-batch-supporting")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量安装 APK" }).closest(".devices-toolbar-batch-supporting")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批量截图" }).closest(".devices-toolbar-batch-utility")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制已选 Serial" }).closest(".devices-toolbar-batch-utility")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "更多操作" }).closest(".devices-toolbar-batch-utility")).toBeTruthy();
+  }, 15_000);
+
   it("shows devices in a compact table with row-level actions by default", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
       { ...device("one"), online: true, adbStatus: "device" },

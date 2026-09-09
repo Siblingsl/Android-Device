@@ -1096,6 +1096,7 @@ export function Devices() {
           </details>
           </div>
           <div className="devices-toolbar-batch">
+          <div className="devices-toolbar-batch-supporting">
           <DeviceBroadcastInput
             disabled={selectedDevices.length === 0}
             busy={busy}
@@ -1122,27 +1123,8 @@ export function Devices() {
               )
             }
           />
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={selectedDevices.length === 0}
-            onClick={() => {
-              const text = selectedDevices
-                .map((d) => d.serial)
-                .filter(Boolean)
-                .join("\n");
-              if (!text) {
-                setStatusText(t("devices.nothingToCopy"));
-                return;
-              }
-              void copyText(text).then(
-                () => setStatusText(t("devices.copiedSerials", { n: selectedDevices.length })),
-                () => void alert(t("common.panel.copyFailed")),
-              );
-            }}
-          >
-            {t("devices.copySerials")}
-          </Button>
+          </div>
+          <div className="devices-toolbar-batch-primary">
           <Button
             size="sm"
             loading={busy === "batch"}
@@ -1155,6 +1137,7 @@ export function Devices() {
           </Button>
           <Button
             size="sm"
+            variant="primary"
             icon={<Monitor size={13} />}
             loading={busy === "batch"}
             disabled={busy === "batch" || selectedDevices.length === 0}
@@ -1172,6 +1155,8 @@ export function Devices() {
           >
             {t("devices.batch.mirrorShort")}
           </Button>
+          </div>
+          <div className="devices-toolbar-batch-supporting">
           <Button
             size="sm"
             icon={<LayoutGrid size={13} />}
@@ -1246,7 +1231,7 @@ export function Devices() {
           </Button>
           <Button
             size="sm"
-            variant="primary"
+            variant="secondary"
             icon={<Package size={13} />}
             loading={busy === "batch"}
             disabled={busy === "batch" || selectedDevices.length === 0}
@@ -1289,6 +1274,29 @@ export function Devices() {
           >
             {t("devices.batch.installApk")}
           </Button>
+          </div>
+          <div className="devices-toolbar-batch-utility">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={selectedDevices.length === 0}
+            onClick={() => {
+              const text = selectedDevices
+                .map((d) => d.serial)
+                .filter(Boolean)
+                .join("\n");
+              if (!text) {
+                setStatusText(t("devices.nothingToCopy"));
+                return;
+              }
+              void copyText(text).then(
+                () => setStatusText(t("devices.copiedSerials", { n: selectedDevices.length })),
+                () => void alert(t("common.panel.copyFailed")),
+              );
+            }}
+          >
+            {t("devices.copySerials")}
+          </Button>
           <Button
             size="sm"
             icon={<Camera size={13} />}
@@ -1314,6 +1322,7 @@ export function Devices() {
             {t("devices.batch.screenshot")}
           </Button>
           <select
+            aria-label={t("devices.moreActions")}
             disabled={busy === "batch" || selectedDevices.length === 0}
             defaultValue=""
             style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
@@ -1370,6 +1379,7 @@ export function Devices() {
             <option value="back">{t("devices.batch.back")}</option>
             <option value="recent">{t("devices.batch.recent")}</option>
           </select>
+          </div>
           </div>
         </div>
       )}
