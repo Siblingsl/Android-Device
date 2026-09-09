@@ -1,4 +1,4 @@
-import type { AdbMdnsService } from "../types";
+import type { AdbDevice, AdbMdnsService } from "../types";
 
 export interface AdbQrPayload {
   instanceName: string;
@@ -10,6 +10,12 @@ export interface SavedWirelessAddress {
   label: string;
   lastConnectedAt: string;
 }
+
+export type SavedWirelessAddressStatus = "online" | "connecting" | "offline" | "failed";
+export type SavedWirelessReconnectState = {
+  status: "connecting" | "success" | "failed";
+  message: string;
+};
 
 export const DEFAULT_RECONNECT_CONCURRENCY = 3;
 
@@ -109,6 +115,33 @@ export function upsertSavedWirelessAddress(
     { address, label: label.trim() || address, lastConnectedAt: new Date().toISOString() },
     ...next,
   ].slice(0, 32);
+}
+
+export function renameSavedWirelessAddress(
+  entries: SavedWirelessAddress[],
+  rawAddress: string,
+  rawLabel: string,
+): SavedWirelessAddress[] {
+  const address = normalizeWirelessAddress(rawAddress);
+  if (!address) return entries;
+  const label = rawLabel.trim() || address;
+  return entries.map((entry) => entry.address === address ? { ...entry, label } : entry);
+}
+
+export function getSavedWirelessAddressStatus(
+  entry: SavedWirelessAddress,
+  devices: AdbDevice[],
+  services: AdbMdnsService[],
+  reconnectResults: Record<string, SavedWirelessReconnectState>,
+): SavedWirelessAddressStatus {
+  const reconnect = reconnectResults[entry.address];
+  if (reconnect?.status === "connecting") return "connecting";
+
+  const liveDevice = devices.some((device) => device.serial === entry.address && device.state === "device");
+  const liveService = services.some((service) => isAdbConnectService(service) && service.address === entry.address);
+  if (liveDevice || liveService || reconnect?.status === "success") return "online";
+  if (reconnect?.status === "failed") return "failed";
+  return "offline";
 }
 
 export async function runWithConcurrency<T, R>(

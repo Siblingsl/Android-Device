@@ -2425,8 +2425,46 @@ a {
 }
 .wireless-saved-status.connecting { color: var(--warning); }
 .wireless-saved-status.success { color: var(--success); }
+.wireless-saved-status.online { color: var(--success); }
+.wireless-saved-status.offline { color: var(--text-muted); }
 .wireless-saved-status.failed { color: var(--danger); }
 .wireless-saved-status .muted { overflow-wrap: anywhere; }
+.wireless-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+.wireless-saved-label,
+.wireless-saved-edit {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+}
+.wireless-saved-label .btn {
+  min-height: 22px;
+  padding: 2px 4px;
+  opacity: 0;
+}
+.wireless-saved-row:hover .wireless-saved-label .btn,
+.wireless-saved-label .btn:focus-visible {
+  opacity: 1;
+}
+.wireless-saved-edit input {
+  width: min(220px, 42vw);
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  color: var(--text);
+}
+.wireless-saved-edit .btn {
+  min-height: 28px;
+  padding: 4px 6px;
+}
 .wireless-divider {
   height: 1px;
   margin: 14px 0 12px;

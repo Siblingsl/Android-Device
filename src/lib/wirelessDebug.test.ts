@@ -7,6 +7,8 @@ import {
   normalizeReconnectConcurrency,
   parseAdbQrPayload,
   runWithConcurrency,
+  getSavedWirelessAddressStatus,
+  renameSavedWirelessAddress,
   upsertSavedWirelessAddress,
 } from "./wirelessDebug";
 
@@ -63,5 +65,40 @@ describe("wireless debugging helpers", () => {
     expect(normalizeReconnectConcurrency(0)).toBe(1);
     expect(normalizeReconnectConcurrency(99)).toBe(6);
     expect(normalizeReconnectConcurrency("invalid")).toBe(3);
+  });
+
+  it("merges live ADB, mDNS, and reconnect state for saved addresses", () => {
+    const entry = { address: "192.168.1.20:5555", label: "Phone", lastConnectedAt: "" };
+    expect(getSavedWirelessAddressStatus(entry, [], [], {})).toBe("offline");
+    expect(getSavedWirelessAddressStatus(entry, [], [], {
+      [entry.address]: { status: "connecting", message: "" },
+    })).toBe("connecting");
+    expect(getSavedWirelessAddressStatus(entry, [], [], {
+      [entry.address]: { status: "failed", message: "timeout" },
+    })).toBe("failed");
+    expect(getSavedWirelessAddressStatus(
+      entry,
+      [{ serial: entry.address, state: "device", product: "", model: "", device: "", transportId: "" }],
+      [],
+      {},
+    )).toBe("online");
+    expect(getSavedWirelessAddressStatus(
+      entry,
+      [],
+      [{ instanceName: "phone", serviceType: "_adb-tls-connect._tcp", address: entry.address }],
+      {},
+    )).toBe("online");
+  });
+
+  it("renames only the selected saved wireless address", () => {
+    const entries = [
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "a" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "b" },
+    ];
+    expect(renameSavedWirelessAddress(entries, "192.168.1.20:5555", "  Main phone  ")).toEqual([
+      { address: "192.168.1.20:5555", label: "Main phone", lastConnectedAt: "a" },
+      entries[1],
+    ]);
+    expect(renameSavedWirelessAddress(entries, "192.168.1.20:5555", "")[0].label).toBe("192.168.1.20:5555");
   });
 });

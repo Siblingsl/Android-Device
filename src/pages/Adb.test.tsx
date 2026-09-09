@@ -260,4 +260,32 @@ describe("AdbPage refresh ordering", () => {
     const calls = vi.mocked(DeviceService.adbConnect).mock.calls;
     expect(calls[calls.length - 1]).toEqual([failedAddress]);
   });
+
+  it("shows live address status and edits only the selected saved label", async () => {
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: "192.168.1.20:5555", label: "Phone A", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
+    vi.mocked(DeviceService.getAdbInfo).mockResolvedValue({
+      version: "ADB",
+      serverRunning: true,
+      devices: [{ serial: "192.168.1.20:5555", state: "device", product: "", model: "", device: "", transportId: "" }],
+    });
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText("在线")).toBeTruthy());
+    expect(screen.getByText("离线")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑备注 Phone A" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "设备备注" }), { target: { value: "主手机" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存备注" }));
+    const saved = JSON.parse(localStorage.getItem("rdc.adb.savedWirelessAddresses") || "[]");
+    expect(saved).toEqual([
+      { address: "192.168.1.20:5555", label: "主手机", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]);
+  });
 });

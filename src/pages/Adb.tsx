@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookmarkPlus, Cable, Camera, ImagePlus, Link2, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench } from "lucide-react";
+import { BookmarkPlus, Cable, Camera, Check, ImagePlus, Link2, Pencil, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench, X } from "lucide-react";
 import QRCode from "qrcode";
 import { copyText } from "../lib/clipboard";
 import { decodeQrImageFile, decodeQrVideoFrame } from "../lib/qrScanner";
@@ -16,12 +16,14 @@ import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import {
   findPairingService,
+  getSavedWirelessAddressStatus,
   isAdbConnectService,
   isAdbPairingService,
   DEFAULT_RECONNECT_CONCURRENCY,
   normalizeWirelessAddress,
   normalizeReconnectConcurrency,
   parseAdbQrPayload,
+  renameSavedWirelessAddress,
   runWithConcurrency,
   upsertSavedWirelessAddress,
   type SavedWirelessAddress,
@@ -99,6 +101,8 @@ export function AdbPage() {
     }
   });
   const [reconnectResults, setReconnectResults] = useState<Record<string, SavedReconnectResult>>({});
+  const [editingAddress, setEditingAddress] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState("");
   const [tcpipSerial, setTcpipSerial] = useState("");
   const [tcpipPort, setTcpipPort] = useState("5555");
   const loadSequence = useRef(createRequestSequence()).current;
@@ -178,20 +182,24 @@ export function AdbPage() {
       void alert(t("adb.wireless.invalidAddress"));
       return false;
     }
+    setReconnectResults((current) => ({ ...current, [target]: { status: "connecting", message: "" } }));
     setStatusText(t("adb.connecting", { address: target }));
     try {
       const r = await DeviceService.adbConnect(target);
       const message = (r.success ? r.stdout : r.stderr || r.stdout || t("adb.connectFailed")).trim();
       setStatusText(message || (r.success ? t("adb.connected") : t("adb.connectFailed")));
       if (!r.success) {
+        setReconnectResults((current) => ({ ...current, [target]: { status: "failed", message } }));
         void alert(message || t("adb.connectFailed"));
         return false;
       }
+      setReconnectResults((current) => ({ ...current, [target]: { status: "success", message } }));
       setSavedAddresses((entries) => upsertSavedWirelessAddress(entries, target, label));
       await load();
       return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      setReconnectResults((current) => ({ ...current, [target]: { status: "failed", message } }));
       setStatusText(message || t("adb.connectFailed"));
       void alert(message || t("adb.connectFailed"));
       return false;
@@ -421,6 +429,19 @@ export function AdbPage() {
     }
     setSavedAddresses((entries) => upsertSavedWirelessAddress(entries, target));
     setStatusText(t("adb.wireless.saved", { address: target }));
+  };
+
+  const startEditingSavedAddress = (entry: SavedWirelessAddress) => {
+    setEditingAddress(entry.address);
+    setEditingLabel(entry.label);
+  };
+
+  const finishEditingSavedAddress = () => {
+    if (!editingAddress) return;
+    setSavedAddresses((entries) => renameSavedWirelessAddress(entries, editingAddress, editingLabel));
+    setStatusText(t("adb.wireless.renamed", { label: editingLabel.trim() || editingAddress }));
+    setEditingAddress(null);
+    setEditingLabel("");
   };
 
   const reconnectSavedAddresses = async (entries = savedAddresses) => {
@@ -832,20 +853,45 @@ export function AdbPage() {
             <div className="wireless-saved-list">
               {savedAddresses.map((entry) => {
                 const result = reconnectResults[entry.address];
+                const status = getSavedWirelessAddressStatus(entry, info?.devices || [], mdnsServices, reconnectResults);
+                const isEditing = editingAddress === entry.address;
                 return (
                   <div className="wireless-saved-row" key={entry.address}>
                     <div>
-                      <div>{entry.label}</div>
-                      <div className="muted mono">{entry.address}</div>
-                      {result ? (
-                        <div className={`wireless-saved-status ${result.status}`}>
-                          {t(`adb.wireless.status.${result.status}`)}
-                          {result.status === "failed" && result.message ? <span className="muted"> · {result.message}</span> : null}
+                      {isEditing ? (
+                        <div className="wireless-saved-edit">
+                          <input
+                            aria-label={t("adb.wireless.labelInput")}
+                            value={editingLabel}
+                            onChange={(event) => setEditingLabel(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") finishEditingSavedAddress();
+                              if (event.key === "Escape") {
+                                setEditingAddress(null);
+                                setEditingLabel("");
+                              }
+                            }}
+                            autoFocus
+                          />
+                          <Button size="sm" variant="primary" icon={<Check size={14} />} title={t("adb.wireless.saveLabel")} onClick={finishEditingSavedAddress} />
+                          <Button size="sm" variant="ghost" icon={<X size={14} />} title={t("adb.wireless.cancelLabel")} onClick={() => { setEditingAddress(null); setEditingLabel(""); }} />
                         </div>
-                      ) : null}
+                      ) : (
+                        <div className="wireless-saved-label">
+                          <span>{entry.label}</span>
+                          <Button size="sm" variant="ghost" icon={<Pencil size={13} />} title={t("adb.wireless.editLabel", { label: entry.label })} aria-label={t("adb.wireless.editLabel", { label: entry.label })} onClick={() => startEditingSavedAddress(entry)} />
+                        </div>
+                      )}
+                      <div className="muted mono">{entry.address}</div>
+                      <div className={`wireless-saved-status ${status}`}>
+                        <span className="wireless-status-dot" aria-hidden="true" />
+                        {t(`adb.wireless.status.${status}`)}
+                        {status === "failed" && result?.message ? <span className="muted"> · {result.message}</span> : null}
+                        {entry.lastConnectedAt ? <span className="muted"> · {t("adb.wireless.lastSeen", { time: new Date(entry.lastConnectedAt).toLocaleString() })}</span> : null}
+                      </div>
                     </div>
                     <div className="row">
-                      <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
+                      <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy || isEditing} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
                         {t("adb.connect")}
                       </Button>
                       <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => setSavedAddresses((items) => items.filter((item) => item.address !== entry.address))} />
