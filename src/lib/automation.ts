@@ -5,6 +5,7 @@ export const AUTOMATION_STORAGE_KEY = "rdc.automation.scripts";
 const STEP_KINDS: AutomationStepKind[] = [
   "tap",
   "swipe",
+  "longPress",
   "text",
   "key",
   "shell",
@@ -21,6 +22,7 @@ const STEP_KINDS: AutomationStepKind[] = [
 const DEFAULT_STEP_PARAMS: Record<AutomationStepKind, Record<string, AutomationStepValue>> = {
   tap: { x: 0, y: 0 },
   swipe: { x1: 0, y1: 0, x2: 0, y2: 0, duration: 300 },
+  longPress: { x: 0, y: 0, duration: 800 },
   text: { text: "" },
   key: { keycode: 3 },
   shell: { command: "" },
@@ -72,6 +74,8 @@ function normalizeStep(raw: unknown, index: number): AutomationStep {
     label: typeof source.label === "string" && source.label.trim() ? source.label.trim() : kind,
     enabled: source.enabled !== false,
     ...(typeof source.continueOnError === "boolean" ? { continueOnError: source.continueOnError } : {}),
+    beforeDelayMs: typeof source.beforeDelayMs === "number" && source.beforeDelayMs >= 0 ? source.beforeDelayMs : 0,
+    afterDelayMs: typeof source.afterDelayMs === "number" && source.afterDelayMs >= 0 ? source.afterDelayMs : 0,
     params: normalizeParams(kind, source.params),
   };
 }
