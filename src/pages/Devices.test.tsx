@@ -1251,6 +1251,18 @@ describe("Devices batch controls", () => {
     expect(storeState.setStatusText).toHaveBeenCalledWith("已复制 one-serial");
   });
 
+  it("keeps table quick actions compact while retaining accessible labels", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    expect(within(row).getByRole("button", { name: "投屏" }).classList.contains("device-row-action")).toBe(true);
+    expect(within(row).getByRole("button", { name: "ADB 连接" }).classList.contains("device-row-action")).toBe(true);
+    expect(within(row).getByRole("button", { name: "详情" }).classList.contains("device-row-action")).toBe(true);
+  });
+
   it("keeps the single-device serial copy failure in the status bar and alert", async () => {
     const alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);

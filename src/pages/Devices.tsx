@@ -1750,6 +1750,7 @@ export function Devices() {
                           <Button
                             size="sm"
                             variant={online && !scrcpyOn ? "primary" : "secondary"}
+                            className="device-row-action"
                             icon={<Monitor size={13} />}
                             loading={busy === `${d.id}-screen`}
                             disabled={!canScreen}
@@ -1776,11 +1777,12 @@ export function Devices() {
                               )
                             }
                           >
-                            {scrcpyOn ? t("devices.card.stopMirror") : t("devices.card.mirror")}
+                            <span className="device-action-label">{scrcpyOn ? t("devices.card.stopMirror") : t("devices.card.mirror")}</span>
                           </Button>
                           <Button
                             size="sm"
                             variant={offline ? "primary" : "secondary"}
+                            className="device-row-action"
                             icon={<Play size={13} />}
                             loading={busy === d.id && offline}
                             disabled={!canConnect}
@@ -1799,19 +1801,21 @@ export function Devices() {
                               )
                             }
                           >
-                            {t("devices.card.adbConnect")}
+                            <span className="device-action-label">{t("devices.card.adbConnect")}</span>
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
+                            className="device-row-action"
                             icon={<MoreHorizontal size={13} />}
                             disabled={!canDetail}
+                            title={t("devices.card.detail")}
                             onClick={() => {
                               setSelected(d.id);
                               navigate(`/devices/${encodeURIComponent(d.id)}`);
                             }}
                           >
-                            {t("devices.card.detail")}
+                            <span className="device-action-label">{t("devices.card.detail")}</span>
                           </Button>
                           <select
                             aria-label={t("devices.table.actions")}

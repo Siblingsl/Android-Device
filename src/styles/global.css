@@ -1641,6 +1641,8 @@ a {
 .devices-table-warning { width: fit-content; margin-top: 2px; font-size: 9px; }
 .devices-table-actions { display: flex; align-items: center; gap: 5px; min-width: max-content; }
 .devices-table-actions .btn { min-height: 28px; padding: 4px 7px; font-size: 11px; }
+.devices-table-actions .device-row-action { width: 30px; min-width: 30px; justify-content: center; gap: 0; padding: 4px; }
+.devices-table-actions .device-action-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .devices-table-actions select { height: 28px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--bg); font-size: 11px; }
 .devices-table-actions select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .dashboard-page { max-width: 1680px; margin: 0 auto; }
@@ -1769,12 +1771,19 @@ a {
 .batch-broadcast-keys .muted { margin-right: 2px; font-size: 10px; }
 .device-hover-card { position: absolute; z-index: 10; top: calc(100% + 7px); left: 0; width: min(300px, calc(100vw - 40px)); padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-hover); }
 .device-hover-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; color: var(--text-secondary); }
+.device-hover-status { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; font-size: 9px; }
+.device-hover-status.online { color: var(--success); background: rgba(16, 185, 129, 0.12); }
+.device-hover-status.offline { color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+.device-hover-status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .device-hover-title { color: var(--text); font-size: 12px; font-weight: 700; }
 .device-hover-serial { overflow: hidden; margin-top: 2px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .device-hover-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; margin-top: 10px; }
 .device-hover-value { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
 .device-hover-value-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 10px; }
 .device-hover-value strong { overflow: hidden; color: var(--text-secondary); font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.device-hover-battery-value { position: relative; padding-bottom: 5px; }
+.device-hover-battery-meter { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; overflow: hidden; border-radius: 999px; background: var(--bg-hover); }
+.device-hover-battery-meter span { display: block; height: 100%; border-radius: inherit; background: var(--success); transition: width 180ms ease-out; }
 .device-hover-screenshot { display: grid; place-items: center; min-height: 102px; margin-top: 10px; overflow: hidden; border-radius: 7px; color: var(--text-muted); background: var(--bg); font-size: 10px; }
 .device-hover-screenshot img { display: block; width: 100%; max-height: 150px; object-fit: contain; }
 .device-hover-loading { margin-top: 7px; color: var(--text-muted); font-size: 10px; }

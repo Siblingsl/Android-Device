@@ -72,6 +72,7 @@ describe("DeviceHoverCard", () => {
     await waitFor(() => expect(screen.getByText("78% · 充电中")).toBeTruthy());
     expect(screen.getByText("31.5 °C · 4.21 V")).toBeTruthy();
     expect(screen.getByText("USB")).toBeTruthy();
+    expect(screen.getByRole("meter", { name: "电量" }).getAttribute("aria-valuenow")).toBe("78");
     expect(screen.getByRole("img", { name: "设备悬浮截图" }).getAttribute("src")).toBe("data:image/png;base64,c2NyZWVu");
     expect(DeviceService.getDevice).toHaveBeenCalledWith("pixel-7");
     expect(DeviceService.screenshot).toHaveBeenCalledWith("127.0.0.1:5555");

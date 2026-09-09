@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Activity, Battery, Cpu, Gauge, HardDrive, Info, Network, Server, Thermometer } from "lucide-react";
+import { Activity, Battery, BatteryCharging, Cpu, Gauge, HardDrive, Network, Server, Thermometer } from "lucide-react";
 import type { DeviceInfo, ScreenshotResult } from "../../types";
 import { useI18n } from "../../i18n";
 import { deviceCapabilitySummary } from "../../lib/deviceBoard";
@@ -49,9 +49,13 @@ export function DeviceHoverCard({ device }: { device: DeviceInfo }) {
   }, [device.id, device.serial, device.online, device.adbStatus]);
 
   const capability = deviceCapabilitySummary(detail);
+  const isOnline = detail.online && detail.adbStatus === "device";
   const metric = (value: number | undefined, suffix = "%") =>
     typeof value === "number" ? `${value.toFixed(1)}${suffix}` : t("dashboard.board.notProvided");
-  const battery = typeof detail.batteryLevel === "number" ? `${Math.round(detail.batteryLevel)}%` : t("dashboard.board.notProvided");
+  const batteryValue = typeof detail.batteryLevel === "number"
+    ? Math.min(100, Math.max(0, Math.round(detail.batteryLevel)))
+    : null;
+  const battery = batteryValue === null ? t("dashboard.board.notProvided") : `${batteryValue}%`;
   const charging = detail.batteryCharging === undefined
     ? ""
     : detail.batteryCharging
@@ -68,14 +72,32 @@ export function DeviceHoverCard({ device }: { device: DeviceInfo }) {
           <div className="device-hover-title">{detail.name}</div>
           <div className="device-hover-serial mono">{detail.serial || "—"}</div>
         </div>
-        <Info size={14} />
+        <div className={`device-hover-status ${isOnline ? "online" : "offline"}`}>
+          <span className="device-hover-status-dot" />
+          <span>{isOnline ? t("common.online") : t("common.offline")}</span>
+        </div>
       </div>
       <div className="device-hover-grid">
         <HoverValue icon={<Activity size={13} />} label="Android" value={detail.androidVersion || "—"} />
         <HoverValue icon={<Gauge size={13} />} label="FPS" value={detail.fps ? String(detail.fps) : "—"} />
         <HoverValue icon={<Cpu size={13} />} label="CPU" value={metric(detail.cpuUsage)} />
         <HoverValue icon={<HardDrive size={13} />} label={t("common.panel.memory")} value={metric(detail.memoryUsage)} />
-        <HoverValue icon={<Battery size={13} />} label={t("dashboard.board.battery")} value={charging ? `${battery} · ${charging}` : battery} />
+        <div className="device-hover-value device-hover-battery-value">
+          <span className="device-hover-value-label">{detail.batteryCharging ? <BatteryCharging size={13} /> : <Battery size={13} />}{t("dashboard.board.battery")}</span>
+          <strong>{charging ? `${battery} · ${charging}` : battery}</strong>
+          {batteryValue !== null ? (
+            <div
+              className="device-hover-battery-meter"
+              role="meter"
+              aria-label={t("dashboard.board.battery")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={batteryValue}
+            >
+              <span style={{ width: `${batteryValue}%` }} />
+            </div>
+          ) : null}
+        </div>
         <HoverValue icon={<Thermometer size={13} />} label={t("dashboard.board.temperature")} value={`${temperature} · ${voltage}`} />
         <HoverValue icon={<Server size={13} />} label={t("dashboard.board.resolution")} value={detail.resolution || "—"} />
         <HoverValue icon={<Network size={13} />} label={t("dashboard.board.powerSource")} value={detail.batteryPowerSource || t("dashboard.board.notProvided")} />
