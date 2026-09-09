@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -164,6 +164,27 @@ describe("Devices batch controls", () => {
     expect(await screen.findByText("未执行（用户停止）")).toBeTruthy();
     expect(screen.getByRole("row", { name: /设备 two 失败 未执行（用户停止） 用户停止/ })).toBeTruthy();
     expect(await screen.findByText(/批量 ADB 连接 已停止 · 1\/2 成功/)).toBeTruthy();
+  }, 15_000);
+
+  it("shows devices in a compact table with row-level actions by default", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const rows = await screen.findAllByRole("row");
+    expect(rows).toHaveLength(3);
+    expect(screen.getByRole("columnheader", { name: "设备" })).toBeTruthy();
+    const onlineRow = screen.getByRole("row", { name: /设备 one/ });
+    expect(within(onlineRow).getByRole("button", { name: "投屏" })).toBeTruthy();
+    expect(within(onlineRow).getByRole("button", { name: "详情" })).toBeTruthy();
+    expect(within(onlineRow).getByRole("combobox")).toBeTruthy();
   }, 15_000);
 
   it("keeps processing every device when the batch is not stopped", async () => {
