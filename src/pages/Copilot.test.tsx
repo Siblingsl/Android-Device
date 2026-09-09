@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { I18nProvider } from "../i18n";
 import { COPILOT_POLICY_STORAGE_KEY } from "../lib/copilotPolicy";
+import { COPILOT_PREFERENCES_STORAGE_KEY } from "../lib/copilotPreferences";
 import { CopilotPage } from "./Copilot";
 
 vi.mock("../services/copilotService", () => ({
@@ -43,6 +44,20 @@ describe("CopilotPage", () => {
     expect(screen.getByRole("heading", { name: "AI 助手" })).toBeTruthy();
     expect(screen.getByText("读取设备列表")).toBeTruthy();
     expect(screen.getByText("危险 Shell 命令已默认拦截")).toBeTruthy();
+    expect(screen.getByRole("spinbutton", { name: "最大工具步数" })).toBeTruthy();
+  });
+
+  it("persists provider and execution preferences without storing the API key", () => {
+    render(<TestShell />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "兼容接口地址" }), { target: { value: "https://example.test/v1" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "最大工具步数" }), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText("API Key（仅本次会话）"), { target: { value: "secret-key" } });
+
+    const saved = localStorage.getItem(COPILOT_PREFERENCES_STORAGE_KEY) ?? "";
+    expect(saved).toContain("example.test");
+    expect(saved).toContain("\"maxSteps\":12");
+    expect(saved).not.toContain("secret-key");
   });
 
   it("persists tool permissions and receives an assistant response", async () => {

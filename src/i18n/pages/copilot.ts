@@ -23,6 +23,15 @@ export const copilotZh: Record<string, string> = {
   "copilot.empty": "还没有对话，请描述你想完成的设备工作",
   "copilot.welcome": "我会先读取上下文，再给出可确认的设备操作计划。",
   "copilot.blocked": "危险 Shell 命令已默认拦截",
+  "copilot.maxTokens": "最大输出 Token",
+  "copilot.maxSteps": "最大工具步数",
+  "copilot.timeout": "单步超时（毫秒）",
+  "copilot.totalTimeout": "总超时（毫秒）",
+  "copilot.execution": "执行状态与日志",
+  "copilot.executionStatus": "状态",
+  "copilot.executionIdle": "待执行",
+  "copilot.executionSteps": "已执行 {n} 步",
+  "copilot.executionLogEmpty": "暂无工具执行记录",
 };
 
 export const copilotEn: Record<string, string> = {
@@ -50,4 +59,13 @@ export const copilotEn: Record<string, string> = {
   "copilot.empty": "No conversation yet. Describe the device task you want to complete.",
   "copilot.welcome": "I will read the context first, then present a device action plan for confirmation.",
   "copilot.blocked": "Dangerous shell commands are blocked by default",
+  "copilot.maxTokens": "Max output tokens",
+  "copilot.maxSteps": "Max tool steps",
+  "copilot.timeout": "Step timeout (ms)",
+  "copilot.totalTimeout": "Total timeout (ms)",
+  "copilot.execution": "Execution status & log",
+  "copilot.executionStatus": "Status",
+  "copilot.executionIdle": "Idle",
+  "copilot.executionSteps": "{n} steps executed",
+  "copilot.executionLogEmpty": "No tool execution records yet",
 };

@@ -6,12 +6,14 @@ import { useI18n } from "../i18n";
 import { authorizeCopilotToolCall, COPILOT_TOOLS, type CopilotToolCall } from "../lib/copilotTools";
 import { readCopilotPolicy, writeCopilotPolicy } from "../lib/copilotPolicy";
 import { readCopilotHistory, writeCopilotHistory } from "../lib/copilotHistory";
+import { readCopilotPreferences, writeCopilotPreferences } from "../lib/copilotPreferences";
 import { runCopilotTask, type CopilotChatMessage } from "../services/copilotService";
 import { executeCopilotToolCall } from "../services/copilotToolExecutor";
 import { useAppStore } from "../stores/appStore";
 
 type Message = { id: string; role: "assistant" | "user"; content: string };
 type PendingCall = { call: CopilotToolCall; reason: string; label: string };
+type ExecutionState = { status: string; steps: number; error: string };
 
 function visibleMessages(protocolMessages: CopilotChatMessage[]): Message[] {
   return protocolMessages.flatMap((message, index) => {
@@ -35,10 +37,16 @@ export function CopilotPage() {
     const history = readCopilotHistory();
     return history.length ? visibleMessages(history) : [{ id: "welcome", role: "assistant", content: t("copilot.welcome") }];
   });
-  const [endpoint, setEndpoint] = useState("http://127.0.0.1:11434/v1");
-  const [model, setModel] = useState("qwen2.5");
+  const [preferences] = useState(readCopilotPreferences);
+  const [endpoint, setEndpoint] = useState(preferences.endpoint);
+  const [model, setModel] = useState(preferences.model);
   const [apiKey, setApiKey] = useState("");
-  const [targetSerial, setTargetSerial] = useState("");
+  const [targetSerial, setTargetSerial] = useState(preferences.targetSerial);
+  const [maxTokens, setMaxTokens] = useState(preferences.maxTokens);
+  const [timeoutMs, setTimeoutMs] = useState(preferences.timeoutMs);
+  const [maxSteps, setMaxSteps] = useState(preferences.maxSteps);
+  const [totalTimeoutMs, setTotalTimeoutMs] = useState(preferences.totalTimeoutMs);
+  const [execution, setExecution] = useState<ExecutionState>({ status: "idle", steps: 0, error: "" });
   const [busy, setBusy] = useState(false);
   const [pendingCall, setPendingCall] = useState<PendingCall | null>(null);
   const requestController = useRef<AbortController | null>(null);
@@ -47,6 +55,10 @@ export function CopilotPage() {
     writeCopilotHistory(protocolMessages);
   }, [protocolMessages]);
 
+  useEffect(() => {
+    writeCopilotPreferences({ endpoint, model, targetSerial, maxTokens, timeoutMs, maxSteps, totalTimeoutMs });
+  }, [endpoint, model, targetSerial, maxTokens, timeoutMs, maxSteps, totalTimeoutMs]);
+
   const toggleTool = (id: string) => setAllowedToolIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const savePolicy = () => {
     writeCopilotPolicy({ allowedToolIds });
@@ -54,6 +66,7 @@ export function CopilotPage() {
   };
 
   const applyTaskResult = (result: Awaited<ReturnType<typeof runCopilotTask>>) => {
+    setExecution({ status: result.status, steps: result.stepCount, error: result.error || "" });
     setProtocolMessages(result.messages);
     setMessages(visibleMessages(result.messages));
     if (result.status === "awaiting_confirmation" && result.pendingCall) {
@@ -81,11 +94,11 @@ export function CopilotPage() {
     requestController.current = controller;
     try {
       const result = await runCopilotTask(
-        { baseUrl: endpoint, apiKey, model, maxTokens: 1200, timeoutMs: 60000 },
+        { baseUrl: endpoint, apiKey, model, maxTokens, timeoutMs },
         nextProtocolMessages,
         allowedToolIds,
         (call) => executeCopilotToolCall(call, targetSerial.trim()),
-        { maxSteps: 8, totalTimeoutMs: 120000, signal: controller.signal },
+        { maxSteps, totalTimeoutMs, signal: controller.signal },
       );
       applyTaskResult(result);
     } catch (cause) {
@@ -112,11 +125,11 @@ export function CopilotPage() {
       const toolMessage: CopilotChatMessage = { role: "tool", content: output, tool_call_id: pendingCall.call.id || "confirmed-call", name: pendingCall.call.toolId };
       const nextProtocolMessages = [...protocolMessages, toolMessage];
       const result = await runCopilotTask(
-        { baseUrl: endpoint, apiKey, model, maxTokens: 1200, timeoutMs: 60000 },
+        { baseUrl: endpoint, apiKey, model, maxTokens, timeoutMs },
         nextProtocolMessages,
         allowedToolIds,
         (call) => executeCopilotToolCall(call, targetSerial.trim()),
-        { maxSteps: 8, totalTimeoutMs: 120000, signal: controller.signal },
+        { maxSteps, totalTimeoutMs, signal: controller.signal },
       );
       applyTaskResult(result);
     } catch (cause) {
@@ -156,6 +169,24 @@ export function CopilotPage() {
             <label><span>{t("copilot.endpoint")}</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>
             <label><span>{t("copilot.model")}</span><input value={model} onChange={(event) => setModel(event.target.value)} /></label>
             <label><span>{t("copilot.apiKey")}</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" /></label>
+            <div className="copilot-limit-grid">
+              <label><span>{t("copilot.maxTokens")}</span><input aria-label={t("copilot.maxTokens")} type="number" min={128} max={16384} value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} /></label>
+              <label><span>{t("copilot.maxSteps")}</span><input aria-label={t("copilot.maxSteps")} type="number" min={1} max={32} value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))} /></label>
+              <label><span>{t("copilot.timeout")}</span><input aria-label={t("copilot.timeout")} type="number" min={1000} max={120000} step={1000} value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value))} /></label>
+              <label><span>{t("copilot.totalTimeout")}</span><input aria-label={t("copilot.totalTimeout")} type="number" min={1000} max={600000} step={1000} value={totalTimeoutMs} onChange={(event) => setTotalTimeoutMs(Number(event.target.value))} /></label>
+            </div>
+          </Card>
+          <Card className="copilot-execution-card" title={t("copilot.execution")}>
+            <div className="copilot-execution-summary">
+              <span>{t("copilot.executionStatus")}</span>
+              <strong>{execution.status === "idle" ? t("copilot.executionIdle") : execution.status}</strong>
+              <span>{t("copilot.executionSteps", { n: execution.steps })}</span>
+            </div>
+            {execution.error && <div className="copilot-execution-error">{execution.error}</div>}
+            <div className="copilot-execution-log">
+              {messages.filter((message) => message.content.startsWith("工具结果：")).slice(-5).map((message) => <div key={message.id}>{message.content}</div>)}
+              {!messages.some((message) => message.content.startsWith("工具结果：")) && <span className="muted">{t("copilot.executionLogEmpty")}</span>}
+            </div>
           </Card>
         </div>
       </div>

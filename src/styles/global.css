@@ -2556,6 +2556,55 @@ a {
   font-size: 11px;
 }
 
+.copilot-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.copilot-limit-grid label {
+  min-width: 0;
+}
+
+.copilot-limit-grid input {
+  width: 100%;
+}
+
+.copilot-execution-summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.copilot-execution-summary strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.copilot-execution-error {
+  margin-top: 8px;
+  padding: 7px 8px;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  font-size: 11px;
+}
+
+.copilot-execution-log {
+  display: grid;
+  gap: 5px;
+  max-height: 130px;
+  margin-top: 9px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 @media (max-width: 860px) {
   .copilot-layout {
     grid-template-columns: 1fr;
@@ -2563,6 +2612,10 @@ a {
 
   .copilot-tool-list {
     max-height: none;
+  }
+
+  .copilot-limit-grid {
+    grid-template-columns: 1fr;
   }
 }
 
