@@ -1,5 +1,6 @@
 import { DeviceService } from "./deviceService";
 import type { AutomationRuntime } from "../lib/automationRunner";
+import { matchScreenshotToTemplate } from "../lib/imageMatcher";
 import type { ScrcpyRecordingOptions, ShellResult } from "../types";
 
 function assertSuccess(result: ShellResult, fallback: string): void {
@@ -17,6 +18,11 @@ export function createDeviceAutomationRuntime(): AutomationRuntime {
     screenshot: async (serial) => {
       const result = await DeviceService.screenshot(serial);
       if (!result.success) throw new Error(result.error || "截图失败");
+    },
+    imageMatch: async (serial, imagePath, threshold) => {
+      const result = await DeviceService.screenshot(serial);
+      if (!result.success) throw new Error(result.error || "截图失败");
+      return matchScreenshotToTemplate(result.base64, imagePath, threshold);
     },
     launch: async (serial, packageName) => assertSuccess(await DeviceService.startApp(serial, packageName), "启动应用失败"),
     install: async (serial, path) => assertSuccess(await DeviceService.installApk(serial, path, true), "安装 APK 失败"),

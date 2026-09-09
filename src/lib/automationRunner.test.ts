@@ -133,4 +133,41 @@ describe("automation runner", () => {
     expect(result.status).toBe("completed");
     expect(calls).toEqual(["tap:3,4"]);
   });
+
+  it("executes conditional branches and loop bodies", async () => {
+    const calls: string[] = [];
+    const script = createAutomationScript({
+      id: "script-control-flow",
+      name: "控制流",
+      variables: { mode: "fast" },
+      steps: [
+        {
+          id: "condition",
+          kind: "if",
+          label: "判断模式",
+          enabled: true,
+          params: {
+            expression: "${mode} == fast",
+            thenSteps: JSON.stringify([{ id: "then-tap", kind: "tap", label: "条件点按", enabled: true, params: { x: 1, y: 2 } }]),
+            elseSteps: JSON.stringify([{ id: "else-tap", kind: "tap", label: "错误分支", enabled: true, params: { x: 9, y: 9 } }]),
+          },
+        },
+        {
+          id: "repeat",
+          kind: "loop",
+          label: "重复两次",
+          enabled: true,
+          params: {
+            count: 2,
+            steps: JSON.stringify([{ id: "loop-text", kind: "text", label: "循环输入", enabled: true, params: { text: "ok" } }]),
+          },
+        },
+      ],
+    });
+
+    const result = await runAutomationScript(script, "serial-1", runtime(calls));
+
+    expect(result.status).toBe("completed");
+    expect(calls).toEqual(["tap:1,2", "text:ok", "text:ok"]);
+  });
 });

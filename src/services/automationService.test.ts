@@ -16,6 +16,9 @@ vi.mock("./deviceService", () => ({
     scrcpyStopRecording: vi.fn().mockResolvedValue({ success: true }),
   },
 }));
+vi.mock("../lib/imageMatcher", () => ({
+  matchScreenshotToTemplate: vi.fn().mockResolvedValue({ matched: true, score: 0.98, x: 11, y: 22 }),
+}));
 
 const { DeviceService } = await import("./deviceService");
 
@@ -37,5 +40,12 @@ describe("device automation runtime", () => {
     const runtime = createDeviceAutomationRuntime();
 
     await expect(runtime.tap("serial-1", 1, 2)).rejects.toThrow("拒绝执行");
+  });
+
+  it("matches a template against a fresh device screenshot", async () => {
+    const runtime = createDeviceAutomationRuntime();
+
+    await expect(runtime.imageMatch?.("serial-1", "C:/template.png", 0.9)).resolves.toEqual({ matched: true, score: 0.98, x: 11, y: 22 });
+    expect(DeviceService.screenshot).toHaveBeenCalledWith("serial-1");
   });
 });

@@ -7,6 +7,7 @@ import type {
   AutomationStep,
   AutomationStepValue,
 } from "../types";
+import { createAutomationScript } from "./automation";
 
 export interface AutomationRuntime {
   tap: (serial: string, x: number, y: number) => Promise<void>;
@@ -19,6 +20,7 @@ export interface AutomationRuntime {
   launch: (serial: string, packageName: string) => Promise<void>;
   install: (serial: string, path: string) => Promise<void>;
   record: (serial: string, outputPath: string, durationSeconds: number) => Promise<void>;
+  imageMatch?: (serial: string, imagePath: string, threshold: number) => Promise<{ matched: boolean; x?: number; y?: number }>;
 }
 
 export interface AutomationRunOptions {
@@ -91,6 +93,51 @@ function expandParams(step: AutomationStep, variables: Record<string, string>): 
   };
 }
 
+function parseNestedSteps(value: AutomationStepValue): AutomationStep[] {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { return []; }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const rawSteps = parsed.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object" && !Array.isArray(entry)));
+  return createAutomationScript({ id: "nested", name: "nested", steps: rawSteps as unknown as AutomationStep[] }).steps;
+}
+
+function expressionValue(value: string): string | number | boolean {
+  const token = value.trim().replace(/^(['"])(.*)\1$/, "$2");
+  if (token === "true") return true;
+  if (token === "false") return false;
+  const numeric = Number(token);
+  return token !== "" && Number.isFinite(numeric) ? numeric : token;
+}
+
+function evaluateAtomicExpression(expression: string): boolean {
+  const source = expression.trim();
+  if (!source) return false;
+  if (source.startsWith("!")) return !evaluateAtomicExpression(source.slice(1));
+  const comparison = source.match(/^(.*?)\s*(===|!==|==|!=|>=|<=|>|<)\s*(.*?)$/);
+  if (!comparison) {
+    const value = expressionValue(source);
+    return typeof value === "boolean" ? value : Boolean(value);
+  }
+  const left = expressionValue(comparison[1]);
+  const right = expressionValue(comparison[3]);
+  if (typeof left === "number" && typeof right === "number") {
+    switch (comparison[2]) {
+      case ">": return left > right;
+      case ">=": return left >= right;
+      case "<": return left < right;
+      case "<=": return left <= right;
+    }
+  }
+  const same = String(left) === String(right);
+  return comparison[2] === "==" || comparison[2] === "===" ? same : comparison[2] === "!=" || comparison[2] === "!==" ? !same : false;
+}
+
+function evaluateExpression(expression: string): boolean {
+  return expression.split("||").some((orPart) => orPart.split("&&").every(evaluateAtomicExpression));
+}
+
 function ensureActive(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException("Automation cancelled", "AbortError");
 }
@@ -111,7 +158,23 @@ function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function executeStep(step: AutomationStep, serial: string, runtime: AutomationRuntime, signal?: AbortSignal): Promise<void> {
+async function executeNestedSteps(steps: AutomationStep[], serial: string, runtime: AutomationRuntime, variables: Record<string, string>, signal?: AbortSignal): Promise<void> {
+  for (const rawStep of steps) {
+    ensureActive(signal);
+    if (!rawStep.enabled) continue;
+    const step = expandParams(rawStep, variables);
+    try {
+      await wait(Math.max(0, step.beforeDelayMs ?? 0), signal);
+      await executeStep(step, serial, runtime, variables, signal);
+      await wait(Math.max(0, step.afterDelayMs ?? 0), signal);
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+      if (!rawStep.continueOnError) throw cause;
+    }
+  }
+}
+
+async function executeStep(step: AutomationStep, serial: string, runtime: AutomationRuntime, variables: Record<string, string>, signal?: AbortSignal): Promise<void> {
   ensureActive(signal);
   switch (step.kind) {
     case "wait":
@@ -147,10 +210,29 @@ async function executeStep(step: AutomationStep, serial: string, runtime: Automa
     case "record":
       await runtime.record(serial, asString(valueOf(step, "outputPath", "")), asNumber(valueOf(step, "durationSeconds", 0), 0));
       return;
-    case "imageMatch":
-    case "if":
-    case "loop":
-      throw new Error(`暂不支持步骤类型：${step.kind}`);
+    case "imageMatch": {
+      if (!runtime.imageMatch) throw new Error("当前运行环境不支持图像匹配");
+      const match = await runtime.imageMatch(serial, asString(valueOf(step, "imagePath", "")), Math.min(1, Math.max(0, asNumber(valueOf(step, "threshold", 0.85), 0.85))));
+      if (!match.matched) throw new Error("未找到匹配图像");
+      if (valueOf(step, "followMatchPoint", true) === true && Number.isFinite(match.x) && Number.isFinite(match.y)) {
+        await runtime.tap(serial, match.x as number, match.y as number);
+      }
+      return;
+    }
+    case "if": {
+      const branch = evaluateExpression(asString(valueOf(step, "expression", ""))) ? "thenSteps" : "elseSteps";
+      await executeNestedSteps(parseNestedSteps(valueOf(step, branch, "[]")), serial, runtime, variables, signal);
+      return;
+    }
+    case "loop": {
+      const count = Math.min(1000, Math.max(0, Math.floor(asNumber(valueOf(step, "count", 1), 1))));
+      const body = parseNestedSteps(valueOf(step, "steps", "[]"));
+      for (let index = 0; index < count; index += 1) {
+        ensureActive(signal);
+        await executeNestedSteps(body, serial, runtime, variables, signal);
+      }
+      return;
+    }
     default:
       return;
   }
@@ -180,7 +262,7 @@ export async function runAutomationScript(
       ensureActive(activeSignal);
       const step = expandParams(rawStep, variables);
       await wait(Math.max(0, step.beforeDelayMs ?? 0), activeSignal);
-      await executeStep(step, serial, runtime, activeSignal);
+      await executeStep(step, serial, runtime, variables, activeSignal);
       await wait(Math.max(0, step.afterDelayMs ?? 0), activeSignal);
       completedSteps += 1;
       logs.push({ stepId: rawStep.id, label: rawStep.label, status: "completed", startedAt, finishedAt: now() });
