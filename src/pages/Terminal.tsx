@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Eraser, Send, SquareTerminal } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/Button";
 import { useI18n } from "../i18n";
 import {
@@ -13,9 +13,11 @@ const MAX_OUTPUT_LENGTH = 200_000;
 
 export function TerminalPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("session") ?? "";
   const [session, setSession] = useState<TerminalSessionInfo | null>(null);
+  const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
   const [output, setOutput] = useState("");
   const [command, setCommand] = useState("");
   const [error, setError] = useState("");
@@ -33,14 +35,20 @@ export function TerminalPage() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
+    setOutput("");
+    setError("");
+    setSession(null);
+    setLoading(true);
 
     const handleOutput = (event: TerminalOutputEvent) => {
       if (!active || event.sessionId !== sessionId) return;
       appendOutput(event.data);
       if (event.kind === "exit") {
-        setSession((previous) =>
-          previous ? { ...previous, status: event.status || "exited" } : previous,
-        );
+        const status = event.status || "exited";
+        setSession((previous) => (previous ? { ...previous, status } : previous));
+        setSessions((previous) => previous.map((item) => (
+          item.id === sessionId ? { ...item, status } : item
+        )));
       }
     };
 
@@ -56,6 +64,7 @@ export function TerminalPage() {
     void TerminalSessionService.list()
       .then((sessions) => {
         if (!active) return;
+        setSessions(sessions);
         const current = sessions.find((item) => item.id === sessionId) ?? null;
         setSession(current);
         if (!current) setError(translateRef.current("terminal.sessionMissing"));
@@ -72,6 +81,11 @@ export function TerminalPage() {
       unlisten?.();
     };
   }, [sessionId]);
+
+  const selectSession = (nextSessionId: string) => {
+    if (!nextSessionId || nextSessionId === sessionId) return;
+    navigate(`/terminal?session=${encodeURIComponent(nextSessionId)}`);
+  };
 
   useEffect(() => {
     const element = outputRef.current;
@@ -125,6 +139,24 @@ export function TerminalPage() {
             <div className="terminal-subtitle">{statusLabel}</div>
           </div>
         </div>
+        {sessions.length > 0 && (
+          <label className="terminal-session-picker">
+            <span>{t("terminal.session")}</span>
+            <select
+              aria-label={t("terminal.session")}
+              value={sessions.some((item) => item.id === sessionId) ? sessionId : ""}
+              onChange={(event) => selectSession(event.target.value)}
+              disabled={loading}
+            >
+              {!sessions.some((item) => item.id === sessionId) && (
+                <option value="">{t("terminal.sessionMissing")}</option>
+              )}
+              {sessions.map((item) => (
+                <option key={item.id} value={item.id}>{item.title}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="row">
           <Button
             size="sm"

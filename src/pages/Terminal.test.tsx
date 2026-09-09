@@ -21,6 +21,12 @@ const session = {
   title: "ADB Shell · emulator-5554",
   status: "running",
 };
+const secondSession = {
+  id: "session-2",
+  kind: "local" as const,
+  title: "PowerShell",
+  status: "running",
+};
 
 function renderTerminal() {
   return render(
@@ -54,7 +60,7 @@ describe("TerminalPage", () => {
   it("restores the requested session and renders matching output events", async () => {
     renderTerminal();
 
-    expect(await screen.findByText(session.title)).toBeTruthy();
+    expect(await screen.findByText(session.title, { selector: ".terminal-title" })).toBeTruthy();
     expect(TerminalSessionService.list).toHaveBeenCalledTimes(1);
     expect(TerminalSessionService.subscribe).toHaveBeenCalledTimes(1);
 
@@ -69,7 +75,7 @@ describe("TerminalPage", () => {
 
   it("writes a command with a carriage return when Enter is pressed", async () => {
     renderTerminal();
-    await screen.findByText(session.title);
+    await screen.findByText(session.title, { selector: ".terminal-title" });
     const input = await screen.findByRole("textbox", { name: /终端命令|terminal command/i });
 
     fireEvent.change(input, { target: { value: "getprop ro.build.version.release" } });
@@ -81,5 +87,18 @@ describe("TerminalPage", () => {
         "getprop ro.build.version.release\r",
       );
     });
+  });
+
+  it("switches to another active session from the compact session selector", async () => {
+    vi.mocked(TerminalSessionService.list).mockResolvedValue([session, secondSession]);
+    renderTerminal();
+
+    expect(await screen.findByText(session.title, { selector: ".terminal-title" })).toBeTruthy();
+    const selector = screen.getByRole("combobox", { name: /会话|session/i });
+
+    fireEvent.change(selector, { target: { value: secondSession.id } });
+
+    expect(await screen.findByText(secondSession.title, { selector: ".terminal-title" })).toBeTruthy();
+    expect((selector as HTMLSelectElement).value).toBe(secondSession.id);
   });
 });
