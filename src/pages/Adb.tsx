@@ -17,12 +17,17 @@ import {
   findPairingService,
   isAdbConnectService,
   isAdbPairingService,
+  DEFAULT_RECONNECT_CONCURRENCY,
   normalizeWirelessAddress,
+  normalizeReconnectConcurrency,
   runWithConcurrency,
   upsertSavedWirelessAddress,
   type SavedWirelessAddress,
 } from "../lib/wirelessDebug";
 import type { AdbInfo, AdbMdnsService, LanScanResult } from "../types";
+
+type SavedReconnectStatus = "connecting" | "success" | "failed";
+type SavedReconnectResult = { status: SavedReconnectStatus; message: string };
 
 export function AdbPage() {
   const [info, setInfo] = useState<AdbInfo | null>(null);
@@ -77,6 +82,14 @@ export function AdbPage() {
     }
   });
   const [reconnectBusy, setReconnectBusy] = useState(false);
+  const [reconnectConcurrency, setReconnectConcurrency] = useState(() => {
+    try {
+      return normalizeReconnectConcurrency(localStorage.getItem("rdc.adb.savedWirelessConcurrency") ?? undefined);
+    } catch {
+      return DEFAULT_RECONNECT_CONCURRENCY;
+    }
+  });
+  const [reconnectResults, setReconnectResults] = useState<Record<string, SavedReconnectResult>>({});
   const [tcpipSerial, setTcpipSerial] = useState("");
   const [tcpipPort, setTcpipPort] = useState("5555");
   const loadSequence = useRef(createRequestSequence()).current;
@@ -285,17 +298,35 @@ export function AdbPage() {
     setStatusText(t("adb.wireless.saved", { address: target }));
   };
 
-  const reconnectSavedAddresses = async () => {
-    if (!savedAddresses.length || reconnectBusy) return;
+  const reconnectSavedAddresses = async (entries = savedAddresses) => {
+    if (!entries.length || reconnectBusy) return;
     setReconnectBusy(true);
-    setStatusText(t("adb.wireless.reconnecting", { n: savedAddresses.length }));
+    setReconnectResults((current) => {
+      const next = { ...current };
+      entries.forEach((entry) => {
+        next[entry.address] = { status: "connecting", message: "" };
+      });
+      return next;
+    });
+    setStatusText(t("adb.wireless.reconnecting", { n: entries.length }));
     try {
-      const results = await runWithConcurrency(savedAddresses, 3, async (entry) => {
+      const results = await runWithConcurrency(entries, reconnectConcurrency, async (entry) => {
         try {
           const result = await DeviceService.adbConnect(entry.address);
-          return { entry, success: result.success };
-        } catch {
-          return { entry, success: false };
+          const message = (result.success ? result.stdout : result.stderr || result.stdout || t("adb.connectFailed")).trim();
+          const reconnectResult = {
+            status: result.success ? "success" : "failed",
+            message,
+          } as SavedReconnectResult;
+          setReconnectResults((current) => ({ ...current, [entry.address]: reconnectResult }));
+          return { entry, success: result.success, message };
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          setReconnectResults((current) => ({
+            ...current,
+            [entry.address]: { status: "failed", message: message || t("adb.connectFailed") },
+          }));
+          return { entry, success: false, message: message || t("adb.connectFailed") };
         }
       });
       const successful = results.filter((result) => result.success).map((result) => result.entry);
@@ -305,12 +336,17 @@ export function AdbPage() {
       ));
       setStatusText(t("adb.wireless.reconnectedSummary", {
         ok: successful.length,
-        n: savedAddresses.length,
+        n: entries.length,
       }));
       await load();
     } finally {
       setReconnectBusy(false);
     }
+  };
+
+  const retryFailedSavedAddresses = () => {
+    const failed = savedAddresses.filter((entry) => reconnectResults[entry.address]?.status === "failed");
+    void reconnectSavedAddresses(failed);
   };
 
   const switchTcpip = async () => {
@@ -382,6 +418,14 @@ export function AdbPage() {
   }, [savedAddresses]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem("rdc.adb.savedWirelessConcurrency", String(reconnectConcurrency));
+    } catch {
+      /* ignore */
+    }
+  }, [reconnectConcurrency]);
+
+  useEffect(() => {
     if (!adbOk) return;
     const refresh = () => void refreshMdnsServices(true);
     void refresh();
@@ -394,6 +438,10 @@ export function AdbPage() {
     const usbDevice = info.devices.find((device) => !device.serial.includes(":"));
     if (usbDevice) setTcpipSerial(usbDevice.serial);
   }, [info, tcpipSerial]);
+
+  const failedSavedCount = savedAddresses.filter(
+    (entry) => reconnectResults[entry.address]?.status === "failed",
+  ).length;
 
   return (
     <div>
@@ -601,27 +649,54 @@ export function AdbPage() {
         <Card
           title={t("adb.wireless.savedTitle")}
           action={
-            <Button size="sm" variant="ghost" loading={reconnectBusy} disabled={!adbOk || !savedAddresses.length} onClick={() => void reconnectSavedAddresses()}>
-              {t("adb.wireless.reconnectAll")}
-            </Button>
+            <div className="row wireless-saved-actions">
+              <label>
+                <span className="muted">{t("adb.wireless.concurrency")}</span>
+                <select
+                  aria-label={t("adb.wireless.concurrency")}
+                  value={reconnectConcurrency}
+                  onChange={(event) => setReconnectConcurrency(normalizeReconnectConcurrency(event.target.value))}
+                  disabled={!adbOk || reconnectBusy || !savedAddresses.length}
+                >
+                  {[1, 2, 3, 4, 5, 6].map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              {failedSavedCount > 0 ? (
+                <Button size="sm" variant="ghost" loading={reconnectBusy} disabled={!adbOk || reconnectBusy} onClick={retryFailedSavedAddresses}>
+                  {t("adb.wireless.retryFailed")}
+                </Button>
+              ) : null}
+              <Button size="sm" variant="ghost" loading={reconnectBusy} disabled={!adbOk || !savedAddresses.length} onClick={() => void reconnectSavedAddresses()}>
+                {t("adb.wireless.reconnectAll")}
+              </Button>
+            </div>
           }
         >
           {savedAddresses.length ? (
             <div className="wireless-saved-list">
-              {savedAddresses.map((entry) => (
-                <div className="wireless-saved-row" key={entry.address}>
-                  <div>
-                    <div>{entry.label}</div>
-                    <div className="muted mono">{entry.address}</div>
+              {savedAddresses.map((entry) => {
+                const result = reconnectResults[entry.address];
+                return (
+                  <div className="wireless-saved-row" key={entry.address}>
+                    <div>
+                      <div>{entry.label}</div>
+                      <div className="muted mono">{entry.address}</div>
+                      {result ? (
+                        <div className={`wireless-saved-status ${result.status}`}>
+                          {t(`adb.wireless.status.${result.status}`)}
+                          {result.status === "failed" && result.message ? <span className="muted"> · {result.message}</span> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="row">
+                      <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
+                        {t("adb.connect")}
+                      </Button>
+                      <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => setSavedAddresses((items) => items.filter((item) => item.address !== entry.address))} />
+                    </div>
                   </div>
-                  <div className="row">
-                    <Button size="sm" variant="ghost" disabled={!adbOk || reconnectBusy} onClick={() => void connectWirelessAddress(entry.address, entry.label)}>
-                      {t("adb.connect")}
-                    </Button>
-                    <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} title={t("adb.wireless.removeAddress")} onClick={() => setSavedAddresses((items) => items.filter((item) => item.address !== entry.address))} />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="empty-state">{t("adb.wireless.noSaved")}</div>

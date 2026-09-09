@@ -11,6 +11,14 @@ export interface SavedWirelessAddress {
   lastConnectedAt: string;
 }
 
+export const DEFAULT_RECONNECT_CONCURRENCY = 3;
+
+export function normalizeReconnectConcurrency(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_RECONNECT_CONCURRENCY;
+  return Math.max(1, Math.min(6, Math.floor(parsed)));
+}
+
 function decodeQrValue(value: string): string {
   let decoded = "";
   for (let i = 0; i < value.length; i += 1) {

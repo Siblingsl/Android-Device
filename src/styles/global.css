@@ -1993,6 +1993,40 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.wireless-saved-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wireless-saved-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.wireless-saved-actions select {
+  height: 27px;
+  min-width: 52px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--bg-card);
+  font-size: 11px;
+}
+.wireless-saved-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  font-size: 10px;
+}
+.wireless-saved-status.connecting { color: var(--warning); }
+.wireless-saved-status.success { color: var(--success); }
+.wireless-saved-status.failed { color: var(--danger); }
+.wireless-saved-status .muted { overflow-wrap: anywhere; }
 .wireless-divider {
   height: 1px;
   margin: 14px 0 12px;

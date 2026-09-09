@@ -4,6 +4,7 @@ import {
   isAdbConnectService,
   isAdbPairingService,
   normalizeWirelessAddress,
+  normalizeReconnectConcurrency,
   parseAdbQrPayload,
   runWithConcurrency,
   upsertSavedWirelessAddress,
@@ -55,5 +56,12 @@ describe("wireless debugging helpers", () => {
     });
     expect(results).toEqual([2, 4, 6, 8]);
     expect(peak).toBeLessThanOrEqual(2);
+  });
+
+  it("normalizes the saved-address reconnect concurrency range", () => {
+    expect(normalizeReconnectConcurrency("4")).toBe(4);
+    expect(normalizeReconnectConcurrency(0)).toBe(1);
+    expect(normalizeReconnectConcurrency(99)).toBe(6);
+    expect(normalizeReconnectConcurrency("invalid")).toBe(3);
   });
 });

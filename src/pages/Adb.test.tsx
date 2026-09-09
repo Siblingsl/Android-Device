@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { AdbPage } from "./Adb";
@@ -55,6 +55,7 @@ const adbInfo = (version: string): AdbInfo => ({
 
 describe("AdbPage refresh ordering", () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.mocked(probeTool).mockResolvedValue({ ok: true, text: "available" });
     vi.mocked(DeviceService.getLocalSubnet).mockResolvedValue("192.168.1.0/24");
     vi.mocked(DeviceService.getAdbInfo).mockReset();
@@ -70,6 +71,7 @@ describe("AdbPage refresh ordering", () => {
 
   afterEach(() => {
     cleanup();
+    localStorage.clear();
   });
 
   it("keeps the newest ADB information when an earlier refresh resolves later", async () => {
@@ -178,5 +180,45 @@ describe("AdbPage refresh ordering", () => {
     });
     expect(DeviceService.adbConnect).toHaveBeenCalledWith("192.168.1.20:41123");
     expect(screen.getByText("192.168.1.20:41123")).toBeTruthy();
+  });
+
+  it("uses the saved concurrency and retries only failed wireless addresses", async () => {
+    const failedAddress = "192.168.1.20:5555";
+    localStorage.setItem("rdc.adb.savedWirelessAddresses", JSON.stringify([
+      { address: failedAddress, label: "Phone A", lastConnectedAt: "" },
+      { address: "192.168.1.21:5555", label: "Phone B", lastConnectedAt: "" },
+    ]));
+    const attempts = new Map<string, number>();
+    vi.mocked(DeviceService.adbConnect).mockImplementation(async (target) => {
+      const attempt = (attempts.get(target) || 0) + 1;
+      attempts.set(target, attempt);
+      if (target === failedAddress && attempt === 1) {
+        return { success: false, stdout: "", stderr: "timeout", exitCode: 1 };
+      }
+      return { success: true, stdout: "connected", stderr: "", exitCode: 0 };
+    });
+
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.change(screen.getByRole("combobox", { name: "重连并发数" }), { target: { value: "2" } });
+    expect(localStorage.getItem("rdc.adb.savedWirelessConcurrency")).toBe("2");
+    fireEvent.click(screen.getByRole("button", { name: "批量重连" }));
+    await waitFor(() => expect(screen.getByText((content) => content.includes("timeout"))).toBeTruthy());
+    expect(screen.getByRole("button", { name: "重试失败" })).toBeTruthy();
+
+    const callsBeforeRetry = vi.mocked(DeviceService.adbConnect).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "重试失败" }));
+    await waitFor(() => expect(attempts.get(failedAddress)).toBe(2));
+    expect(vi.mocked(DeviceService.adbConnect).mock.calls.length).toBe(callsBeforeRetry + 1);
+    const calls = vi.mocked(DeviceService.adbConnect).mock.calls;
+    expect(calls[calls.length - 1]).toEqual([failedAddress]);
   });
 });
