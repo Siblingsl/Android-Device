@@ -34,4 +34,20 @@ describe("copilot tool safety", () => {
     expect(COPILOT_TOOLS.some((tool) => tool.id === "device.screenshot")).toBe(true);
     expect(COPILOT_TOOLS.some((tool) => tool.risk === "write")).toBe(true);
   });
+
+  it("validates model arguments against the registered schema", () => {
+    const result = authorizeCopilotToolCall(
+      { toolId: "device.startApp", args: { packageName: "" } },
+      { allowedToolIds: ["device.startApp"], confirmed: true },
+    );
+
+    expect(result.status).toBe("blocked");
+    if (result.status === "blocked") expect(result.reason).toContain("参数缺失");
+  });
+
+  it("exposes concrete parameters to the model for expanded tools", () => {
+    const files = COPILOT_TOOLS.find((tool) => tool.id === "device.files");
+    expect(files?.parameters.properties.path.type).toBe("string");
+    expect(COPILOT_TOOLS.some((tool) => tool.id === "device.volumeUp")).toBe(true);
+  });
 });

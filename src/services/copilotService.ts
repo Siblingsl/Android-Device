@@ -1,4 +1,4 @@
-import { authorizeCopilotToolCall, type CopilotToolCall } from "../lib/copilotTools";
+import { authorizeCopilotToolCall, COPILOT_TOOLS, type CopilotToolCall } from "../lib/copilotTools";
 
 export interface CopilotProviderConfig {
   baseUrl: string;
@@ -44,12 +44,13 @@ function endpointFor(baseUrl: string): string {
 }
 
 function toolDescriptor(toolId: string) {
+  const tool = COPILOT_TOOLS.find((entry) => entry.id === toolId);
   return {
     type: "function",
     function: {
       name: toolId,
-      description: `受控设备工具：${toolId}`,
-      parameters: { type: "object", properties: {}, additionalProperties: true },
+      description: tool?.description || `受控设备工具：${toolId}`,
+      parameters: tool?.parameters || { type: "object", properties: {}, additionalProperties: false },
     },
   };
 }

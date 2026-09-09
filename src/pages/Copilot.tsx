@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, Check, Send, ShieldAlert, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { useI18n } from "../i18n";
 import { authorizeCopilotToolCall, COPILOT_TOOLS, type CopilotToolCall } from "../lib/copilotTools";
 import { readCopilotPolicy, writeCopilotPolicy } from "../lib/copilotPolicy";
+import { readCopilotHistory, writeCopilotHistory } from "../lib/copilotHistory";
 import { runCopilotTask, type CopilotChatMessage } from "../services/copilotService";
 import { executeCopilotToolCall } from "../services/copilotToolExecutor";
 import { useAppStore } from "../stores/appStore";
@@ -26,8 +27,14 @@ export function CopilotPage() {
   const readOnlyIds = COPILOT_TOOLS.filter((tool) => tool.risk === "read").map((tool) => tool.id);
   const [allowedToolIds, setAllowedToolIds] = useState(() => readCopilotPolicy(readOnlyIds).allowedToolIds);
   const [request, setRequest] = useState("");
-  const [protocolMessages, setProtocolMessages] = useState<CopilotChatMessage[]>([{ role: "assistant", content: t("copilot.welcome") }]);
-  const [messages, setMessages] = useState<Message[]>([{ id: "welcome", role: "assistant", content: t("copilot.welcome") }]);
+  const [protocolMessages, setProtocolMessages] = useState<CopilotChatMessage[]>(() => {
+    const history = readCopilotHistory();
+    return history.length ? history : [{ role: "assistant", content: t("copilot.welcome") }];
+  });
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const history = readCopilotHistory();
+    return history.length ? visibleMessages(history) : [{ id: "welcome", role: "assistant", content: t("copilot.welcome") }];
+  });
   const [endpoint, setEndpoint] = useState("http://127.0.0.1:11434/v1");
   const [model, setModel] = useState("qwen2.5");
   const [apiKey, setApiKey] = useState("");
@@ -35,6 +42,10 @@ export function CopilotPage() {
   const [busy, setBusy] = useState(false);
   const [pendingCall, setPendingCall] = useState<PendingCall | null>(null);
   const requestController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    writeCopilotHistory(protocolMessages);
+  }, [protocolMessages]);
 
   const toggleTool = (id: string) => setAllowedToolIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const savePolicy = () => {

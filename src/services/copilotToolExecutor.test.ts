@@ -4,9 +4,11 @@ import { executeCopilotToolCall } from "./copilotToolExecutor";
 vi.mock("./deviceService", () => ({
   DeviceService: {
     listDevices: vi.fn().mockResolvedValue([{ id: "d1", name: "Pixel", serial: "serial-1", online: true }]),
+    listFiles: vi.fn().mockResolvedValue([{ name: "demo.txt", path: "/sdcard/demo.txt" }]),
     screenshot: vi.fn().mockResolvedValue({ success: true, path: "C:/shot.png", base64: "" }),
     shell: vi.fn().mockResolvedValue({ success: true, stdout: "ok", stderr: "", exitCode: 0 }),
     startApp: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
+    stopApp: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
   },
 }));
 
@@ -25,5 +27,14 @@ describe("copilot tool executor", () => {
 
     expect(DeviceService.startApp).toHaveBeenCalledWith("serial-1", "com.demo");
     expect(result).toContain("成功");
+  });
+
+  it("routes expanded read and app-control tools through DeviceService", async () => {
+    const result = await executeCopilotToolCall({ toolId: "device.files", args: { path: "/sdcard" } }, "serial-1");
+
+    expect(DeviceService.listFiles).toHaveBeenCalledWith("serial-1", "/sdcard");
+    expect(result).toContain("demo.txt");
+    await executeCopilotToolCall({ toolId: "device.stopApp", args: { packageName: "com.demo" } }, "serial-1");
+    expect(DeviceService.stopApp).toHaveBeenCalledWith("serial-1", "com.demo");
   });
 });
