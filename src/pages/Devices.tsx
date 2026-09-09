@@ -1697,50 +1697,54 @@ export function Devices() {
                             }
                           }}
                         >
-                          <button
-                            type="button"
-                            className="devices-table-name"
-                            title={t("devices.openDetail")}
-                            onClick={() => {
-                              setSelected(d.id);
-                              navigate(`/devices/${encodeURIComponent(d.id)}`);
-                            }}
-                          >
-                            {d.name}
-                          </button>
-                          <DeviceNoteEditor
-                            deviceName={d.name}
-                            value={deviceNotes[d.id]}
-                            onSave={(value) => saveDeviceNote(d.id, value)}
-                          />
-                          <span className="devices-table-serial mono">
-                            {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
-                          </span>
-                          <span className="devices-table-meta">
-                            Android {d.androidVersion || "—"} · {d.cpu || "—"} CPU · {d.ram || "—"} RAM
-                          </span>
-                          {d.dataVolume ? (
+                          <div className="devices-table-primary">
                             <button
                               type="button"
-                              className="devices-table-link mono"
-                              title={t("devices.card.openVolumes")}
+                              className="devices-table-name"
+                              title={t("devices.openDetail")}
                               onClick={() => {
-                                try {
-                                  sessionStorage.setItem("rdc.volumes.query", d.dataVolume || "");
-                                } catch {
-                                  /* ignore */
-                                }
-                                navigate("/volumes");
+                                setSelected(d.id);
+                                navigate(`/devices/${encodeURIComponent(d.id)}`);
                               }}
                             >
-                              {t("devices.card.volumePrefix", { name: d.dataVolume })}
+                              {d.name}
                             </button>
-                          ) : null}
-                          {hasContainer && !d.serial ? (
-                            <span className="badge warn devices-table-warning" title={t("devices.card.noAdbMappingHint")}>
-                              {t("devices.card.noAdbMapping")}
+                            <DeviceNoteEditor
+                              deviceName={d.name}
+                              value={deviceNotes[d.id]}
+                              onSave={(value) => saveDeviceNote(d.id, value)}
+                            />
+                          </div>
+                          <div className="devices-table-secondary">
+                            <span className="devices-table-serial mono">
+                              {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
                             </span>
-                          ) : null}
+                            <span className="devices-table-meta">
+                              Android {d.androidVersion || "—"} · {d.cpu || "—"} CPU · {d.ram || "—"} RAM
+                            </span>
+                            {d.dataVolume ? (
+                              <button
+                                type="button"
+                                className="devices-table-link mono"
+                                title={t("devices.card.openVolumes")}
+                                onClick={() => {
+                                  try {
+                                    sessionStorage.setItem("rdc.volumes.query", d.dataVolume || "");
+                                  } catch {
+                                    /* ignore */
+                                  }
+                                  navigate("/volumes");
+                                }}
+                              >
+                                {t("devices.card.volumePrefix", { name: d.dataVolume })}
+                              </button>
+                            ) : null}
+                            {hasContainer && !d.serial ? (
+                              <span className="badge warn devices-table-warning" title={t("devices.card.noAdbMappingHint")}>
+                                {t("devices.card.noAdbMapping")}
+                              </span>
+                            ) : null}
+                          </div>
                           {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
                         </div>
                       </td>

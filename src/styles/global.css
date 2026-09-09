@@ -1624,6 +1624,10 @@ a {
 .devices-table-check { width: 32px; text-align: center !important; }
 .devices-table-check input { width: 14px; height: 14px; accent-color: var(--primary); }
 .devices-table-identity { display: flex; flex-direction: column; min-width: 220px; gap: 2px; }
+.devices-table-primary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.devices-table-primary .device-note-editor,
+.devices-table-primary .device-note-line { margin-top: 0; }
+.devices-table-secondary { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .devices-table-hover-anchor { position: relative; }
 .devices-table-hover-anchor .device-hover-card { top: calc(100% + 7px); left: -6px; }
 .devices-table-name { overflow: hidden; width: fit-content; max-width: 260px; padding: 0; border: 0; color: var(--text); background: transparent; font-size: 13px; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -1633,7 +1637,7 @@ a {
 .devices-table-meta { color: var(--text-secondary); }
 .devices-table-link { width: fit-content; padding: 0; border: 0; color: var(--primary); background: transparent; font-size: 10px; text-align: left; cursor: pointer; }
 .devices-table-link:hover { text-decoration: underline; }
-.devices-table-status, .devices-table-services, .devices-table-runtime { display: flex; flex-direction: column; gap: 4px; white-space: nowrap; }
+.devices-table-status, .devices-table-services, .devices-table-runtime { display: flex; flex-direction: column; gap: 2px; line-height: 1.2; white-space: nowrap; }
 .devices-table-status .badge { width: fit-content; }
 .devices-table-services { color: var(--text-secondary); font-size: 10px; }
 .devices-table-service.active { color: var(--success); }
@@ -1657,6 +1661,8 @@ a {
   .devices-table-responsive .devices-table th,
   .devices-table-responsive .devices-table td { padding: 6px 8px; }
   .devices-table-responsive .devices-table-identity { min-width: 190px; }
+  .devices-table-responsive .devices-table-primary { gap: 4px; }
+  .devices-table-responsive .devices-table-secondary { gap: 1px; }
   .devices-table-responsive .devices-table-action-cell { position: sticky; right: 0; z-index: 2; box-shadow: -8px 0 14px -14px var(--text); }
   .devices-table-responsive thead .devices-table-action-cell { z-index: 3; }
 }

@@ -193,6 +193,26 @@ describe("Devices batch controls", () => {
     expect(within(onlineRow).getByRole("combobox")).toBeTruthy();
   }, 15_000);
 
+  it("separates primary identity from supporting device details without dropping table data", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device", dataVolume: "data-one" },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    expect(within(row).getByText("设备 one").parentElement?.classList.contains("devices-table-primary")).toBe(true);
+    expect(within(row).getByText(/one-serial/).parentElement?.classList.contains("devices-table-secondary")).toBe(true);
+    expect(within(row).getByText("Android 13 · 2 CPU · 2g RAM")).toBeTruthy();
+    expect(within(row).getByText(/data-one/)).toBeTruthy();
+    expect(within(row).getByText("scrcpy · stopped")).toBeTruthy();
+    expect(within(row).getByText("1080x1920")).toBeTruthy();
+  }, 15_000);
+
   it("keeps the table shell responsive and repositions the hover card near viewport edges", async () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("devices-table-hover-anchor")) {
@@ -235,7 +255,7 @@ describe("Devices batch controls", () => {
     const onlineRow = screen.getByRole("row", { name: /设备 one/ });
     fireEvent.focus(within(onlineRow).getByRole("button", { name: "设备 one" }));
 
-    const anchor = within(onlineRow).getByRole("button", { name: "设备 one" }).parentElement;
+    const anchor = within(onlineRow).getByRole("button", { name: "设备 one" }).closest(".devices-table-hover-anchor");
     expect(anchor?.getAttribute("data-hover-placement")).toBe("top-right");
   }, 15_000);
 
