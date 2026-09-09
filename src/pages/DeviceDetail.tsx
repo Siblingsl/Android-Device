@@ -52,6 +52,7 @@ import {
   type MonitorAlertTracker,
 } from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
+import { ScrcpyControlBar } from "../components/device/ScrcpyControlBar";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
@@ -1734,7 +1735,39 @@ function Control({
   };
 
   return (
-    <div className="split-control">
+    <div>
+      <ScrcpyControlBar
+        scrcpyStatus={scrcpyLabel}
+        disabled={disabled}
+        busy={actionBusy || scrcpyBusy}
+        onAction={(action) => {
+          if (action === "start") return void startScrcpy();
+          if (action === "stop") return void stopScrcpy();
+          if (action === "restart") return void restartScrcpy();
+          if (action === "screenshot") return void takeShot();
+          if (action === "fullscreen") {
+            const el = screenRef.current;
+            if (!el) return;
+            if (document.fullscreenElement === el) void document.exitFullscreen();
+            else void el.requestFullscreen().catch((e) => setStatusText(String(e)));
+            return;
+          }
+          const mapped: Partial<Record<Exclude<typeof action, "start" | "stop" | "restart" | "screenshot" | "fullscreen">, DeviceControlAction>> = {
+            volumeUp: "volup",
+            volumeDown: "voldown",
+            power: "power",
+            lock: "lock",
+            wake: "wake",
+            rotate: "rotate",
+            home: "home",
+            back: "back",
+            recent: "recent",
+          };
+          const mappedAction = mapped[action as keyof typeof mapped];
+          if (mappedAction) runControlAction(mappedAction, mappedAction === "rotate" ? true : undefined);
+        }}
+      />
+      <div className="split-control">
       <DevicePreview
         serial={serial}
         disabled={disabled}
@@ -1825,6 +1858,7 @@ function Control({
           diagnostic={shellDiagnostic}
           onStatus={setStatusText}
         />
+      </div>
       </div>
     </div>
   );

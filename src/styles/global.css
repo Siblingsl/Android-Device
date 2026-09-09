@@ -1355,6 +1355,16 @@ a {
 .device-board-card-error { display: flex; align-items: flex-start; gap: 5px; margin-top: 8px; color: var(--danger); font-size: 10px; line-height: 1.35; }
 .device-board-card-error span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .device-board-card-error button { flex: 0 0 auto; padding: 0; color: var(--danger); text-decoration: underline; font-size: 10px; }
+.scrcpy-control-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 6px 8px; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--bg-card) 94%, var(--primary) 6%); }
+.scrcpy-control-bar-title { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.scrcpy-control-items { display: flex; align-items: center; gap: 3px; min-width: max-content; }
+.scrcpy-control-item-wrap { display: flex; align-items: center; gap: 1px; border-radius: 7px; }
+.scrcpy-control-item-wrap:focus-within, .scrcpy-control-item-wrap:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.scrcpy-control-drag { color: var(--text-muted); cursor: grab; }
+.scrcpy-control-item-wrap:active .scrcpy-control-drag { cursor: grabbing; }
+.scrcpy-control-item-wrap .btn { gap: 4px; padding: 5px 7px; border-color: transparent; font-size: 11px; white-space: nowrap; }
+.scrcpy-control-label { max-width: 66px; overflow: hidden; text-overflow: ellipsis; }
+.scrcpy-control-hint { flex: 0 0 auto; margin-left: auto; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
 .device-hover-card { position: absolute; z-index: 10; top: calc(100% + 7px); left: 0; width: min(300px, calc(100vw - 40px)); padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-hover); }
 .device-hover-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; color: var(--text-secondary); }
 .device-hover-title { color: var(--text); font-size: 12px; font-weight: 700; }
@@ -1376,6 +1386,7 @@ a {
   .dashboard-health-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dashboard-activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-activity-grid .card:first-child { grid-column: auto; }
+  .scrcpy-control-hint { display: none; }
 }
 @media (max-width: 680px) {
   .content { padding: 14px 12px 16px; }
