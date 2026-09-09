@@ -11,7 +11,7 @@ function runtime(calls: string[]): AutomationRuntime {
     keyevent: async (_serial, code) => { calls.push(`key:${code}`); },
     shell: async (_serial, command) => { calls.push(`shell:${command}`); },
     screenshot: async (_serial, path) => { calls.push(`shot:${path}`); },
-    launch: async (_serial, packageName) => { calls.push(`launch:${packageName}`); },
+    launch: async (_serial, packageName, displayId) => { calls.push(`launch:${packageName}:${displayId ?? "normal"}`); },
     install: async (_serial, path) => { calls.push(`install:${path}`); },
     record: async (_serial, outputPath, durationSeconds) => { calls.push(`record:${outputPath}:${durationSeconds}`); },
   };
@@ -36,6 +36,23 @@ describe("automation runner", () => {
     expect(result.status).toBe("completed");
     expect(result.completedSteps).toBe(3);
     expect(calls).toEqual(["tap:10,20", "shell:echo pixel", "shot:C:/shot.png"]);
+  });
+
+  it("launches an app on a configured display without changing normal launch steps", async () => {
+    const calls: string[] = [];
+    const script = createAutomationScript({
+      id: "script-display",
+      name: "显示屏启动",
+      steps: [
+        { id: "normal", kind: "launch", label: "普通启动", enabled: true, params: { packageName: "com.normal" } },
+        { id: "display", kind: "launch", label: "显示屏启动", enabled: true, params: { packageName: "com.demo", displayId: 2 } },
+      ],
+    });
+
+    const result = await runAutomationScript(script, "serial-1", runtime(calls));
+
+    expect(result.status).toBe("completed");
+    expect(calls).toEqual(["launch:com.normal:normal", "launch:com.demo:2"]);
   });
 
   it("continues after an opted-in failure and records the failed step", async () => {

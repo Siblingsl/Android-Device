@@ -17,7 +17,7 @@ export interface AutomationRuntime {
   keyevent: (serial: string, code: number) => Promise<void>;
   shell: (serial: string, command: string) => Promise<void>;
   screenshot: (serial: string, outputPath: string) => Promise<void>;
-  launch: (serial: string, packageName: string) => Promise<void>;
+  launch: (serial: string, packageName: string, displayId?: number) => Promise<void>;
   install: (serial: string, path: string) => Promise<void>;
   record: (serial: string, outputPath: string, durationSeconds: number) => Promise<void>;
   imageMatch?: (serial: string, imagePath: string, threshold: number) => Promise<{ matched: boolean; x?: number; y?: number }>;
@@ -78,6 +78,15 @@ function asNumber(value: AutomationStepValue, fallback: number): number {
 
 function asString(value: AutomationStepValue, fallback = ""): string {
   return typeof value === "string" ? value : String(value ?? fallback);
+}
+
+function optionalDisplayId(value: AutomationStepValue): number | undefined {
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) return undefined;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+    throw new Error("显示屏编号必须是 0 到 100 的整数");
+  }
+  return parsed;
 }
 
 function expand(value: string, variables: Record<string, string>): string {
@@ -202,7 +211,7 @@ async function executeStep(step: AutomationStep, serial: string, runtime: Automa
       await runtime.screenshot(serial, asString(valueOf(step, "outputPath", "")));
       return;
     case "launch":
-      await runtime.launch(serial, asString(valueOf(step, "packageName", "")));
+      await runtime.launch(serial, asString(valueOf(step, "packageName", "")), optionalDisplayId(valueOf(step, "displayId", "")));
       return;
     case "install":
       await runtime.install(serial, asString(valueOf(step, "path", "")));

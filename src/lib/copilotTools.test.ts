@@ -50,4 +50,20 @@ describe("copilot tool safety", () => {
     expect(files?.parameters.properties.path.type).toBe("string");
     expect(COPILOT_TOOLS.some((tool) => tool.id === "device.volumeUp")).toBe(true);
   });
+
+  it("requires a package and display id for display app launch", () => {
+    const tool = COPILOT_TOOLS.find((entry) => entry.id === "device.startAppOnDisplay");
+    expect(tool?.parameters.required).toEqual(["packageName", "displayId"]);
+    expect(tool?.requiresConfirmation).toBe(true);
+  });
+
+  it("blocks an invalid display id before confirmation", () => {
+    const result = authorizeCopilotToolCall(
+      { toolId: "device.startAppOnDisplay", args: { packageName: "com.demo", displayId: 101 } },
+      { allowedToolIds: ["device.startAppOnDisplay"], confirmed: true },
+    );
+
+    expect(result.status).toBe("blocked");
+    if (result.status === "blocked") expect(result.reason).toContain("显示屏编号");
+  });
 });

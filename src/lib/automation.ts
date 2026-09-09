@@ -29,7 +29,7 @@ const DEFAULT_STEP_PARAMS: Record<AutomationStepKind, Record<string, AutomationS
   wait: { milliseconds: 500 },
   screenshot: { outputPath: "" },
   record: { outputPath: "", durationSeconds: 0 },
-  launch: { packageName: "" },
+  launch: { packageName: "", displayId: "" },
   install: { path: "" },
   imageMatch: { imagePath: "", threshold: 0.85, followMatchPoint: true },
   if: { expression: "" },

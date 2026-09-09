@@ -32,6 +32,8 @@ export async function executeCopilotToolCall(call: CopilotToolCall, defaultSeria
       return textResult(await DeviceService.shell(serial, String(call.args.command || "")), "Shell 执行成功");
     case "device.startApp":
       return textResult(await DeviceService.startApp(serial, String(call.args.packageName || "")), "启动应用成功");
+    case "device.startAppOnDisplay":
+      return textResult(await DeviceService.startAppOnDisplay(serial, String(call.args.packageName || ""), Number(call.args.displayId)), "启动应用到显示屏成功");
     case "device.stopApp":
       return textResult(await DeviceService.stopApp(serial, String(call.args.packageName || "")), "停止应用成功");
     case "device.installApk":

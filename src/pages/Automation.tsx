@@ -43,7 +43,7 @@ function makeStep(kind: AutomationStepKind, index: number, t: (key: string) => s
   const params: Record<AutomationStepKind, Record<string, AutomationStepValue>> = {
     wait: { milliseconds: 500 }, screenshot: { outputPath: "${screenshotDir}" }, tap: { x: 0, y: 0 },
     swipe: { x1: 0, y1: 0, x2: 0, y2: 0, duration: 300 }, longPress: { x: 0, y: 0, duration: 800 }, text: { text: "" }, key: { keycode: 3 },
-    shell: { command: "" }, record: { outputPath: "", durationSeconds: 0 }, launch: { packageName: "" },
+    shell: { command: "" }, record: { outputPath: "", durationSeconds: 0 }, launch: { packageName: "", displayId: "" },
     install: { path: "" }, imageMatch: { imagePath: "", threshold: 0.85, followMatchPoint: true },
     if: { expression: "" }, loop: { count: 1 },
   };
@@ -284,6 +284,10 @@ export function AutomationPage() {
                   {selectedStep ? <>
                     <h3>{selectedStep.label}</h3>
                     <label><span>{t("automation.stepType")}</span><select value={selectedStep.kind} onChange={(event) => updateSelectedStep({ kind: event.target.value as AutomationStepKind, label: t(`automation.step.${event.target.value}`) })}>{STEP_KINDS.map((kind) => <option key={kind} value={kind}>{t(`automation.step.${kind}`)}</option>)}</select></label>
+                    {selectedStep.kind === "launch" && <div className="automation-launch-fields">
+                      <label><span>{t("automation.launch.packageName")}</span><input aria-label={t("automation.launch.packageName")} value={String(selectedStep.params.packageName ?? "")} onChange={(event) => updateSelectedStep({ params: { ...selectedStep.params, packageName: event.target.value } })} /></label>
+                      <label><span>{t("automation.launch.displayId")}</span><input aria-label={t("automation.launch.displayId")} type="number" min={0} max={100} placeholder={t("automation.launch.displayHint")} value={String(selectedStep.params.displayId ?? "")} onChange={(event) => updateSelectedStep({ params: { ...selectedStep.params, displayId: event.target.value } })} /></label>
+                    </div>}
                     <label><span>{t("automation.stepDetails")}</span><textarea value={JSON.stringify(selectedStep.params, null, 2)} onChange={(event) => { try { updateSelectedStep({ params: JSON.parse(event.target.value) }); } catch { /* keep editing until valid JSON */ } }} /></label>
                     <label className="switch-row"><input type="checkbox" checked={selectedStep.enabled} onChange={(event) => updateSelectedStep({ enabled: event.target.checked })} /><span>{t("automation.stepEnabled")}</span></label>
                     <label className="switch-row"><input type="checkbox" checked={selectedStep.continueOnError ?? false} onChange={(event) => updateSelectedStep({ continueOnError: event.target.checked })} /><span>{t("automation.continueOnError")}</span></label>

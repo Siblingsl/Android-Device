@@ -11,6 +11,7 @@ vi.mock("./deviceService", () => ({
     shell: vi.fn().mockResolvedValue({ success: true }),
     screenshot: vi.fn().mockResolvedValue({ success: true, path: "C:/shot.png", base64: "" }),
     startApp: vi.fn().mockResolvedValue({ success: true }),
+    startAppOnDisplay: vi.fn().mockResolvedValue({ success: true }),
     installApk: vi.fn().mockResolvedValue({ success: true }),
     scrcpyStartRecording: vi.fn().mockResolvedValue({ success: true }),
     scrcpyStopRecording: vi.fn().mockResolvedValue({ success: true }),
@@ -47,5 +48,13 @@ describe("device automation runtime", () => {
 
     await expect(runtime.imageMatch?.("serial-1", "C:/template.png", 0.9)).resolves.toEqual({ matched: true, score: 0.98, x: 11, y: 22 });
     expect(DeviceService.screenshot).toHaveBeenCalledWith("serial-1");
+  });
+
+  it("routes an optional display id to the display launch command", async () => {
+    const runtime = createDeviceAutomationRuntime();
+
+    await runtime.launch("serial-1", "com.demo", 2);
+
+    expect(DeviceService.startAppOnDisplay).toHaveBeenCalledWith("serial-1", "com.demo", 2);
   });
 });

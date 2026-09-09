@@ -24,7 +24,12 @@ export function createDeviceAutomationRuntime(): AutomationRuntime {
       if (!result.success) throw new Error(result.error || "截图失败");
       return matchScreenshotToTemplate(result.base64, imagePath, threshold);
     },
-    launch: async (serial, packageName) => assertSuccess(await DeviceService.startApp(serial, packageName), "启动应用失败"),
+    launch: async (serial, packageName, displayId) => assertSuccess(
+      displayId === undefined
+        ? await DeviceService.startApp(serial, packageName)
+        : await DeviceService.startAppOnDisplay(serial, packageName, displayId),
+      displayId === undefined ? "启动应用失败" : "启动应用到显示屏失败",
+    ),
     install: async (serial, path) => assertSuccess(await DeviceService.installApk(serial, path, true), "安装 APK 失败"),
     record: async (serial, outputPath, durationSeconds) => {
       const options: ScrcpyRecordingOptions = {

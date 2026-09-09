@@ -2054,6 +2054,8 @@ a {
   font-size: 12px;
 }
 
+.automation-launch-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(150px, .6fr); gap: 8px; }
+
 .automation-meta-form input,
 .automation-detail-panel input,
 .automation-detail-panel select {

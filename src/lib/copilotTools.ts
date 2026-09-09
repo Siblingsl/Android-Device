@@ -55,6 +55,7 @@ export const COPILOT_TOOLS: CopilotToolDefinition[] = [
   tool("device.shell", "执行设备 Shell", "在选定设备上运行一条 Shell 命令", "dangerous", true, schema({ serial, command: { type: "string", description: "要执行的命令" } }, ["command"])),
   tool("device.installApk", "安装 APK", "把 APK 安装到选定设备", "write", true, schema({ serial, path: { type: "string", description: "本地 APK 路径" } }, ["path"])),
   tool("device.startApp", "启动应用", "启动指定包名的应用", "write", true, schema({ serial, packageName: { type: "string", description: "应用包名" } }, ["packageName"])),
+  tool("device.startAppOnDisplay", "启动应用到显示屏", "在指定显示屏启动应用", "write", true, schema({ serial, packageName: { type: "string", description: "应用包名" }, displayId: { type: "number", description: "Android 显示屏编号，0 到 100" } }, ["packageName", "displayId"])),
   tool("device.stopApp", "停止应用", "停止指定包名的应用", "write", true, schema({ serial, packageName: { type: "string", description: "应用包名" } }, ["packageName"])),
   tool("device.input", "发送输入操作", "发送点按、滑动、文字或按键", "write", true, schema({
     serial, text: { type: "string" }, keycode: { type: "number" }, x: { type: "number" }, y: { type: "number" },
@@ -103,6 +104,12 @@ export function authorizeCopilotToolCall(call: CopilotToolCall, policy: CopilotT
   if (!policy.allowedToolIds.includes(tool.id)) return { status: "blocked", reason: `工具未加入白名单：${tool.label}` };
   const argumentError = validateArguments(tool, call.args);
   if (argumentError) return { status: "blocked", reason: argumentError };
+  if (tool.id === "device.startAppOnDisplay") {
+    const displayId = call.args.displayId;
+    if (typeof displayId !== "number" || !Number.isInteger(displayId) || displayId < 0 || displayId > 100) {
+      return { status: "blocked", reason: "显示屏编号必须是 0 到 100 的整数" };
+    }
+  }
   const command = typeof call.args.command === "string" ? call.args.command : "";
   if (tool.id === "device.shell" && DANGEROUS_COMMANDS.some((pattern) => pattern.test(command))) {
     return { status: "blocked", reason: "危险 Shell 命令已被拦截" };
