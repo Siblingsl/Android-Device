@@ -77,6 +77,8 @@ import { DeviceInputModes } from "../components/device/DeviceInputModes";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
+import { TerminalSessionService } from "../services/terminalSessionService";
+import { openTerminalWindow } from "../lib/terminalWindow";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -441,6 +443,21 @@ export function DeviceDetail() {
 
   const serial = device.serial;
 
+  const openDeviceTerminal = async () => {
+    if (!device.online || device.adbStatus !== "device") {
+      setStatusText(t("detail.status.deviceOffline"));
+      return;
+    }
+    try {
+      const session = await TerminalSessionService.start({ kind: "device", serial, shell: "" });
+      await openTerminalWindow(session.id, { title: t("terminal.title") });
+      setStatusText(t("terminal.opened"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusText(t("terminal.openFailed", { message }));
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -621,6 +638,7 @@ export function DeviceDetail() {
           resolution={device.resolution}
           setStatusText={setStatusText}
           disabled={!(device.online && device.adbStatus === "device")}
+          onOpenTerminal={() => void openDeviceTerminal()}
         />
       )}
       {tab === "files" && (
@@ -1311,11 +1329,13 @@ function Control({
   resolution,
   setStatusText,
   disabled = false,
+  onOpenTerminal,
 }: {
   serial: string;
   resolution?: string;
   setStatusText: (s: string) => void;
   disabled?: boolean;
+  onOpenTerminal?: () => void;
 }) {
   const { t } = useI18n();
   const [actionBusy, setActionBusy] = useState<ControlBusyAction | null>(null);
@@ -1994,6 +2014,7 @@ function Control({
           disabled={disabled}
           diagnostic={shellDiagnostic}
           onStatus={setStatusText}
+          onOpenTerminal={onOpenTerminal}
         />
       </div>
       </div>

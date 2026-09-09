@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SquareTerminal } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { DeviceService } from "../../services/deviceService";
@@ -12,9 +13,10 @@ interface DeviceShellProps {
   disabled?: boolean;
   diagnostic?: { id: number; message: string } | null;
   onStatus: (message: string) => void;
+  onOpenTerminal?: () => void;
 }
 
-export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: DeviceShellProps) {
+export function DeviceShell({ serial, disabled = false, diagnostic, onStatus, onOpenTerminal }: DeviceShellProps) {
   const { t } = useI18n();
   const [shellCmd, setShellCmd] = useState("");
   const [shellOut, setShellOut] = useState("");
@@ -113,7 +115,22 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus }: 
   };
 
   return (
-    <Card title="ADB Shell">
+    <Card
+      title="ADB Shell"
+      action={
+        onOpenTerminal && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<SquareTerminal size={14} />}
+            onClick={onOpenTerminal}
+            disabled={disabled}
+          >
+            {t("terminal.open")}
+          </Button>
+        )
+      }
+    >
       <div className="field">
         <div className="row-between">
           <label>{t("detail.control.command")}</label>

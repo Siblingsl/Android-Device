@@ -1262,6 +1262,7 @@ a {
 .tool-launcher-copy { display: flex; flex-direction: column; min-width: 0; }
 .tool-launcher-label { color: var(--text); font-size: 12px; font-weight: 650; }
 .tool-launcher-description { overflow: hidden; margin-top: 2px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.tool-launcher-error { margin: 8px 4px 2px; color: var(--danger); font-size: 11px; }
 
 .activity-drawer { grid-column: 1; border-top: 1px solid var(--border); background: var(--bg-elevated); }
 .activity-strip { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 0 18px; color: var(--text-secondary); text-align: left; }

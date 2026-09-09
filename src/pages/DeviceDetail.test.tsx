@@ -60,6 +60,10 @@ vi.mock("../services/deviceService", () => ({
     screenshot: vi.fn(),
   },
 }));
+vi.mock("../services/terminalSessionService", () => ({
+  TerminalSessionService: { start: vi.fn() },
+}));
+vi.mock("../lib/terminalWindow", () => ({ openTerminalWindow: vi.fn() }));
 vi.mock("../lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn() }));
 vi.mock("../stores/appStore", () => ({
@@ -86,6 +90,8 @@ vi.mock("../stores/appStore", () => ({
 const { DeviceService } = await import("../services/deviceService");
 const { askConfirm } = await import("../lib/dialogs");
 const { open, save } = await import("@tauri-apps/plugin-dialog");
+const { TerminalSessionService } = await import("../services/terminalSessionService");
+const { openTerminalWindow } = await import("../lib/terminalWindow");
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -236,6 +242,15 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.cancelFileTransfer).mockReset();
     vi.mocked(DeviceService.shell).mockReset();
     vi.mocked(DeviceService.shell).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(TerminalSessionService.start).mockReset();
+    vi.mocked(TerminalSessionService.start).mockResolvedValue({
+      id: "device-session-1",
+      kind: "device",
+      title: "ADB Shell · device-1-serial",
+      status: "running",
+    });
+    vi.mocked(openTerminalWindow).mockReset();
+    vi.mocked(openTerminalWindow).mockResolvedValue({} as never);
     vi.mocked(DeviceService.startApp).mockReset();
     vi.mocked(DeviceService.stopApp).mockReset();
     vi.mocked(DeviceService.clearAppData).mockReset();
@@ -293,6 +308,30 @@ describe("DeviceDetail refresh ordering", () => {
     });
     expect(screen.queryByText("old-serial")).toBeNull();
     expect(screen.getAllByText("new-serial").length).toBeGreaterThan(0);
+  });
+
+  it("opens a device PTY session from the existing one-shot shell card", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    sessionStorage.setItem("rdc.detail.tab.device-1", "control");
+
+    renderDetail("control");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "打开终端" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(TerminalSessionService.start).toHaveBeenCalledWith({
+      kind: "device",
+      serial: "device-1-serial",
+      shell: "",
+    });
+    expect(openTerminalWindow).toHaveBeenCalledWith("device-session-1", { title: "独立终端" });
   });
 
   it("ignores an older file listing after navigating to a newer path", async () => {
