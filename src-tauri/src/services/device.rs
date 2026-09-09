@@ -450,6 +450,8 @@ pub fn connect_device(serial: &str) -> ShellResult {
 
 pub fn disconnect_device(serial: &str) -> ShellResult {
     let _ = scrcpy::stop(serial);
+    let _ = scrcpy::stop_recording(serial);
+    let _ = scrcpy::stop_camera(serial);
     let r = adb::disconnect(serial);
     cache::invalidate_adb();
     r
@@ -483,6 +485,8 @@ pub fn restart_device(id: &str) -> ShellResult {
 pub fn stop_device(id: &str) -> ShellResult {
     if let Some(d) = find_device_light(id) {
         let _ = scrcpy::stop(&d.serial);
+        let _ = scrcpy::stop_recording(&d.serial);
+        let _ = scrcpy::stop_camera(&d.serial);
         let r = if !d.container_id.is_empty() {
             docker::stop_container(&d.container_id)
         } else {
@@ -546,6 +550,10 @@ pub fn volume_down(serial: &str) -> ShellResult {
     keyevent(serial, 25)
 }
 
+pub fn volume_mute(serial: &str) -> ShellResult {
+    keyevent(serial, 164)
+}
+
 pub fn lock(serial: &str) -> ShellResult {
     adb::shell(serial, "input keyevent 26")
 }
@@ -555,14 +563,42 @@ pub fn wake(serial: &str) -> ShellResult {
 }
 
 pub fn rotate(serial: &str, landscape: bool) -> ShellResult {
-    let val = if landscape { "1" } else { "0" };
-    adb::shell(
-        serial,
-        &format!(
-            "settings put system accelerometer_rotation 0; settings put system user_rotation {}",
-            val
-        ),
-    )
+    set_rotation_mode(serial, if landscape { "landscape" } else { "portrait" })
+}
+
+pub fn set_rotation_mode(serial: &str, mode: &str) -> ShellResult {
+    match rotation_command(mode) {
+        Some(command) => adb::shell(serial, command),
+        None => ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: "旋转模式无效".into(),
+            exit_code: -1,
+        },
+    }
+}
+
+fn rotation_command(mode: &str) -> Option<&'static str> {
+    match mode {
+        "portrait" => Some("settings put system accelerometer_rotation 0; settings put system user_rotation 0"),
+        "landscape" => Some("settings put system accelerometer_rotation 0; settings put system user_rotation 1"),
+        "auto" => Some("settings put system accelerometer_rotation 1"),
+        // Locking keeps the current user_rotation value and only disables auto-rotation.
+        "lock" => Some("settings put system accelerometer_rotation 0"),
+        _ => None,
+    }
+}
+
+pub fn screen_off(serial: &str) -> ShellResult {
+    lock(serial)
+}
+
+pub fn reboot(serial: &str) -> ShellResult {
+    adb::shell(serial, "reboot")
+}
+
+pub fn shutdown(serial: &str) -> ShellResult {
+    adb::shell(serial, "reboot -p")
 }
 
 pub fn open_notifications(serial: &str) -> ShellResult {
@@ -1552,5 +1588,14 @@ mod metrics_tests {
             tracked_status(&CancellableCommandResult::TimedOut(ShellResult::default())),
             "failed"
         );
+    }
+
+    #[test]
+    fn rotation_modes_map_to_safe_android_settings_commands() {
+        assert_eq!(rotation_command("portrait"), Some("settings put system accelerometer_rotation 0; settings put system user_rotation 0"));
+        assert_eq!(rotation_command("landscape"), Some("settings put system accelerometer_rotation 0; settings put system user_rotation 1"));
+        assert_eq!(rotation_command("auto"), Some("settings put system accelerometer_rotation 1"));
+        assert_eq!(rotation_command("lock"), Some("settings put system accelerometer_rotation 0"));
+        assert_eq!(rotation_command("settings put system"), None);
     }
 }

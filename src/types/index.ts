@@ -221,6 +221,30 @@ export interface ShellResult {
   exitCode: number;
 }
 
+export type ScrcpyRecordingFormat = "mp4" | "mkv";
+export type ScrcpyVideoSource = "display" | "camera";
+export type ScrcpyCameraFacing = "front" | "back" | "external";
+
+export interface ScrcpyCameraOptions {
+  cameraId: string;
+  cameraSize: string;
+  cameraAr: string;
+  cameraFps: number;
+  cameraFacing: ScrcpyCameraFacing;
+  cameraTorch: boolean;
+  cameraZoom: number;
+}
+
+export interface ScrcpyRecordingOptions extends ScrcpyCameraOptions {
+  outputPath: string;
+  format: ScrcpyRecordingFormat;
+  audio: boolean;
+  audioOnly: boolean;
+  audioSource: "output" | "playback" | "mic";
+  videoSource: ScrcpyVideoSource;
+  timeLimitSecs: number;
+}
+
 export interface ScreenshotResult {
   success: boolean;
   path: string;

@@ -214,6 +214,25 @@ pub struct ShellResult {
     pub exit_code: i32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrcpyRecordingOptions {
+    pub output_path: String,
+    pub format: String,
+    pub audio: bool,
+    pub audio_only: bool,
+    pub audio_source: String,
+    pub video_source: String,
+    pub camera_id: String,
+    pub camera_size: String,
+    pub camera_ar: String,
+    pub camera_fps: u32,
+    pub camera_facing: String,
+    pub camera_torch: bool,
+    pub camera_zoom: f32,
+    pub time_limit_secs: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotResult {

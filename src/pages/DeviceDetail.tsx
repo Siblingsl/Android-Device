@@ -71,6 +71,7 @@ import {
 } from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { ScrcpyControlBar } from "../components/device/ScrcpyControlBar";
+import { DeviceMediaControls, type DeviceMediaAction, type RotationMode } from "../components/device/DeviceMediaControls";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
@@ -86,10 +87,12 @@ import type {
   RootStatus,
   SuPolicyEntry,
   FileTransferProgress,
+  ScrcpyCameraOptions,
+  ScrcpyRecordingOptions,
 } from "../types";
 
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
-type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
+type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture" | "recording" | "camera" | "rotation" | DeviceMediaAction;
 type PreviewOutcome = { success: boolean; message: string };
 type FileTransferState = {
   kind: "upload" | "download";
@@ -1556,6 +1559,43 @@ function Control({
     void act(t("detail.control.back"), () => DeviceService.back(serial), "back");
   };
 
+  const runExtendedAction = async (
+    label: string,
+    fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>,
+    busyAction: ControlBusyAction,
+  ): Promise<boolean> => {
+    if (disabled) {
+      setStatusText(t("detail.status.deviceOffline"));
+      return false;
+    }
+    if (actionBusy || scrcpyBusy) return false;
+    setActionBusy(busyAction);
+    setStatusText(label);
+    let success = false;
+    try {
+      await runDeviceAction(fn, {
+        fallback: t("detail.control.actionFailed"),
+        onSuccess: (result) => {
+          success = true;
+          const output = formatShellOutput(result.stdout || "", result.stderr || "", result.exitCode);
+          recordFeedback(busyAction, label, "success", output || t("detail.control.actionCompleted"));
+          refreshPreview();
+        },
+        onError: (error) => {
+          recordFeedback(busyAction, label, "error", error.message);
+          setStatusText(error.message);
+          appendDiagnostic(error.message);
+        },
+      });
+      if (success) setStatusText(t("detail.status.ready"));
+    } catch {
+      // The operation error is already reflected in feedback and diagnostics.
+    } finally {
+      setActionBusy(null);
+    }
+    return success;
+  };
+
   const onAuxClick = (e: React.MouseEvent) => {
     if (e.button === 1) {
       e.preventDefault();
@@ -1856,6 +1896,62 @@ function Control({
       />
 
       <div className="control-panel">
+        <DeviceMediaControls
+          disabled={disabled}
+          busy={actionBusy || scrcpyBusy}
+          onRecordingStart={(options: ScrcpyRecordingOptions) =>
+            runExtendedAction(
+              t("detail.media.startRecording"),
+              () => DeviceService.scrcpyStartRecording(serial, options),
+              "recording",
+            )
+          }
+          onRecordingStop={() =>
+            runExtendedAction(
+              t("detail.media.stopRecording"),
+              () => DeviceService.scrcpyStopRecording(serial),
+              "recording",
+            )
+          }
+          onRecordingStatus={() => DeviceService.scrcpyRecordingStatus(serial)}
+          onCameraStart={(options: ScrcpyCameraOptions) =>
+            runExtendedAction(
+              t("detail.media.startCamera"),
+              () => DeviceService.scrcpyStartCamera(serial, options),
+              "camera",
+            )
+          }
+          onCameraStop={() =>
+            runExtendedAction(
+              t("detail.media.stopCamera"),
+              () => DeviceService.scrcpyStopCamera(serial),
+              "camera",
+            )
+          }
+          onCameraStatus={() => DeviceService.scrcpyCameraStatus(serial)}
+          onRotation={(mode: RotationMode) =>
+            runExtendedAction(
+              t(`detail.media.rotation.${mode}`),
+              () => DeviceService.setRotationMode(serial, mode),
+              "rotation",
+            )
+          }
+          onDeviceAction={(action: DeviceMediaAction) => {
+            const operations: Record<DeviceMediaAction, () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>> = {
+              mute: () => DeviceService.volumeMute(serial),
+              screenOff: () => DeviceService.screenOff(serial),
+              reboot: () => DeviceService.rebootDevice(serial),
+              shutdown: () => DeviceService.shutdownDevice(serial),
+            };
+            return (async () => {
+              if (action === "reboot" || action === "shutdown") {
+                const confirmed = await askConfirm(t(`detail.media.confirm.${action}`));
+                if (!confirmed) return false;
+              }
+              return runExtendedAction(t(`detail.media.${action}`), operations[action], action);
+            })();
+          }}
+        />
         <DeviceControlPanel
           disabled={disabled}
           busyAction={actionBusy}

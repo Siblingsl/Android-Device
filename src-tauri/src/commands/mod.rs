@@ -129,6 +129,11 @@ pub async fn device_volume_down(serial: String) -> ShellResult {
 }
 
 #[tauri::command]
+pub async fn device_volume_mute(serial: String) -> ShellResult {
+    blocking(move || device::volume_mute(&serial)).await
+}
+
+#[tauri::command]
 pub async fn device_lock(serial: String) -> ShellResult {
     blocking(move || device::lock(&serial)).await
 }
@@ -141,6 +146,26 @@ pub async fn device_wake(serial: String) -> ShellResult {
 #[tauri::command]
 pub async fn device_rotate(serial: String, landscape: bool) -> ShellResult {
     blocking(move || device::rotate(&serial, landscape)).await
+}
+
+#[tauri::command]
+pub async fn device_set_rotation_mode(serial: String, mode: String) -> ShellResult {
+    blocking(move || device::set_rotation_mode(&serial, &mode)).await
+}
+
+#[tauri::command]
+pub async fn device_screen_off(serial: String) -> ShellResult {
+    blocking(move || device::screen_off(&serial)).await
+}
+
+#[tauri::command]
+pub async fn device_reboot(serial: String) -> ShellResult {
+    blocking(move || device::reboot(&serial)).await
+}
+
+#[tauri::command]
+pub async fn device_shutdown(serial: String) -> ShellResult {
+    blocking(move || device::shutdown(&serial)).await
 }
 
 #[tauri::command]
@@ -634,6 +659,42 @@ pub async fn scrcpy_restart(serial: String) -> ShellResult {
 #[tauri::command]
 pub async fn scrcpy_status(serial: String) -> String {
     blocking(move || scrcpy::status(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_start_recording(
+    serial: String,
+    options: ScrcpyRecordingOptions,
+) -> ShellResult {
+    blocking(move || scrcpy::start_recording(&serial, options)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stop_recording(serial: String) -> ShellResult {
+    blocking(move || scrcpy::stop_recording(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_recording_status(serial: String) -> String {
+    blocking(move || scrcpy::recording_status(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_start_camera(
+    serial: String,
+    options: ScrcpyRecordingOptions,
+) -> ShellResult {
+    blocking(move || scrcpy::start_camera(&serial, options)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stop_camera(serial: String) -> ShellResult {
+    blocking(move || scrcpy::stop_camera(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_camera_status(serial: String) -> String {
+    blocking(move || scrcpy::camera_status(&serial)).await
 }
 
 // ---- System logs ----

@@ -16,6 +16,8 @@ import type {
   LsposedScopeReport,
   MagiskAssets,
   RootStatus,
+  ScrcpyCameraOptions,
+  ScrcpyRecordingOptions,
   ScreenshotResult,
   ShellResult,
   SuPolicyEntry,
@@ -65,10 +67,16 @@ export const DeviceService = {
   power: (serial: string) => invoke<ShellResult>("device_power", { serial }),
   volumeUp: (serial: string) => invoke<ShellResult>("device_volume_up", { serial }),
   volumeDown: (serial: string) => invoke<ShellResult>("device_volume_down", { serial }),
+  volumeMute: (serial: string) => invoke<ShellResult>("device_volume_mute", { serial }),
   lock: (serial: string) => invoke<ShellResult>("device_lock", { serial }),
   wake: (serial: string) => invoke<ShellResult>("device_wake", { serial }),
   rotate: (serial: string, landscape: boolean) =>
     invoke<ShellResult>("device_rotate", { serial, landscape }),
+  setRotationMode: (serial: string, mode: "portrait" | "landscape" | "auto" | "lock") =>
+    invoke<ShellResult>("device_set_rotation_mode", { serial, mode }),
+  screenOff: (serial: string) => invoke<ShellResult>("device_screen_off", { serial }),
+  rebootDevice: (serial: string) => invoke<ShellResult>("device_reboot", { serial }),
+  shutdownDevice: (serial: string) => invoke<ShellResult>("device_shutdown", { serial }),
   openNotifications: (serial: string) =>
     invoke<ShellResult>("device_open_notifications", { serial }),
   openSettings: (serial: string) =>
@@ -212,6 +220,14 @@ export const DeviceService = {
   scrcpyStop: (serial: string) => invoke<ShellResult>("scrcpy_stop", { serial }),
   scrcpyRestart: (serial: string) => invoke<ShellResult>("scrcpy_restart", { serial }),
   scrcpyStatus: (serial: string) => invoke<string>("scrcpy_status", { serial }),
+  scrcpyStartRecording: (serial: string, options: ScrcpyRecordingOptions) =>
+    invoke<ShellResult>("scrcpy_start_recording", { serial, options }),
+  scrcpyStopRecording: (serial: string) => invoke<ShellResult>("scrcpy_stop_recording", { serial }),
+  scrcpyRecordingStatus: (serial: string) => invoke<string>("scrcpy_recording_status", { serial }),
+  scrcpyStartCamera: (serial: string, options: ScrcpyCameraOptions) =>
+    invoke<ShellResult>("scrcpy_start_camera", { serial, options: { ...options, outputPath: "", format: "mp4", audio: false, audioOnly: false, audioSource: "output", videoSource: "camera", timeLimitSecs: 0 } }),
+  scrcpyStopCamera: (serial: string) => invoke<ShellResult>("scrcpy_stop_camera", { serial }),
+  scrcpyCameraStatus: (serial: string) => invoke<string>("scrcpy_camera_status", { serial }),
 
   // System logs
   getLogs: (opts?: {
