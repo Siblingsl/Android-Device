@@ -54,6 +54,8 @@ export const COPILOT_TOOLS: CopilotToolDefinition[] = [
   tool("device.logs", "读取设备日志", "获取 logcat 或系统运行日志", "read", false, schema({ serial, lines: { type: "number", description: "日志行数" }, clear: { type: "boolean", description: "读取后清空" } })),
   tool("device.shell", "执行设备 Shell", "在选定设备上运行一条 Shell 命令", "dangerous", true, schema({ serial, command: { type: "string", description: "要执行的命令" } }, ["command"])),
   tool("device.installApk", "安装 APK", "把 APK 安装到选定设备", "write", true, schema({ serial, path: { type: "string", description: "本地 APK 路径" } }, ["path"])),
+  tool("device.uploadFile", "上传文件", "把本地文件传到设备指定路径", "write", true, schema({ serial, local: { type: "string", description: "电脑本地文件路径" }, remote: { type: "string", description: "设备目标路径" } }, ["local", "remote"])),
+  tool("device.downloadFile", "下载文件", "把设备文件保存到电脑指定路径", "write", true, schema({ serial, local: { type: "string", description: "电脑本地目标路径" }, remote: { type: "string", description: "设备源路径" } }, ["local", "remote"])),
   tool("device.startApp", "启动应用", "启动指定包名的应用", "write", true, schema({ serial, packageName: { type: "string", description: "应用包名" } }, ["packageName"])),
   tool("device.startAppOnDisplay", "启动应用到显示屏", "在指定显示屏启动应用", "write", true, schema({ serial, packageName: { type: "string", description: "应用包名" }, displayId: { type: "number", description: "Android 显示屏编号，0 到 100" } }, ["packageName", "displayId"])),
   tool("device.stopApp", "停止应用", "停止指定包名的应用", "write", true, schema({ serial, packageName: { type: "string", description: "应用包名" } }, ["packageName"])),

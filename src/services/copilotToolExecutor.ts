@@ -38,6 +38,10 @@ export async function executeCopilotToolCall(call: CopilotToolCall, defaultSeria
       return textResult(await DeviceService.stopApp(serial, String(call.args.packageName || "")), "停止应用成功");
     case "device.installApk":
       return textResult(await DeviceService.installApk(serial, String(call.args.path || ""), true), "安装 APK 成功");
+    case "device.uploadFile":
+      return textResult(await DeviceService.uploadFile(serial, String(call.args.local || ""), String(call.args.remote || "")), "文件上传成功");
+    case "device.downloadFile":
+      return textResult(await DeviceService.downloadFile(serial, String(call.args.remote || ""), String(call.args.local || "")), "文件下载成功");
     case "device.input":
       if (typeof call.args.text === "string") return textResult(await DeviceService.text(serial, call.args.text), "输入文本成功");
       if (typeof call.args.keycode === "number") return textResult(await DeviceService.keyevent(serial, call.args.keycode), "按键成功");

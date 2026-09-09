@@ -51,6 +51,15 @@ describe("copilot tool safety", () => {
     expect(COPILOT_TOOLS.some((tool) => tool.id === "device.volumeUp")).toBe(true);
   });
 
+  it("exposes confirmed file transfer tools with local and remote paths", () => {
+    for (const id of ["device.uploadFile", "device.downloadFile"]) {
+      const tool = COPILOT_TOOLS.find((entry) => entry.id === id);
+      expect(tool?.risk).toBe("write");
+      expect(tool?.requiresConfirmation).toBe(true);
+      expect(tool?.parameters.required).toEqual(["local", "remote"]);
+    }
+  });
+
   it("requires a package and display id for display app launch", () => {
     const tool = COPILOT_TOOLS.find((entry) => entry.id === "device.startAppOnDisplay");
     expect(tool?.parameters.required).toEqual(["packageName", "displayId"]);

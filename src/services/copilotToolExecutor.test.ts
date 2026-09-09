@@ -10,6 +10,8 @@ vi.mock("./deviceService", () => ({
     startApp: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
     startAppOnDisplay: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
     stopApp: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
+    uploadFile: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
+    downloadFile: vi.fn().mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 }),
   },
 }));
 
@@ -44,5 +46,13 @@ describe("copilot tool executor", () => {
     expect(result).toContain("demo.txt");
     await executeCopilotToolCall({ toolId: "device.stopApp", args: { packageName: "com.demo" } }, "serial-1");
     expect(DeviceService.stopApp).toHaveBeenCalledWith("serial-1", "com.demo");
+  });
+
+  it("routes confirmed file transfers through DeviceService", async () => {
+    await executeCopilotToolCall({ toolId: "device.uploadFile", args: { local: "C:/demo.txt", remote: "/sdcard/demo.txt" } }, "serial-1");
+    await executeCopilotToolCall({ toolId: "device.downloadFile", args: { local: "C:/out/demo.txt", remote: "/sdcard/demo.txt" } }, "serial-1");
+
+    expect(DeviceService.uploadFile).toHaveBeenCalledWith("serial-1", "C:/demo.txt", "/sdcard/demo.txt");
+    expect(DeviceService.downloadFile).toHaveBeenCalledWith("serial-1", "/sdcard/demo.txt", "C:/out/demo.txt");
   });
 });
