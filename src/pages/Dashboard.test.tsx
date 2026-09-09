@@ -55,6 +55,22 @@ describe("Dashboard refresh ordering", () => {
     vi.useRealTimers();
   });
 
+  it("presents a compact status cockpit without removing the existing dashboard surfaces", () => {
+    vi.mocked(DeviceService.getDashboard).mockResolvedValueOnce(dashboard("状态已更新", 18));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    expect(document.querySelector(".dashboard-workbench")).toBeTruthy();
+    expect(document.querySelector(".dashboard-health-surface .dashboard-health-strip")).toBeTruthy();
+    expect(document.querySelector(".dashboard-main-grid")).toBeTruthy();
+    expect(document.querySelector(".dashboard-device-surface .device-board")).toBeTruthy();
+    expect(document.querySelector(".dashboard-activity-surface .dashboard-activity-inbox")).toBeTruthy();
+  });
+
   it("keeps the newer scheduled refresh when the initial request resolves later", async () => {
     const initial = deferred<DashboardData>();
     const scheduled = deferred<DashboardData>();

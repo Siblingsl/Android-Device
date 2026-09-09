@@ -63,10 +63,18 @@ export function Dashboard() {
   }, []);
 
   return (
-    <div className="dashboard-page">
-      <DeviceStatusBoard devices={data?.devices ?? []} loading={loading && !data} />
-      <SystemHealthStrip data={data} loading={loading} onNavigate={navigate} t={t} />
-      <DashboardActivity data={data} onNavigate={navigate} t={t} />
+    <div className="dashboard-page dashboard-workbench">
+      <section className="dashboard-health-surface" aria-label={t("dashboard.health.label")}>
+        <SystemHealthStrip data={data} loading={loading} onNavigate={navigate} t={t} />
+      </section>
+      <div className="dashboard-main-grid">
+        <section className="dashboard-device-surface">
+          <DeviceStatusBoard devices={data?.devices ?? []} loading={loading && !data} />
+        </section>
+        <aside className="dashboard-activity-surface">
+          <DashboardActivity data={data} onNavigate={navigate} t={t} />
+        </aside>
+      </div>
     </div>
   );
 }
@@ -78,7 +86,7 @@ function SystemHealthStrip({ data, loading, onNavigate, t }: {
   t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   return (
-    <section className="dashboard-health-strip" aria-label={t("dashboard.health.label")}>
+    <div className="dashboard-health-strip">
       {loading && !data ? (
         Array.from({ length: 5 }).map((_, index) => <Card key={index}><Skeleton height={40} /></Card>)
       ) : (
@@ -91,7 +99,7 @@ function SystemHealthStrip({ data, loading, onNavigate, t }: {
           <StatCard compact icon={<Activity size={16} />} label={t("dashboard.casting")} value={String((data?.devices ?? []).filter((d) => d.scrcpyStatus === "running").length)} hint="Scrcpy running" onClick={() => onNavigate("/devices")} />
         </>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -101,7 +109,7 @@ function DashboardActivity({ data, onNavigate, t }: {
   t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   return (
-    <section className="dashboard-activity-grid">
+    <section className="dashboard-activity-grid dashboard-activity-inbox">
       <Card title={t("dashboard.card.notifications")}>
         {data?.notifications?.length ? (
           <div className="stack">

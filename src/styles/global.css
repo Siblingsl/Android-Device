@@ -2242,6 +2242,16 @@ a {
   .devices-table-responsive .devices-table-actions-compact .device-row-action-more { width: 54px; }
 }
 .dashboard-page { max-width: 1680px; margin: 0 auto; }
+.dashboard-workbench { display: flex; flex-direction: column; gap: 12px; }
+.dashboard-health-surface { padding: 8px 10px 9px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg-elevated) 86%, var(--primary) 14%); }
+.dashboard-health-surface .dashboard-health-strip { margin: 0; }
+.dashboard-main-grid { display: grid; grid-template-columns: minmax(0, 1.72fr) minmax(280px, .82fr); gap: 14px; align-items: start; }
+.dashboard-device-surface { min-width: 0; padding: 12px 13px 2px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg)); }
+.dashboard-device-surface .device-board { padding-top: 0; }
+.dashboard-activity-surface { min-width: 0; }
+.dashboard-activity-inbox { grid-template-columns: 1fr; gap: 8px; }
+.dashboard-activity-inbox .card:first-child { grid-column: auto; }
+.dashboard-activity-inbox .card-body { padding: 10px 11px; }
 .device-board { padding: 4px 0 18px; }
 .device-board-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
 .device-board-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: var(--primary); font-size: 10px; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; }
@@ -2466,8 +2476,10 @@ a {
   .device-board-lanes { grid-template-columns: 1fr; }
   .device-lane-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-health-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dashboard-main-grid { grid-template-columns: 1fr; }
   .dashboard-activity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-activity-grid .card:first-child { grid-column: auto; }
+  .dashboard-activity-inbox { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .scrcpy-control-hint { display: none; }
   .media-control-grid { grid-template-columns: 1fr; }
   .file-location-strip { grid-template-columns: 1fr; align-items: stretch; }
@@ -2478,13 +2490,14 @@ a {
 }
 @media (max-width: 680px) {
   .content { padding: 14px 12px 16px; }
+  .dashboard-health-surface, .dashboard-device-surface { padding-inline: 9px; }
   .device-detail-header { align-items: flex-start; flex-direction: column; }
   .device-detail-header > .row:last-child { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
   .device-detail-tabs .tab { padding-inline: 9px; }
   .device-board-heading { align-items: flex-start; flex-direction: column; }
   .device-board-summary { justify-content: flex-start; }
   .device-lane-list { grid-template-columns: 1fr; }
-  .dashboard-health-strip, .dashboard-activity-grid { grid-template-columns: 1fr; }
+  .dashboard-health-strip, .dashboard-activity-grid, .dashboard-activity-inbox { grid-template-columns: 1fr; }
   .app-filter-main { align-items: flex-start; flex-wrap: wrap; }
   .app-filter-main input:not([type="checkbox"]) { min-width: 180px; }
 }
