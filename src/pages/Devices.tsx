@@ -24,6 +24,7 @@ import {
 } from "../lib/scrcpyWindowLayout";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
+import { DeviceBroadcastInput } from "../components/device/DeviceBroadcastInput";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
@@ -391,10 +392,10 @@ export function Devices() {
     fn: BatchAction,
     kind = "",
     targetDevices = selectedDevices,
-  ) => {
+  ): Promise<boolean> => {
     if (targetDevices.length === 0) {
       setStatusText(t("devices.pickFirst"));
-      return;
+      return false;
     }
     batchCancelRequested.current = false;
     setBusy("batch");
@@ -474,6 +475,7 @@ export function Devices() {
           total: items.length,
         }),
       );
+      return okCount === items.length;
     } finally {
       setBusy(null);
       setBatchProgress(null);
@@ -847,6 +849,32 @@ export function Devices() {
             </div>
             <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
           </details>
+          <DeviceBroadcastInput
+            disabled={selectedDevices.length === 0}
+            busy={busy}
+            onText={(text) =>
+              batch(
+                t("devices.broadcast.textAction"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  return DeviceService.text(d.serial, text);
+                },
+                "broadcast-text",
+              )
+            }
+            onKey={(code) =>
+              batch(
+                t("devices.broadcast.keyAction"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  return DeviceService.keyevent(d.serial, code);
+                },
+                "broadcast-key",
+              )
+            }
+          />
           <Button
             size="sm"
             variant="ghost"

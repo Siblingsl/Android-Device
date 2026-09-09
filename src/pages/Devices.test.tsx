@@ -18,6 +18,8 @@ vi.mock("../services/deviceService", () => ({
     stop: vi.fn(),
     scrcpyStart: vi.fn(),
     scrcpyStartLayout: vi.fn(),
+    text: vi.fn(),
+    keyevent: vi.fn(),
     installApk: vi.fn(),
     uploadFile: vi.fn(),
     refreshDevices: vi.fn(),
@@ -96,6 +98,8 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.stop).mockReset();
     vi.mocked(DeviceService.scrcpyStart).mockReset();
     vi.mocked(DeviceService.scrcpyStartLayout).mockReset();
+    vi.mocked(DeviceService.text).mockReset();
+    vi.mocked(DeviceService.keyevent).mockReset();
     vi.mocked(DeviceService.installApk).mockReset();
     vi.mocked(DeviceService.uploadFile).mockReset();
     vi.mocked(open).mockReset();
@@ -113,6 +117,8 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.scrcpyStart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.scrcpyStartLayout).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.text).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.keyevent).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.installApk).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.uploadFile).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(open).mockResolvedValue(null);
@@ -256,6 +262,35 @@ describe("Devices batch controls", () => {
       { x: 0, y: 816, width: 480, height: 800 },
     );
     expect(localStorage.getItem("rdc.devices.scrcpyLayout")).toContain('"columns":1');
+  }, 15_000);
+
+  it("broadcasts the same text and navigation key to selected devices", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      { ...device("two"), online: true, adbStatus: "device" },
+    ]);
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByText("广播输入"));
+    fireEvent.change(screen.getByRole("textbox", { name: "广播文本" }), {
+      target: { value: "shared text" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "广播文本" }));
+
+    expect(await screen.findByText(/广播文本 · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.text).toHaveBeenNthCalledWith(1, "one-serial", "shared text");
+    expect(DeviceService.text).toHaveBeenNthCalledWith(2, "two-serial", "shared text");
+
+    fireEvent.click(screen.getByRole("button", { name: "广播 HOME" }));
+    expect(await screen.findByText(/广播按键 · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.keyevent).toHaveBeenNthCalledWith(1, "one-serial", 3);
+    expect(DeviceService.keyevent).toHaveBeenNthCalledWith(2, "two-serial", 3);
   }, 15_000);
 
   it("pushes multiple selected files to every selected device", async () => {
