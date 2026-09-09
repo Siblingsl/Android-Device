@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAutomationScript } from "./automation";
-import { createAutomationRunSession, runAutomationBatch, runAutomationScript, type AutomationRuntime } from "./automationRunner";
+import { createAutomationRunSession, runAutomationBatch, runAutomationScript, runAutomationStep, type AutomationRuntime } from "./automationRunner";
 
 function runtime(calls: string[]): AutomationRuntime {
   return {
@@ -115,5 +115,22 @@ describe("automation runner", () => {
     expect(result.status).toBe("completed");
     expect(result.results.map((entry) => entry.serial)).toEqual(["one", "two", "three"]);
     expect(maxActive).toBeLessThanOrEqual(2);
+  });
+
+  it("runs only the requested step for single-step preview", async () => {
+    const calls: string[] = [];
+    const script = createAutomationScript({
+      id: "script-6",
+      name: "单步",
+      steps: [
+        { id: "one", kind: "tap", label: "第一步", enabled: true, params: { x: 1, y: 2 } },
+        { id: "two", kind: "tap", label: "第二步", enabled: true, params: { x: 3, y: 4 } },
+      ],
+    });
+
+    const result = await runAutomationStep(script, "serial-1", 1, runtime(calls));
+
+    expect(result.status).toBe("completed");
+    expect(calls).toEqual(["tap:3,4"]);
   });
 });

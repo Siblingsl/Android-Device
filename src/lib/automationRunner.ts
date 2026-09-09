@@ -172,12 +172,12 @@ export async function runAutomationScript(
       logs.push({ stepId: rawStep.id, label: rawStep.label, status: "skipped", startedAt: timestamp, finishedAt: timestamp });
       continue;
     }
+    const startedAt = now();
     try {
       await options.session?.waitIfPaused();
       ensureActive(options.signal);
       const activeSignal = options.session?.signal ?? options.signal;
       ensureActive(activeSignal);
-      const startedAt = now();
       const step = expandParams(rawStep, variables);
       await wait(Math.max(0, step.beforeDelayMs ?? 0), activeSignal);
       await executeStep(step, serial, runtime, activeSignal);
@@ -195,6 +195,24 @@ export async function runAutomationScript(
   }
 
   return { status: "completed", completedSteps, logs };
+}
+
+export async function runAutomationStep(
+  script: AutomationScript,
+  serial: string,
+  stepIndex: number,
+  runtime: AutomationRuntime,
+  options: AutomationRunOptions = {},
+): Promise<AutomationRunResult> {
+  const step = script.steps[stepIndex];
+  if (!step) {
+    return {
+      status: "failed",
+      completedSteps: 0,
+      logs: [{ stepId: `step-${stepIndex + 1}`, label: "未知步骤", status: "failed", message: "步骤不存在", startedAt: now(), finishedAt: now() }],
+    };
+  }
+  return runAutomationScript({ ...script, steps: [step] }, serial, runtime, options);
 }
 
 export async function runAutomationBatch(

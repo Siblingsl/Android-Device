@@ -11,6 +11,7 @@ import {
   Save,
   Square,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -18,13 +19,15 @@ import { useI18n } from "../i18n";
 import {
   createAutomationScript,
   defaultAutomationScript,
+  parseAutomationScript,
   readAutomationScripts,
+  serializeAutomationScript,
   writeAutomationScripts,
 } from "../lib/automation";
-import { createAutomationRunSession, runAutomationBatch, runAutomationScript, type AutomationRunSession } from "../lib/automationRunner";
+import { createAutomationRunSession, runAutomationBatch, runAutomationScript, runAutomationStep, type AutomationRunSession } from "../lib/automationRunner";
 import { createDeviceAutomationRuntime } from "../services/automationService";
 import { useAppStore } from "../stores/appStore";
-import type { AutomationBatchResult, AutomationRunResult, AutomationScript, AutomationStep, AutomationStepKind, AutomationStepValue } from "../types";
+import type { AutomationBatchResult, AutomationRunLog, AutomationRunResult, AutomationScript, AutomationStep, AutomationStepKind, AutomationStepValue } from "../types";
 
 const STEP_KINDS: AutomationStepKind[] = [
   "wait", "screenshot", "tap", "swipe", "longPress", "text", "key", "shell", "record", "launch", "install", "imageMatch", "if", "loop",
@@ -64,7 +67,9 @@ export function AutomationPage() {
   const [paused, setPaused] = useState(false);
   const [runResult, setRunResult] = useState<AutomationRunResult | null>(null);
   const [batchResult, setBatchResult] = useState<AutomationBatchResult | null>(null);
+  const [runLogs, setRunLogs] = useState<AutomationRunLog[]>([]);
   const runController = useRef<AutomationRunSession | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selected = useMemo(
     () => scripts.find((script) => script.id === selectedId) ?? scripts[0] ?? null,
@@ -130,14 +135,17 @@ export function AutomationPage() {
     setPaused(false);
     setRunResult(null);
     setBatchResult(null);
+    setRunLogs([]);
     try {
       if (serials.length === 1) {
         const result = await runAutomationScript(selected, serials[0], createDeviceAutomationRuntime(), { session });
         setRunResult(result);
+        setRunLogs(result.logs);
         setStatusText(`${t("automation.run")}：${result.status}`);
       } else {
         const result = await runAutomationBatch(selected, serials, () => createDeviceAutomationRuntime(), { session, concurrency: 2 });
         setBatchResult(result);
+        setRunLogs(result.results.flatMap((entry) => entry.result.logs.map((log) => ({ ...log, label: `${entry.serial} · ${log.label}` }))));
         setStatusText(`${t("automation.run")}：${result.status}`);
       }
     } finally {
@@ -159,9 +167,43 @@ export function AutomationPage() {
     }
   };
 
+  const runSingleStep = async () => {
+    if (!selected || !selectedStep || !targetSerial.trim() || running) return;
+    const stepIndex = selected.steps.findIndex((step) => step.id === selectedStep.id);
+    if (stepIndex < 0) return;
+    const session = createAutomationRunSession();
+    setRunning(true);
+    setRunResult(null);
+    setBatchResult(null);
+    setRunLogs([]);
+    try {
+      const result = await runAutomationStep(selected, targetSerial.split(/[\s,;]+/).filter(Boolean)[0], stepIndex, createDeviceAutomationRuntime(), { session });
+      setRunResult(result);
+      setRunLogs(result.logs);
+      setStatusText(`${t("automation.singleStep")}：${result.status}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const importScript = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const imported = parseAutomationScript(await file.text());
+    if (!imported) {
+      setStatusText(t("automation.importFailed"));
+      return;
+    }
+    setScripts((current) => [...current.filter((script) => script.id !== imported.id), imported]);
+    setSelectedId(imported.id);
+    setSelectedStepId(imported.steps[0]?.id ?? "");
+    setStatusText(t("automation.imported"));
+  };
+
   const exportScript = () => {
     if (!selected) return;
-    const blob = new Blob([JSON.stringify(selected, null, 2)], { type: "application/json" });
+    const blob = new Blob([serializeAutomationScript(selected)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -178,6 +220,8 @@ export function AutomationPage() {
           <div className="page-subtitle">{t("automation.subtitle")}</div>
         </div>
         <div className="row">
+          <input ref={fileInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => void importScript(event)} />
+          <Button variant="secondary" icon={<Upload size={14} />} onClick={() => fileInputRef.current?.click()}>{t("automation.import")}</Button>
           <Button variant="secondary" icon={<Download size={14} />} onClick={exportScript} disabled={!selected}>{t("automation.export")}</Button>
           <Button variant="primary" icon={<Plus size={14} />} onClick={create}>{t("automation.new")}</Button>
         </div>
@@ -206,6 +250,7 @@ export function AutomationPage() {
                 </div>
                 <div className="row">
                   <Button variant="secondary" icon={<Trash2 size={14} />} onClick={remove}>{t("automation.delete")}</Button>
+                  <Button variant="secondary" icon={<Play size={14} />} onClick={() => void runSingleStep()} disabled={!targetSerial.trim() || running}>{t("automation.singleStep")}</Button>
                   {running && <Button variant="secondary" icon={paused ? <Play size={14} /> : <Pause size={14} />} onClick={togglePause}>{paused ? t("automation.resume") : t("automation.pause")}</Button>}
                   <Button variant="secondary" icon={running ? <Square size={14} /> : <Play size={14} />} onClick={running ? cancelRun : () => void run()} disabled={!targetSerial.trim()}>{running ? t("automation.stop") : t("automation.run")}</Button>
                   <Button variant="primary" icon={<Save size={14} />} onClick={save}>{t("automation.save")}</Button>
@@ -244,6 +289,10 @@ export function AutomationPage() {
                     <label className="switch-row"><input type="checkbox" checked={selectedStep.continueOnError ?? false} onChange={(event) => updateSelectedStep({ continueOnError: event.target.checked })} /><span>{t("automation.continueOnError")}</span></label>
                     <div className="automation-variable-hint">{t("automation.variableHint")}</div>
                   </> : <div className="empty-state">{t("automation.noStep")}</div>}
+                </section>
+                <section className="automation-log-panel">
+                  <div className="automation-panel-head"><strong>执行日志</strong><span className="muted">{runLogs.length} 条</span></div>
+                  {runLogs.length === 0 ? <div className="empty-state">运行脚本后显示步骤结果</div> : <div className="automation-log-list">{runLogs.map((log, index) => <div key={`${log.stepId}-${index}`} className={`automation-log-row ${log.status}`}><span className="automation-log-dot" /><span className="automation-log-label">{log.label}</span><span className="automation-log-status">{log.status}</span>{log.message && <span className="automation-log-message">{log.message}</span>}</div>)}</div>}
                 </section>
               </div>
             </>

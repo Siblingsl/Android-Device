@@ -122,6 +122,20 @@ export function defaultAutomationScript(): AutomationScript {
   });
 }
 
+export function serializeAutomationScript(script: AutomationScript): string {
+  return JSON.stringify(createAutomationScript(script), null, 2);
+}
+
+export function parseAutomationScript(raw: string): AutomationScript | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || typeof parsed.id !== "string" || typeof parsed.name !== "string") return null;
+    return createAutomationScript({ ...(parsed as Partial<AutomationScript>), id: parsed.id, name: parsed.name });
+  } catch {
+    return null;
+  }
+}
+
 export function readAutomationScripts(): AutomationScript[] {
   try {
     const raw = localStorage.getItem(AUTOMATION_STORAGE_KEY);

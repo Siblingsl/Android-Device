@@ -12,10 +12,12 @@ vi.mock("../services/automationService", () => ({
 }));
 vi.mock("../lib/automationRunner", () => ({
   createAutomationRunSession: vi.fn(() => ({ signal: new AbortController().signal, pause: vi.fn(), resume: vi.fn(), cancel: vi.fn(), isPaused: () => false, waitIfPaused: async () => {} })),
+  runAutomationStep: vi.fn().mockResolvedValue({ status: "completed", completedSteps: 1, logs: [] }),
   runAutomationScript: vi.fn().mockResolvedValue({ status: "completed", completedSteps: 2, logs: [] }),
 }));
 
 const { runAutomationScript } = await import("../lib/automationRunner");
+const { runAutomationStep } = await import("../lib/automationRunner");
 
 function TestShell() {
   return (
@@ -70,6 +72,21 @@ describe("AutomationPage", () => {
       "serial-1",
       expect.anything(),
       expect.objectContaining({ session: expect.objectContaining({ signal: expect.any(AbortSignal) }) }),
+    ));
+  });
+
+  it("runs only the selected step from the workbench", async () => {
+    render(<TestShell />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "执行设备" }), { target: { value: "serial-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "单步执行" }));
+
+    await vi.waitFor(() => expect(runAutomationStep).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "设备巡检示例" }),
+      "serial-1",
+      0,
+      expect.anything(),
+      expect.anything(),
     ));
   });
 });

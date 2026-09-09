@@ -5,7 +5,9 @@ import {
   AUTOMATION_STORAGE_KEY,
   createAutomationScript,
   defaultAutomationScript,
+  parseAutomationScript,
   readAutomationScripts,
+  serializeAutomationScript,
   writeAutomationScripts,
 } from "./automation";
 
@@ -46,5 +48,13 @@ describe("automation script storage", () => {
     writeAutomationScripts([script]);
 
     expect(readAutomationScripts()).toEqual([script]);
+  });
+
+  it("serializes and safely parses one importable JSON script", () => {
+    const script = defaultAutomationScript();
+    const imported = parseAutomationScript(serializeAutomationScript(script));
+
+    expect(imported).toEqual(script);
+    expect(parseAutomationScript("{\"name\":\"bad\"}")).toBeNull();
   });
 });

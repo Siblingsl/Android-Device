@@ -1974,6 +1974,58 @@ a {
   padding: 12px 14px;
 }
 
+.automation-log-panel {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 11px 14px 13px;
+  border-top: 1px solid var(--border);
+}
+
+.automation-log-list {
+  display: grid;
+  gap: 3px;
+  max-height: 150px;
+  overflow: auto;
+  margin-top: 8px;
+}
+
+.automation-log-row {
+  display: grid;
+  grid-template-columns: 7px minmax(120px, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.automation-log-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.automation-log-row.completed .automation-log-dot { background: var(--success); }
+.automation-log-row.failed .automation-log-dot { background: var(--danger); }
+.automation-log-row.skipped .automation-log-dot { background: var(--warning); }
+
+.automation-log-label,
+.automation-log-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-log-status {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.automation-log-message {
+  color: var(--danger);
+}
+
 .automation-steps-panel {
   border-right: 1px solid var(--border);
 }
