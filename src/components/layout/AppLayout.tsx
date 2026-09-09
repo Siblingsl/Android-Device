@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StatusBar } from "./StatusBar";
 import { DetailPanel } from "./DetailPanel";
 import { WorkspaceHeader } from "./WorkspaceHeader";
@@ -8,7 +9,13 @@ import { useAppStore } from "../../stores/appStore";
 import { DeviceService } from "../../services/deviceService";
 import { tStatic } from "../../i18n/static";
 import clsx from "clsx";
-import { shortcutActionForEvent } from "../../lib/shortcuts";
+import {
+  GLOBAL_SHORTCUTS_CHANGED_EVENT,
+  readGlobalShortcutsEnabled,
+  registerGlobalShortcuts,
+  unregisterGlobalShortcuts,
+} from "../../lib/globalShortcuts";
+import { readShortcuts, shortcutActionForEvent, type ShortcutAction } from "../../lib/shortcuts";
 
 async function runAutoStart() {
   const { settings, devices, setStatusText } = useAppStore.getState();
@@ -107,6 +114,36 @@ export function AppLayout() {
   const language = useAppStore((s) => s.settings?.language);
   const booted = useRef(false);
 
+  const runShortcutAction = useCallback((action: ShortcutAction | null) => {
+    if (!action) return;
+    void (async () => {
+      try {
+        const window = getCurrentWindow();
+        await window.show();
+        await window.setFocus();
+      } catch {
+        /* Web preview or an already-closing native window */
+      }
+    })();
+    switch (action) {
+      case "openDashboard":
+        navigate("/");
+        break;
+      case "openDevices":
+        navigate("/devices");
+        break;
+      case "openTerminal":
+        navigate("/terminal");
+        break;
+      case "openSettings":
+        navigate("/settings");
+        break;
+      case "refreshWorkspace":
+        void Promise.all([refreshStatus(), refreshDevices()]);
+        break;
+    }
+  }, [navigate, refreshDevices, refreshStatus]);
+
   useEffect(() => {
     if (language) document.documentElement.lang = language;
   }, [language]);
@@ -123,31 +160,37 @@ export function AppLayout() {
   }, [loadSettings, refreshStatus, refreshDevices]);
 
   useEffect(() => {
+    let disposed = false;
+    const register = () => {
+      void registerGlobalShortcuts(
+        readShortcuts(),
+        readGlobalShortcutsEnabled(),
+        (action) => {
+          if (!disposed) runShortcutAction(action);
+        },
+      ).catch(() => {
+        /* Native registration failures are reflected by the manager status. */
+      });
+    };
+    register();
+    window.addEventListener(GLOBAL_SHORTCUTS_CHANGED_EVENT, register);
+    return () => {
+      disposed = true;
+      window.removeEventListener(GLOBAL_SHORTCUTS_CHANGED_EVENT, register);
+      void unregisterGlobalShortcuts();
+    };
+  }, [runShortcutAction]);
+
+  useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       const action = shortcutActionForEvent(event);
       if (!action) return;
       event.preventDefault();
-      switch (action) {
-        case "openDashboard":
-          navigate("/");
-          break;
-        case "openDevices":
-          navigate("/devices");
-          break;
-        case "openTerminal":
-          navigate("/terminal");
-          break;
-        case "openSettings":
-          navigate("/settings");
-          break;
-        case "refreshWorkspace":
-          void Promise.all([refreshStatus(), refreshDevices()]);
-          break;
-      }
+      runShortcutAction(action);
     };
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [navigate, refreshDevices, refreshStatus]);
+  }, [runShortcutAction]);
 
   useEffect(() => {
     const tick = () => {
