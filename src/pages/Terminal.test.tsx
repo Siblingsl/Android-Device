@@ -101,4 +101,27 @@ describe("TerminalPage", () => {
     expect(await screen.findByText(secondSession.title, { selector: ".terminal-title" })).toBeTruthy();
     expect((selector as HTMLSelectElement).value).toBe(secondSession.id);
   });
+
+  it("recalls successfully sent commands with the arrow keys", async () => {
+    renderTerminal();
+    await screen.findByText(session.title, { selector: ".terminal-title" });
+    const input = await screen.findByRole("textbox", { name: /终端命令|terminal command/i });
+
+    fireEvent.change(input, { target: { value: "first command" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(TerminalSessionService.write).toHaveBeenCalledWith(session.id, "first command\r"));
+
+    fireEvent.change(input, { target: { value: "second command" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(TerminalSessionService.write).toHaveBeenCalledWith(session.id, "second command\r"));
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect((input as HTMLInputElement).value).toBe("second command");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect((input as HTMLInputElement).value).toBe("first command");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect((input as HTMLInputElement).value).toBe("second command");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect((input as HTMLInputElement).value).toBe("");
+  });
 });

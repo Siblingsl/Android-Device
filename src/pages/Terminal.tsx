@@ -10,6 +10,7 @@ import {
 } from "../services/terminalSessionService";
 
 const MAX_OUTPUT_LENGTH = 200_000;
+const MAX_COMMAND_HISTORY = 50;
 
 export function TerminalPage() {
   const { t } = useI18n();
@@ -20,6 +21,8 @@ export function TerminalPage() {
   const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
   const [output, setOutput] = useState("");
   const [command, setCommand] = useState("");
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -38,6 +41,9 @@ export function TerminalPage() {
     setOutput("");
     setError("");
     setSession(null);
+    setCommand("");
+    setCommandHistory([]);
+    setHistoryIndex(-1);
     setLoading(true);
 
     const handleOutput = (event: TerminalOutputEvent) => {
@@ -107,7 +113,17 @@ export function TerminalPage() {
     try {
       const result = await TerminalSessionService.write(sessionId, `${value}\r`);
       if (!result.success) setError(result.error || t("terminal.writeFailed"));
-      else setCommand("");
+      else {
+        const historyValue = value.trim();
+        if (historyValue) {
+          setCommandHistory((previous) => {
+            const next = previous[previous.length - 1] === value ? previous : [...previous, value];
+            return next.slice(-MAX_COMMAND_HISTORY);
+          });
+        }
+        setHistoryIndex(-1);
+        setCommand("");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -189,11 +205,35 @@ export function TerminalPage() {
             aria-label={t("terminal.command")}
             className="terminal-input mono"
             value={command}
-            onChange={(event) => setCommand(event.target.value)}
+            onChange={(event) => {
+              setCommand(event.target.value);
+              setHistoryIndex(-1);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
                 void sendCommand();
+                return;
+              }
+              if (event.key === "ArrowUp" && commandHistory.length > 0) {
+                event.preventDefault();
+                setHistoryIndex((previous) => {
+                  const next = previous < 0 ? commandHistory.length - 1 : Math.max(0, previous - 1);
+                  setCommand(commandHistory[next] ?? "");
+                  return next;
+                });
+                return;
+              }
+              if (event.key === "ArrowDown" && historyIndex >= 0) {
+                event.preventDefault();
+                const next = historyIndex + 1;
+                if (next >= commandHistory.length) {
+                  setHistoryIndex(-1);
+                  setCommand("");
+                } else {
+                  setHistoryIndex(next);
+                  setCommand(commandHistory[next] ?? "");
+                }
                 return;
               }
               if (event.key === "c" && event.ctrlKey && !command) {
