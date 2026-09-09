@@ -1,4 +1,4 @@
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef } from "react";
 import { StatusBar } from "./StatusBar";
 import { DetailPanel } from "./DetailPanel";
@@ -8,6 +8,7 @@ import { useAppStore } from "../../stores/appStore";
 import { DeviceService } from "../../services/deviceService";
 import { tStatic } from "../../i18n/static";
 import clsx from "clsx";
+import { shortcutActionForEvent } from "../../lib/shortcuts";
 
 async function runAutoStart() {
   const { settings, devices, setStatusText } = useAppStore.getState();
@@ -98,6 +99,7 @@ async function runAutoStart() {
 
 export function AppLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const detailOpen = useAppStore((s) => s.detailOpen);
   const loadSettings = useAppStore((s) => s.loadSettings);
   const refreshStatus = useAppStore((s) => s.refreshStatus);
@@ -119,6 +121,33 @@ export function AppLayout() {
       void runAutoStart();
     })();
   }, [loadSettings, refreshStatus, refreshDevices]);
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      const action = shortcutActionForEvent(event);
+      if (!action) return;
+      event.preventDefault();
+      switch (action) {
+        case "openDashboard":
+          navigate("/");
+          break;
+        case "openDevices":
+          navigate("/devices");
+          break;
+        case "openTerminal":
+          navigate("/terminal");
+          break;
+        case "openSettings":
+          navigate("/settings");
+          break;
+        case "refreshWorkspace":
+          void Promise.all([refreshStatus(), refreshDevices()]);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, [navigate, refreshDevices, refreshStatus]);
 
   useEffect(() => {
     const tick = () => {

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
-import { ExternalLink, FolderOpen, Save } from "lucide-react";
+import { ExternalLink, FolderOpen, Keyboard, RotateCcw, Save } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -10,6 +10,15 @@ import { useToolProbe } from "../hooks/useToolProbe";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import { normalizeMonitorPreferences } from "../lib/monitorPreferences";
+import {
+  DEFAULT_SHORTCUTS,
+  findShortcutConflict,
+  formatShortcut,
+  persistShortcuts,
+  readShortcuts,
+  type ShortcutAction,
+  type ShortcutBindings,
+} from "../lib/shortcuts";
 import type { AppSettings } from "../types";
 
 const PATH_FIELDS = [
@@ -21,6 +30,14 @@ const PATH_FIELDS = [
   { key: "scrcpyPath", label: "settings.path.scrcpyPath", kind: "exe" as const },
   { key: "gappsZipPath", label: "settings.path.gappsZipPath", kind: "zip" as const },
 ] as const;
+
+const SHORTCUT_ROWS: Array<{ action: ShortcutAction; label: string; hint: string }> = [
+  { action: "openDashboard", label: "settings.shortcuts.action.openDashboard", hint: "settings.shortcuts.hint.openDashboard" },
+  { action: "openDevices", label: "settings.shortcuts.action.openDevices", hint: "settings.shortcuts.hint.openDevices" },
+  { action: "openTerminal", label: "settings.shortcuts.action.openTerminal", hint: "settings.shortcuts.hint.openTerminal" },
+  { action: "refreshWorkspace", label: "settings.shortcuts.action.refreshWorkspace", hint: "settings.shortcuts.hint.refreshWorkspace" },
+  { action: "openSettings", label: "settings.shortcuts.action.openSettings", hint: "settings.shortcuts.hint.openSettings" },
+];
 
 export function SettingsPage() {
   const { t, lang, setLang } = useI18n();
@@ -36,6 +53,9 @@ export function SettingsPage() {
   const dirty = Boolean(form && settings && JSON.stringify(form) !== JSON.stringify(settings));
   const { tools, busy: probing, probe, probeMany } = useToolProbe();
   const autoProbed = useRef(false);
+  const [shortcuts, setShortcuts] = useState<ShortcutBindings>(() => readShortcuts());
+  const [capturingShortcut, setCapturingShortcut] = useState<ShortcutAction | null>(null);
+  const [shortcutError, setShortcutError] = useState("");
 
   useEffect(() => {
     loadSettings();
@@ -97,6 +117,41 @@ export function SettingsPage() {
 
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setForm({ ...form, [key]: value });
+  };
+
+  const assignShortcut = (action: ShortcutAction, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const shortcut = formatShortcut(event.nativeEvent);
+    if (!shortcut) {
+      setShortcutError(t("settings.shortcuts.invalid"));
+      return;
+    }
+    const conflict = findShortcutConflict(shortcuts, shortcut, action);
+    if (conflict) {
+      setShortcutError(
+        t("settings.shortcuts.conflict", {
+          shortcut,
+          action: t(`settings.shortcuts.action.${conflict}`),
+        }),
+      );
+      return;
+    }
+    const next = { ...shortcuts, [action]: shortcut };
+    setShortcuts(next);
+    persistShortcuts(next);
+    setCapturingShortcut(null);
+    setShortcutError("");
+    setStatusText(t("settings.shortcuts.saved"));
+  };
+
+  const resetShortcuts = () => {
+    const next = { ...DEFAULT_SHORTCUTS };
+    setShortcuts(next);
+    persistShortcuts(next);
+    setCapturingShortcut(null);
+    setShortcutError("");
+    setStatusText(t("settings.shortcuts.reset"));
   };
 
   const pathFor = (key: "dockerPath" | "adbPath" | "scrcpyPath") =>
@@ -305,6 +360,56 @@ export function SettingsPage() {
           </div>
         </Card>
       </div>
+
+      <Card
+        title={t("settings.card.shortcuts")}
+        action={
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<RotateCcw size={13} />}
+            onClick={resetShortcuts}
+            aria-label={t("settings.shortcuts.resetButton")}
+          >
+            {t("settings.shortcuts.resetButton")}
+          </Button>
+        }
+        className="settings-shortcuts-card"
+      >
+        <div className="settings-shortcuts-intro">
+          <Keyboard size={17} aria-hidden="true" />
+          <span>{t("settings.shortcuts.intro")}</span>
+        </div>
+        <div className="shortcut-list">
+          {SHORTCUT_ROWS.map(({ action, label, hint }) => {
+            const active = capturingShortcut === action;
+            return (
+              <div className="shortcut-row" key={action}>
+                <div className="shortcut-copy">
+                  <div className="shortcut-label">{t(label)}</div>
+                  <div className="muted">{t(hint)}</div>
+                </div>
+                <button
+                  type="button"
+                  className={`shortcut-capture${active ? " active" : ""}`}
+                  aria-label={t("settings.shortcuts.capture", { action: t(label) })}
+                  onClick={() => {
+                    setCapturingShortcut(action);
+                    setShortcutError("");
+                  }}
+                  onKeyDown={(event) => {
+                    if (active) assignShortcut(action, event);
+                  }}
+                >
+                  {active ? t("settings.shortcuts.press") : shortcuts[action]}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {shortcutError && <div className="shortcut-error" role="alert">{shortcutError}</div>}
+        <div className="muted shortcut-footnote">{t("settings.shortcuts.scope")}</div>
+      </Card>
 
       <Card title={t("settings.card.monitor")} className="settings-monitor-card">
         <div className="form-grid">
