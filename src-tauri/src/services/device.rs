@@ -874,6 +874,17 @@ fn tracked_remote_path(remote: &str, operation_id: &str) -> String {
     )
 }
 
+fn tracked_upload_target(local: &str, remote: &str, operation_id: &str) -> String {
+    if std::fs::metadata(local)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        remote.to_string()
+    } else {
+        tracked_remote_path(remote, operation_id)
+    }
+}
+
 fn tracked_download_temp_path(path: &std::path::Path, operation_id: &str) -> PathBuf {
     let parent = path
         .parent()
@@ -998,7 +1009,8 @@ pub fn upload_file_tracked(
         .ok()
         .filter(|metadata| metadata.is_file())
         .map(|metadata| metadata.len());
-    let staged_remote = tracked_remote_path(remote, operation_id);
+    let staged_remote = tracked_upload_target(local, remote, operation_id);
+    let uses_staging = staged_remote != remote;
     emit_transfer_progress(
         app,
         operation_id,
@@ -1029,7 +1041,9 @@ pub fn upload_file_tracked(
     );
     let status = tracked_status(&command);
     if status != "completed" {
-        cleanup_remote_part(serial, &staged_remote);
+        if uses_staging {
+            cleanup_remote_part(serial, &staged_remote);
+        }
         let message = if status == "cancelled" {
             "cancelled"
         } else {
@@ -1052,7 +1066,9 @@ pub fn upload_file_tracked(
         };
     }
     if cancel.load(Ordering::SeqCst) {
-        cleanup_remote_part(serial, &staged_remote);
+        if uses_staging {
+            cleanup_remote_part(serial, &staged_remote);
+        }
         emit_transfer_progress(
             app,
             operation_id,
@@ -1066,27 +1082,29 @@ pub fn upload_file_tracked(
         return cancelled_transfer_result();
     }
 
-    let moved = adb::shell(
-        serial,
-        &format!(
-            "mv -f {} {}",
-            shell_quote(&staged_remote),
-            shell_quote(remote)
-        ),
-    );
-    if !moved.success {
-        cleanup_remote_part(serial, &staged_remote);
-        emit_transfer_progress(
-            app,
-            operation_id,
-            "upload",
-            "failed",
-            None,
-            total_bytes,
-            None,
-            "upload finalization failed",
+    if uses_staging {
+        let moved = adb::shell(
+            serial,
+            &format!(
+                "mv -f {} {}",
+                shell_quote(&staged_remote),
+                shell_quote(remote)
+            ),
         );
-        return moved;
+        if !moved.success {
+            cleanup_remote_part(serial, &staged_remote);
+            emit_transfer_progress(
+                app,
+                operation_id,
+                "upload",
+                "failed",
+                None,
+                total_bytes,
+                None,
+                "upload finalization failed",
+            );
+            return moved;
+        }
     }
 
     emit_transfer_progress(
@@ -1569,6 +1587,32 @@ mod metrics_tests {
         let staged = tracked_remote_path("/sdcard/report.apk", "op-1");
         assert_eq!(staged, "/sdcard/report.apk.rdc_transfer_op-1.part");
         assert_ne!(staged, "/sdcard/report.apk");
+    }
+
+    #[test]
+    fn directory_upload_targets_the_final_remote_directory() {
+        let root = std::env::temp_dir().join(format!("rdc-upload-test-{}", util::now_millis()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert_eq!(
+            tracked_upload_target(&root.to_string_lossy(), "/sdcard/backup", "op-1"),
+            "/sdcard/backup"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_upload_keeps_partial_data_separate_from_the_final_target() {
+        let file = std::env::temp_dir().join(format!("rdc-upload-test-{}.txt", util::now_millis()));
+        std::fs::write(&file, "test").unwrap();
+
+        assert_eq!(
+            tracked_upload_target(&file.to_string_lossy(), "/sdcard/backup.txt", "op-1"),
+            "/sdcard/backup.txt.rdc_transfer_op-1.part"
+        );
+
+        std::fs::remove_file(file).unwrap();
     }
 
     #[test]

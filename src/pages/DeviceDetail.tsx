@@ -102,6 +102,7 @@ type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture" | "recor
 type PreviewOutcome = { success: boolean; message: string };
 type FileTransferState = {
   kind: "upload" | "download";
+  recursive: boolean;
   operationId: string;
   target: string;
   label: string;
@@ -2242,11 +2243,16 @@ function Files({
     go(path.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/");
   };
 
-  const runUpload = async (local: string, remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`): Promise<boolean> => {
+  const runUpload = async (
+    local: string,
+    remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`,
+    recursive = false,
+  ): Promise<boolean> => {
     const name = local.split(/[/\\]/).pop() || "file";
     const operationId = createTransferId();
     const state: FileTransferState = {
       kind: "upload",
+      recursive,
       operationId,
       target: remote,
       label: name,
@@ -2261,7 +2267,7 @@ function Files({
     cancelledTransferIds.current.delete(operationId);
     cancelInFlight.current = null;
     setTransfer(state);
-    transferRetry.current = () => runUpload(local, remote);
+    transferRetry.current = () => runUpload(local, remote, recursive);
     setStatusText(t("detail.files.uploading"));
     try {
       await listenerReady.current;
@@ -2297,6 +2303,7 @@ function Files({
     const operationId = createTransferId();
     const state: FileTransferState = {
       kind: "download",
+      recursive: f.isDir,
       operationId,
       target: f.path,
       label: f.name,
@@ -2478,7 +2485,12 @@ function Files({
   const chooseUpload = async (directory: boolean) => {
    try {
       const picked = await open({ multiple: true, directory });
-     await uploadPaths(dialogPaths(picked));
+     const localPaths = dialogPaths(picked);
+     if (directory && localPaths.length === 1) {
+       await runUpload(localPaths[0], undefined, true);
+     } else {
+       await uploadPaths(localPaths);
+     }
    } catch (error) {
       if (!isDialogCancellation(error)) reportOperationError(error, t("detail.files.uploadFailed"), setStatusText);
     }
@@ -2588,9 +2600,13 @@ function Files({
         transfer.status !== "failed"),
   );
   const transferLabel = transfer
-    ? transfer.kind === "upload"
-      ? t("detail.files.uploading")
-      : t("detail.files.downloading")
+    ? transfer.recursive
+      ? transfer.kind === "upload"
+        ? t("detail.files.recursiveUploading")
+        : t("detail.files.recursiveDownloading")
+      : transfer.kind === "upload"
+        ? t("detail.files.uploading")
+        : t("detail.files.downloading")
     : "";
 
   return (
