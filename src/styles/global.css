@@ -1365,6 +1365,16 @@ a {
 .scrcpy-control-item-wrap .btn { gap: 4px; padding: 5px 7px; border-color: transparent; font-size: 11px; white-space: nowrap; }
 .scrcpy-control-label { max-width: 66px; overflow: hidden; text-overflow: ellipsis; }
 .scrcpy-control-hint { flex: 0 0 auto; margin-left: auto; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.scrcpy-options-details { margin-bottom: 8px; }
+.scrcpy-options-details summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text-secondary); font-size: 11px; list-style: none; }
+.scrcpy-options-details summary::-webkit-details-marker { display: none; }
+.scrcpy-options-details summary::before { content: "▸"; color: var(--primary); }
+.scrcpy-options-details[open] summary::before { transform: rotate(90deg); }
+.scrcpy-options-panel { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 9px; margin-top: 7px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-hover); }
+.scrcpy-options-panel > label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.scrcpy-options-panel select { height: 28px; min-width: 86px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); background: var(--bg-card); font-size: 11px; }
+.scrcpy-options-check { gap: 4px !important; }
+.scrcpy-options-check input { width: 13px; height: 13px; accent-color: var(--primary); }
 .media-control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .media-control-block { min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-hover); }
 .media-control-heading { display: flex; align-items: center; gap: 5px; margin-bottom: 8px; color: var(--text-secondary); font-size: 11px; font-weight: 700; }

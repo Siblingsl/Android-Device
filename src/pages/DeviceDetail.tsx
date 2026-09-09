@@ -71,6 +71,7 @@ import {
 } from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
 import { ScrcpyControlBar } from "../components/device/ScrcpyControlBar";
+import { ScrcpyOptionsPanel } from "../components/device/ScrcpyOptionsPanel";
 import { DeviceMediaControls, type DeviceMediaAction, type RotationMode } from "../components/device/DeviceMediaControls";
 import { DeviceInputModes } from "../components/device/DeviceInputModes";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
@@ -3769,6 +3770,11 @@ function DeviceSettings({
         </div>
         <div className="field">
           <label>{t("detail.settings.scrcpyArgs")}</label>
+          <ScrcpyOptionsPanel
+            args={scrcpyArgs}
+            disabled={offline}
+            onChange={setScrcpyArgs}
+          />
           <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
             {(
               [

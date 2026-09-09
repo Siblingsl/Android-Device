@@ -27,6 +27,12 @@ fn extra_flags(raw: &str) -> Vec<String> {
         .collect()
 }
 
+fn audio_forwarding_requested(raw: &str) -> bool {
+    extra_flags(raw).iter().any(|flag| {
+        flag == "--audio-source" || flag.starts_with("--audio-source=")
+    })
+}
+
 pub fn scrcpy_bin() -> String {
     let configured = settings::scrcpy_path();
     if Path::new(&configured).exists() {
@@ -553,8 +559,11 @@ pub fn start_with_layout(
         "--window-title".into(),
         title,
         "--stay-awake".into(),
-        "--no-audio".into(),
     ];
+    // Preserve the legacy silent default; an explicit audio source opts in.
+    if !audio_forwarding_requested(extra) {
+        args.push("--no-audio".into());
+    }
     for f in extra_flags(extra) {
         if f == "-s" || f == "--max-size" || f == "--video-bit-rate" || f == "--window-title" {
             continue;
@@ -713,6 +722,14 @@ mod tests {
     fn input_mode_rejects_unknown_modes_without_starting_a_process() {
         let options = ScrcpyInputOptions { keyboard: true, mouse: true, gamepad: false };
         assert!(input_args("unknown", &options).is_err());
+    }
+
+    #[test]
+    fn audio_source_argument_overrides_the_legacy_no_audio_default() {
+        assert!(audio_forwarding_requested("--audio-source=output"));
+        assert!(audio_forwarding_requested("--audio-source mic"));
+        assert!(!audio_forwarding_requested("--no-audio"));
+        assert!(!audio_forwarding_requested(""));
     }
 
     #[test]

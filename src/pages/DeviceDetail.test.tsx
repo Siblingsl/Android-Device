@@ -55,6 +55,7 @@ vi.mock("../services/deviceService", () => ({
     uninstallApp: vi.fn(),
     installApk: vi.fn(),
     logcat: vi.fn(),
+    scrcpyStart: vi.fn(),
     scrcpyStatus: vi.fn(),
     screenshot: vi.fn(),
   },
@@ -221,6 +222,8 @@ describe("DeviceDetail refresh ordering", () => {
       error: "unavailable",
     });
     vi.mocked(DeviceService.getDevice).mockReset();
+    vi.mocked(DeviceService.scrcpyStart).mockReset();
+    vi.mocked(DeviceService.scrcpyStart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.startContainer).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
     vi.mocked(DeviceService.stop).mockReset();
@@ -232,6 +235,7 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.downloadFileTracked).mockReset();
     vi.mocked(DeviceService.cancelFileTransfer).mockReset();
     vi.mocked(DeviceService.shell).mockReset();
+    vi.mocked(DeviceService.shell).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.startApp).mockReset();
     vi.mocked(DeviceService.stopApp).mockReset();
     vi.mocked(DeviceService.clearAppData).mockReset();
@@ -523,6 +527,31 @@ describe("DeviceDetail refresh ordering", () => {
     });
     expect(screen.queryByText("scrcpy: 旧状态")).toBeNull();
     expect(screen.getByText("scrcpy: 新状态")).toBeTruthy();
+  });
+
+  it("starts scrcpy with visual options while preserving custom arguments", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByText("常用参数"));
+    fireEvent.change(screen.getByRole("combobox", { name: "画面长边" }), { target: { value: "720" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "立即用此参数启动" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.scrcpyStart).toHaveBeenCalledWith(
+      "device-1-serial",
+      720,
+      8,
+      expect.stringContaining("--max-size 720"),
+    );
   });
 
   it("does not show an older device screenshot after the device refreshes", async () => {
