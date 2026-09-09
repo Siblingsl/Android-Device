@@ -216,6 +216,7 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.storageInfo).mockResolvedValue("storage");
     vi.mocked(DeviceService.listFiles).mockReset();
     vi.mocked(DeviceService.listFiles).mockResolvedValue([]);
+    vi.mocked(DeviceService.listApps).mockReset();
     vi.mocked(DeviceService.listApps).mockResolvedValue([]);
     vi.mocked(DeviceService.getAppDetail).mockResolvedValue(app("默认应用"));
     vi.mocked(DeviceService.getAppPermissions).mockResolvedValue("");
@@ -369,6 +370,33 @@ describe("DeviceDetail refresh ordering", () => {
     expect(document.querySelector(".file-transfer-strip")).toBeTruthy();
     expect(document.querySelector(".file-selection-rail")).toBeTruthy();
     expect(document.querySelector(".file-table-surface")).toBeTruthy();
+  });
+
+  it("keeps the app workbench rails, table surface, and detail surface visible", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("测试应用")]);
+    vi.mocked(DeviceService.getAppDetail).mockResolvedValue(app("测试应用"));
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector(".app-workbench")).toBeTruthy();
+    expect(document.querySelector(".app-filter-strip")).toBeTruthy();
+    expect(document.querySelector(".app-install-rail")).toBeTruthy();
+    expect(document.querySelector(".app-install-status")).toBeTruthy();
+    expect(document.querySelector(".app-table-surface")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector(".app-detail-surface")).toBeTruthy();
   });
 
   it("ignores an older file listing after navigating to a newer path", async () => {

@@ -2054,6 +2054,23 @@ a {
 .offline-device-history-actions .btn { min-height: 27px; padding: 4px 7px; font-size: 10px; }
 .device-note-history { overflow: hidden; margin-top: 4px; color: var(--primary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .file-drop-active .card { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.app-workbench .card-body { padding: 11px 12px 12px; }
+.app-filter-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 8px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-hover); }
+.app-filter-main { min-width: 0; gap: 6px; }
+.app-filter-main input:not([type="checkbox"]) { min-width: 140px; flex: 1 1 220px; min-height: 30px; }
+.app-filter-main label { flex: 0 0 auto; white-space: nowrap; }
+.app-filter-actions { justify-content: flex-end; }
+.app-filter-actions .btn, .app-install-rail .btn { min-height: 28px; padding: 5px 8px; font-size: 11px; }
+.app-install-rail { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.app-install-status { display: grid; gap: 4px; margin-bottom: 8px; color: var(--text-secondary); font-size: 11px; }
+.app-install-status:empty { display: none; }
+.app-install-status > [role="status"] { min-height: 27px; }
+.app-table-surface { overflow-x: auto; }
+.app-manager-table { min-width: 760px; }
+.app-manager-table th, .app-manager-table td { padding: 7px 8px; font-size: 12px; }
+.app-manager-table th { font-size: 11px; }
+.app-manager-table td:last-child .row { flex-wrap: nowrap; gap: 3px; }
+.app-detail-surface .card-body { padding-top: 10px; }
 .file-workbench .card-body { padding: 11px 12px 12px; }
 .file-location-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .file-location-main { min-width: 0; gap: 6px; }
@@ -2106,6 +2123,8 @@ a {
   .file-location-strip { grid-template-columns: 1fr; align-items: stretch; }
   .file-command-rail { justify-content: flex-start; }
   .file-manager-toolbar { align-items: flex-start; flex-direction: column; }
+  .app-filter-strip { grid-template-columns: 1fr; align-items: stretch; }
+  .app-filter-actions { justify-content: flex-start; }
 }
 @media (max-width: 680px) {
   .content { padding: 14px 12px 16px; }
@@ -2116,6 +2135,8 @@ a {
   .device-board-summary { justify-content: flex-start; }
   .device-lane-list { grid-template-columns: 1fr; }
   .dashboard-health-strip, .dashboard-activity-grid { grid-template-columns: 1fr; }
+  .app-filter-main { align-items: flex-start; flex-wrap: wrap; }
+  .app-filter-main input:not([type="checkbox"]) { min-width: 180px; }
 }
 .meta-grid {
   display: grid;

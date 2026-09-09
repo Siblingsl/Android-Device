@@ -3163,14 +3163,13 @@ function Apps({
   };
 
   return (
-    <div className="stack">
+    <div className="stack app-workbench">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
-        <div className="row-between" style={{ marginBottom: 12 }}>
-          <div className="row" style={{ flex: 1 }}>
+        <div className="app-filter-strip">
+          <div className="app-filter-main row">
             <Search size={16} className="muted" />
             <input
-              style={{ flex: 1 }}
               placeholder={t("detail.apps.searchPlaceholder")}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
@@ -3187,9 +3186,14 @@ function Apps({
               <input type="checkbox" checked={includeSystem} onChange={(e) => setIncludeSystem(e.target.checked)} />
               {t("detail.apps.includeSystem")}
             </label>
+          </div>
+          <div className="app-filter-actions row">
             <Button size="sm" onClick={load}>
               {t("common.refresh")}
             </Button>
+          </div>
+        </div>
+        <div className="app-install-rail">
             <Button
               size="sm"
               variant="primary"
@@ -3214,41 +3218,43 @@ function Apps({
             >
               {installing ? t("detail.apps.installingShort") : t("detail.apps.installApk")}
             </Button>
-          </div>
         </div>
-        {installing ? (
-          <div className="muted" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
-            {installRetry ? t("detail.apps.installing", { name: installRetry.name }) : t("detail.apps.installingShort")}
-          </div>
-        ) : installRetry?.error ? (
-          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
-            <span className="error">{installRetry.error}</span>
-            <Button size="sm" variant="ghost" onClick={() => void runInstall(installRetry.path)}>
-              {t("detail.apps.retryInstall")}
-            </Button>
-          </div>
-        ) : null}
+        <div className="app-install-status">
+          {installing ? (
+            <div className="muted" role="status" aria-live="polite">
+              {installRetry ? t("detail.apps.installing", { name: installRetry.name }) : t("detail.apps.installingShort")}
+            </div>
+          ) : installRetry?.error ? (
+            <div className="row" role="status" aria-live="polite">
+              <span className="error">{installRetry.error}</span>
+              <Button size="sm" variant="ghost" onClick={() => void runInstall(installRetry.path)}>
+                {t("detail.apps.retryInstall")}
+              </Button>
+            </div>
+          ) : null}
+        </div>
 
-        {loading ? (
-          <Skeleton count={8} height={28} />
-        ) : apps.length === 0 ? (
-          <div className="empty-state">
-            {t("detail.apps.empty")}
-            {!disabled && (
-              <span className="muted" style={{ marginLeft: 8 }}>
-                {t("detail.apps.emptyHint")}
-              </span>
-            )}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="empty-state">
-            {t("detail.apps.noMatch")}
-            <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => setKeyword("")}>
-              {t("detail.apps.clearSearch")}
-            </Button>
-          </div>
-        ) : (
-          <table className="table">
+        <div className="app-table-surface">
+          {loading ? (
+            <Skeleton count={8} height={28} />
+          ) : apps.length === 0 ? (
+            <div className="empty-state">
+              {t("detail.apps.empty")}
+              {!disabled && (
+                <span className="muted" style={{ marginLeft: 8 }}>
+                  {t("detail.apps.emptyHint")}
+                </span>
+              )}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="empty-state">
+              {t("detail.apps.noMatch")}
+              <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => setKeyword("")}>
+                {t("detail.apps.clearSearch")}
+              </Button>
+            </div>
+          ) : (
+          <table className="table app-manager-table">
             <thead>
               <tr>
                 <th>{t("detail.apps.colApp")}</th>
@@ -3414,10 +3420,12 @@ function Apps({
               ))}
             </tbody>
           </table>
-        )}
+          )}
+        </div>
       </Card>
       {detail && (
         <Card
+          className="app-detail-surface"
           title={t("detail.apps.detailTitle")}
           action={
             <div className="row">
