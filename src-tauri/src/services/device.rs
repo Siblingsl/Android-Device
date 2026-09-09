@@ -106,6 +106,11 @@ pub fn list_devices_cached(force: bool) -> Vec<DeviceInfo> {
             data_volume: matched
                 .map(|c| data_volume_of(&c.name))
                 .unwrap_or_default(),
+            battery_level: None,
+            battery_charging: None,
+            battery_temperature_c: None,
+            battery_voltage_v: None,
+            battery_power_source: None,
         });
     }
 
@@ -150,6 +155,11 @@ pub fn list_devices_cached(force: bool) -> Vec<DeviceInfo> {
             adb_port: port,
             scrcpy_port: 0,
             data_volume: data_volume_of(&c.name),
+            battery_level: None,
+            battery_charging: None,
+            battery_temperature_c: None,
+            battery_voltage_v: None,
+            battery_power_source: None,
         });
     }
 
@@ -166,9 +176,15 @@ pub fn enrich_device(mut d: DeviceInfo) -> DeviceInfo {
     // Single shell batch to cut process spawn cost
     let batch = adb::shell(
         &serial,
-        "CPU1=$(awk '/^cpu / {idle=$5+$6; total=$2+$3+$4+$5+$6+$7+$8+$9+$10; print total, idle}' /proc/stat); sleep 0.2; CPU2=$(awk '/^cpu / {idle=$5+$6; total=$2+$3+$4+$5+$6+$7+$8+$9+$10; print total, idle}' /proc/stat); echo CPUUSE=$(awk -v first=\"$CPU1\" -v second=\"$CPU2\" 'BEGIN {split(first,a); split(second,b); total=b[1]-a[1]; idle=b[2]-a[2]; if(total>0) printf \"%.1f\", ((total-idle)*100/total); else print 0}'); echo MEMSTAT=$(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{if(t>0) print t, t-a; else print 0, 0}' /proc/meminfo); echo VER=$(getprop ro.build.version.release); echo MODEL=$(getprop ro.product.model); echo ABI=$(getprop ro.product.cpu.abi); echo SIZE=$(wm size 2>/dev/null | tail -1); echo DPI=$(wm density 2>/dev/null | tail -1); echo MEM=$(grep MemTotal /proc/meminfo 2>/dev/null); echo MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || cat /sys/class/net/eth0/address 2>/dev/null); echo UP=$(cat /proc/uptime 2>/dev/null | awk '{print $1}')",
+        "CPU1=$(awk '/^cpu / {idle=$5+$6; total=$2+$3+$4+$5+$6+$7+$8+$9+$10; print total, idle}' /proc/stat); sleep 0.2; CPU2=$(awk '/^cpu / {idle=$5+$6; total=$2+$3+$4+$5+$6+$7+$8+$9+$10; print total, idle}' /proc/stat); echo CPUUSE=$(awk -v first=\"$CPU1\" -v second=\"$CPU2\" 'BEGIN {split(first,a); split(second,b); total=b[1]-a[1]; idle=b[2]-a[2]; if(total>0) printf \"%.1f\", ((total-idle)*100/total); else print 0}'); echo MEMSTAT=$(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{if(t>0) print t, t-a; else print 0, 0}' /proc/meminfo); echo VER=$(getprop ro.build.version.release); echo MODEL=$(getprop ro.product.model); echo ABI=$(getprop ro.product.cpu.abi); echo SIZE=$(wm size 2>/dev/null | tail -1); echo DPI=$(wm density 2>/dev/null | tail -1); echo MEM=$(grep MemTotal /proc/meminfo 2>/dev/null); echo MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || cat /sys/class/net/eth0/address 2>/dev/null); echo UP=$(cat /proc/uptime 2>/dev/null | awk '{print $1}'); echo BATT=$(dumpsys battery 2>/dev/null | tr '\n' ';')",
     );
     let runtime = parse_android_runtime_metrics(&batch.stdout);
+    let battery = batch
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("BATT="))
+        .map(parse_battery_metrics)
+        .unwrap_or_default();
     d.cpu_usage = runtime.cpu_usage;
     d.memory_usage = runtime.memory_usage;
     d.memory_total_mb = runtime.memory_total_mb;
@@ -229,6 +245,11 @@ pub fn enrich_device(mut d: DeviceInfo) -> DeviceInfo {
         d.resource_source = "container".into();
     }
     d.scrcpy_status = scrcpy::status(&serial);
+    d.battery_level = battery.level;
+    d.battery_charging = battery.charging;
+    d.battery_temperature_c = battery.temperature_c;
+    d.battery_voltage_v = battery.voltage_v;
+    d.battery_power_source = battery.power_source;
     d
 }
 
@@ -333,6 +354,66 @@ fn parse_android_runtime_metrics(output: &str) -> DeviceRuntimeMetrics {
     }
 
     metrics
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct DeviceBatteryMetrics {
+    level: Option<u8>,
+    charging: Option<bool>,
+    temperature_c: Option<f64>,
+    voltage_v: Option<f64>,
+    power_source: Option<String>,
+}
+
+fn parse_battery_metrics(output: &str) -> DeviceBatteryMetrics {
+    let mut values = std::collections::HashMap::<String, String>::new();
+    for entry in output.split(';') {
+        let Some((key, value)) = entry.split_once(':') else {
+            continue;
+        };
+        values.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+    }
+
+    let scale = values
+        .get("scale")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+        .unwrap_or(100.0);
+    let level = values
+        .get("level")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| *value >= 0.0)
+        .map(|value| ((value / scale) * 100.0).round().clamp(0.0, 100.0) as u8);
+    let charging = values.get("status").and_then(|value| match value.as_str() {
+        "2" => Some(true),
+        "1" | "3" | "4" | "5" => Some(false),
+        _ => None,
+    });
+    let temperature_c = values
+        .get("temperature")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+        .map(|value| if value.abs() > 100.0 { value / 10.0 } else { value });
+    let voltage_v = values
+        .get("voltage")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+        .map(|value| if value.abs() > 100.0 { value / 1000.0 } else { value });
+
+    let mut sources = Vec::new();
+    for (key, label) in [("ac powered", "AC"), ("usb powered", "USB"), ("wireless powered", "Wireless")] {
+        if values.get(key).is_some_and(|value| value.eq_ignore_ascii_case("true")) {
+            sources.push(label);
+        }
+    }
+
+    DeviceBatteryMetrics {
+        level,
+        charging,
+        temperature_c,
+        voltage_v,
+        power_source: (!sources.is_empty()).then(|| sources.join(" + ")),
+    }
 }
 
 pub fn get_device(id: &str) -> Option<DeviceInfo> {
@@ -1415,6 +1496,30 @@ mod metrics_tests {
         assert_eq!(metrics.memory_usage, 0.0);
         assert_eq!(metrics.memory_total_mb, 0);
         assert_eq!(metrics.memory_used_mb, 0);
+    }
+
+    #[test]
+    fn parse_battery_metrics_reports_charge_state_and_power_source() {
+        let metrics = parse_battery_metrics(
+            "status: 2; level: 78; scale: 100; voltage: 4210; temperature: 315; AC powered: false; USB powered: true; Wireless powered: false;",
+        );
+
+        assert_eq!(metrics.level, Some(78));
+        assert_eq!(metrics.charging, Some(true));
+        assert_eq!(metrics.temperature_c, Some(31.5));
+        assert_eq!(metrics.voltage_v, Some(4.21));
+        assert_eq!(metrics.power_source.as_deref(), Some("USB"));
+    }
+
+    #[test]
+    fn parse_battery_metrics_keeps_unavailable_values_empty() {
+        let metrics = parse_battery_metrics("present: false; status: 1; level: -1; voltage: 0; temperature: 0;");
+
+        assert_eq!(metrics.level, None);
+        assert_eq!(metrics.charging, Some(false));
+        assert_eq!(metrics.temperature_c, None);
+        assert_eq!(metrics.voltage_v, None);
+        assert_eq!(metrics.power_source, None);
     }
 
     #[test]

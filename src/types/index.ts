@@ -38,6 +38,11 @@ export interface DeviceInfo {
   adbPort: number;
   scrcpyPort: number;
   dataVolume?: string;
+  batteryLevel?: number;
+  batteryCharging?: boolean;
+  batteryTemperatureC?: number;
+  batteryVoltageV?: number;
+  batteryPowerSource?: string;
 }
 
 export interface CreateInstanceRequest {

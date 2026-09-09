@@ -51,6 +51,16 @@ pub struct DeviceInfo {
     pub scrcpy_port: u16,
     #[serde(default)]
     pub data_volume: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_level: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_charging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_temperature_c: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_voltage_v: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_power_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
