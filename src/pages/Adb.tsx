@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookmarkPlus, Cable, Link2, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench } from "lucide-react";
+import { BookmarkPlus, Cable, Camera, ImagePlus, Link2, QrCode, Radio, RefreshCw, Trash2, Unplug, Usb, Wrench } from "lucide-react";
 import QRCode from "qrcode";
 import { copyText } from "../lib/clipboard";
+import { decodeQrImageFile, decodeQrVideoFrame } from "../lib/qrScanner";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
@@ -66,6 +67,12 @@ export function AdbPage() {
   } | null>(null);
   const [qrBusy, setQrBusy] = useState(false);
   const [qrInput, setQrInput] = useState("");
+  const [qrImageBusy, setQrImageBusy] = useState(false);
+  const [qrScannerMode, setQrScannerMode] = useState<"camera" | null>(null);
+  const qrFileInput = useRef<HTMLInputElement>(null);
+  const qrVideoRef = useRef<HTMLVideoElement>(null);
+  const qrCanvasRef = useRef<HTMLCanvasElement>(null);
+  const qrStream = useRef<MediaStream | null>(null);
   const [savedAddresses, setSavedAddresses] = useState<SavedWirelessAddress[]>(() => {
     try {
       const raw = localStorage.getItem("rdc.adb.savedWirelessAddresses");
@@ -289,8 +296,8 @@ export function AdbPage() {
     await pairWirelessAddress(pairingService.address, qrPair.pairingSecret);
   };
 
-  const importQrPairing = async () => {
-    const parsed = parseAdbQrPayload(qrInput);
+  const pairQrPayload = async (rawPayload: string) => {
+    const parsed = parseAdbQrPayload(rawPayload);
     if (!parsed) {
       setStatusText(t("adb.wireless.qrImportInvalid"));
       void alert(t("adb.wireless.qrImportInvalid"));
@@ -314,6 +321,94 @@ export function AdbPage() {
     if (connectService) {
       setSavedAddresses((entries) => upsertSavedWirelessAddress(entries, connectService.address, parsed.instanceName));
       setStatusText(t("adb.wireless.qrImportSaved", { address: connectService.address }));
+    }
+  };
+
+  const importQrPairing = () => void pairQrPayload(qrInput);
+
+  const stopQrCamera = () => {
+    qrStream.current?.getTracks().forEach((track) => track.stop());
+    qrStream.current = null;
+    setQrScannerMode(null);
+  };
+
+  useEffect(() => () => {
+    qrStream.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  useEffect(() => {
+    if (qrScannerMode !== "camera" || !qrStream.current || !qrVideoRef.current || !qrCanvasRef.current) return;
+    const video = qrVideoRef.current;
+    const canvas = qrCanvasRef.current;
+    video.srcObject = qrStream.current;
+    void video.play().catch(() => {
+      /* autoplay may require a user gesture in some WebViews */
+    });
+    let active = true;
+    let frame = 0;
+    const scan = () => {
+      if (!active) return;
+      const payload = decodeQrVideoFrame(video, canvas);
+      if (payload) {
+        active = false;
+        qrStream.current?.getTracks().forEach((track) => track.stop());
+        qrStream.current = null;
+        setQrScannerMode(null);
+        setQrInput(payload);
+        void pairQrPayload(payload);
+        return;
+      }
+      frame = window.requestAnimationFrame(scan);
+    };
+    frame = window.requestAnimationFrame(scan);
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frame);
+      video.srcObject = null;
+    };
+  }, [qrScannerMode]);
+
+  const startQrCamera = async () => {
+    if (qrScannerMode === "camera") {
+      stopQrCamera();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatusText(t("adb.wireless.qrCameraUnsupported"));
+      void alert(t("adb.wireless.qrCameraUnsupported"));
+      return;
+    }
+    try {
+      qrStream.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      setQrScannerMode("camera");
+      setStatusText(t("adb.wireless.qrCameraReady"));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatusText(t("adb.wireless.qrCameraFailed", { msg: message }));
+      void alert(t("adb.wireless.qrCameraFailed", { msg: message }));
+    }
+  };
+
+  const handleQrImageSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setQrImageBusy(true);
+    try {
+      const payload = await decodeQrImageFile(file);
+      if (!payload) {
+        setStatusText(t("adb.wireless.qrImageInvalid"));
+        void alert(t("adb.wireless.qrImageInvalid"));
+        return;
+      }
+      setQrInput(payload);
+      await pairQrPayload(payload);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setStatusText(t("adb.wireless.qrImageFailed", { msg: message }));
+      void alert(t("adb.wireless.qrImageFailed", { msg: message }));
+    } finally {
+      setQrImageBusy(false);
     }
   };
 
@@ -668,6 +763,22 @@ export function AdbPage() {
               <Button size="sm" variant="secondary" loading={pairingBusy} disabled={!adbOk || pairingBusy || !qrInput.trim()} onClick={() => void importQrPairing()}>
                 {t("adb.wireless.qrImportButton")}
               </Button>
+              <div className="row wireless-qr-scan-actions">
+                <input ref={qrFileInput} type="file" accept="image/*" hidden onChange={(event) => void handleQrImageSelected(event)} />
+                <Button size="sm" variant="ghost" icon={<ImagePlus size={14} />} loading={qrImageBusy} disabled={!adbOk || pairingBusy || qrImageBusy} onClick={() => qrFileInput.current?.click()}>
+                  {t("adb.wireless.qrImageButton")}
+                </Button>
+                <Button size="sm" variant={qrScannerMode === "camera" ? "danger" : "ghost"} icon={<Camera size={14} />} disabled={!adbOk || pairingBusy || qrImageBusy} onClick={() => void startQrCamera()}>
+                  {qrScannerMode === "camera" ? t("adb.wireless.qrCameraStop") : t("adb.wireless.qrCameraButton")}
+                </Button>
+              </div>
+              {qrScannerMode === "camera" ? (
+                <div className="wireless-qr-camera">
+                  <video ref={qrVideoRef} muted playsInline aria-label={t("adb.wireless.qrCameraPreview")} />
+                  <canvas ref={qrCanvasRef} hidden />
+                  <span className="muted">{t("adb.wireless.qrCameraHint")}</span>
+                </div>
+              ) : null}
             </div>
             {qrPair ? (
               <div className="wireless-qr-result">

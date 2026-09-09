@@ -2350,6 +2350,22 @@ a {
   font-family: var(--font-mono);
   font-size: 12px;
 }
+.wireless-qr-scan-actions {
+  flex-wrap: wrap;
+}
+.wireless-qr-camera {
+  display: grid;
+  gap: 6px;
+  max-width: 360px;
+}
+.wireless-qr-camera video {
+  width: 100%;
+  min-height: 160px;
+  max-height: 260px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #101418;
+}
 .wireless-saved-list,
 .wireless-mdns-list {
   display: flex;

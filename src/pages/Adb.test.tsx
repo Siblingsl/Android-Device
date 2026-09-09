@@ -158,6 +158,20 @@ describe("AdbPage refresh ordering", () => {
     expect(screen.getByText("服务名")).toBeTruthy();
   });
 
+  it("offers image import and camera scanning for phone QR pairing", async () => {
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "选择二维码图片" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "摄像头扫码" })).toBeTruthy();
+  });
+
   it("imports an Android QR payload and pairs the matching mDNS service", async () => {
     vi.mocked(DeviceService.adbMdnsServices).mockResolvedValue([
       { instanceName: "phone-pair", serviceType: "_adb-tls-pairing._tcp", address: "192.168.1.20:37145" },
