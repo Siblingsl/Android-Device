@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAutomationScript } from "./automation";
-import { runAutomationScript, type AutomationRuntime } from "./automationRunner";
+import { createAutomationRunSession, runAutomationBatch, runAutomationScript, type AutomationRuntime } from "./automationRunner";
 
 function runtime(calls: string[]): AutomationRuntime {
   return {
     tap: async (_serial, x, y) => { calls.push(`tap:${x},${y}`); },
     swipe: async (_serial, x1, y1, x2, y2, duration) => { calls.push(`swipe:${x1},${y1},${x2},${y2},${duration}`); },
+    longPress: async (_serial, x, y, duration) => { calls.push(`long:${x},${y},${duration}`); },
     text: async (_serial, value) => { calls.push(`text:${value}`); },
     keyevent: async (_serial, code) => { calls.push(`key:${code}`); },
     shell: async (_serial, command) => { calls.push(`shell:${command}`); },
@@ -72,5 +73,47 @@ describe("automation runner", () => {
 
     expect(result.status).toBe("cancelled");
     expect(calls).toEqual([]);
+  });
+
+  it("pauses between steps and resumes through the execution session", async () => {
+    const calls: string[] = [];
+    const session = createAutomationRunSession();
+    session.pause();
+    const script = createAutomationScript({
+      id: "script-4",
+      name: "暂停",
+      steps: [{ id: "tap", kind: "tap", label: "点按", enabled: true, params: { x: 1, y: 2 } }],
+    });
+    const pending = runAutomationScript(script, "serial-1", runtime(calls), { session });
+    await Promise.resolve();
+    expect(calls).toEqual([]);
+    session.resume();
+    await pending;
+    expect(calls).toEqual(["tap:1,2"]);
+  });
+
+  it("runs multiple devices with a bounded concurrency", async () => {
+    const active: string[] = [];
+    let maxActive = 0;
+    const script = createAutomationScript({
+      id: "script-5",
+      name: "批量巡检",
+      steps: [{ id: "shell", kind: "shell", label: "命令", enabled: true, params: { command: "echo ok" } }],
+    });
+    const makeRuntime = (): AutomationRuntime => ({
+      ...runtime([]),
+      shell: async (serial) => {
+        active.push(serial);
+        maxActive = Math.max(maxActive, active.length);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active.splice(active.indexOf(serial), 1);
+      },
+    });
+
+    const result = await runAutomationBatch(script, ["one", "two", "three"], makeRuntime, { concurrency: 2 });
+
+    expect(result.status).toBe("completed");
+    expect(result.results.map((entry) => entry.serial)).toEqual(["one", "two", "three"]);
+    expect(maxActive).toBeLessThanOrEqual(2);
   });
 });

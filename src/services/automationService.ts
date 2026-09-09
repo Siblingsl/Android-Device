@@ -10,6 +10,7 @@ export function createDeviceAutomationRuntime(): AutomationRuntime {
   return {
     tap: async (serial, x, y) => assertSuccess(await DeviceService.tap(serial, x, y), "点按失败"),
     swipe: async (serial, x1, y1, x2, y2, duration) => assertSuccess(await DeviceService.swipe(serial, x1, y1, x2, y2, duration), "滑动失败"),
+    longPress: async (serial, x, y, duration) => assertSuccess(await DeviceService.longPress(serial, x, y, duration), "长按失败"),
     text: async (serial, value) => assertSuccess(await DeviceService.text(serial, value), "输入文本失败"),
     keyevent: async (serial, code) => assertSuccess(await DeviceService.keyevent(serial, code), "按键失败"),
     shell: async (serial, command) => assertSuccess(await DeviceService.shell(serial, command), "Shell 执行失败"),

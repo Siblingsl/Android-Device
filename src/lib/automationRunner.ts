@@ -1,5 +1,7 @@
 import type {
   AutomationRunLog,
+  AutomationBatchResult,
+  AutomationBatchDeviceResult,
   AutomationRunResult,
   AutomationScript,
   AutomationStep,
@@ -9,6 +11,7 @@ import type {
 export interface AutomationRuntime {
   tap: (serial: string, x: number, y: number) => Promise<void>;
   swipe: (serial: string, x1: number, y1: number, x2: number, y2: number, duration: number) => Promise<void>;
+  longPress: (serial: string, x: number, y: number, duration: number) => Promise<void>;
   text: (serial: string, value: string) => Promise<void>;
   keyevent: (serial: string, code: number) => Promise<void>;
   shell: (serial: string, command: string) => Promise<void>;
@@ -21,6 +24,40 @@ export interface AutomationRuntime {
 export interface AutomationRunOptions {
   signal?: AbortSignal;
   variables?: Record<string, string>;
+  session?: AutomationRunSession;
+}
+
+export interface AutomationBatchOptions extends AutomationRunOptions {
+  concurrency?: number;
+  onDeviceResult?: (entry: AutomationBatchDeviceResult) => void;
+}
+
+export interface AutomationRunSession {
+  signal: AbortSignal;
+  pause: () => void;
+  resume: () => void;
+  cancel: () => void;
+  isPaused: () => boolean;
+  waitIfPaused: () => Promise<void>;
+}
+
+export function createAutomationRunSession(): AutomationRunSession {
+  const controller = new AbortController();
+  let paused = false;
+  let waiters: Array<() => void> = [];
+  return {
+    signal: controller.signal,
+    pause: () => { paused = true; },
+    resume: () => {
+      paused = false;
+      const current = waiters;
+      waiters = [];
+      current.forEach((resolve) => resolve());
+    },
+    cancel: () => controller.abort(),
+    isPaused: () => paused,
+    waitIfPaused: () => paused ? new Promise<void>((resolve) => waiters.push(resolve)) : Promise.resolve(),
+  };
 }
 
 function now(): string {
@@ -86,6 +123,9 @@ async function executeStep(step: AutomationStep, serial: string, runtime: Automa
     case "swipe":
       await runtime.swipe(serial, asNumber(valueOf(step, "x1", 0), 0), asNumber(valueOf(step, "y1", 0), 0), asNumber(valueOf(step, "x2", 0), 0), asNumber(valueOf(step, "y2", 0), 0), asNumber(valueOf(step, "duration", 300), 300));
       return;
+    case "longPress":
+      await runtime.longPress(serial, asNumber(valueOf(step, "x", 0), 0), asNumber(valueOf(step, "y", 0), 0), asNumber(valueOf(step, "duration", 800), 800));
+      return;
     case "text":
       await runtime.text(serial, asString(valueOf(step, "text", "")));
       return;
@@ -133,9 +173,15 @@ export async function runAutomationScript(
       continue;
     }
     try {
+      await options.session?.waitIfPaused();
       ensureActive(options.signal);
+      const activeSignal = options.session?.signal ?? options.signal;
+      ensureActive(activeSignal);
       const startedAt = now();
-      await executeStep(expandParams(rawStep, variables), serial, runtime, options.signal);
+      const step = expandParams(rawStep, variables);
+      await wait(Math.max(0, step.beforeDelayMs ?? 0), activeSignal);
+      await executeStep(step, serial, runtime, activeSignal);
+      await wait(Math.max(0, step.afterDelayMs ?? 0), activeSignal);
       completedSteps += 1;
       logs.push({ stepId: rawStep.id, label: rawStep.label, status: "completed", startedAt, finishedAt: now() });
     } catch (cause) {
@@ -149,4 +195,43 @@ export async function runAutomationScript(
   }
 
   return { status: "completed", completedSteps, logs };
+}
+
+export async function runAutomationBatch(
+  script: AutomationScript,
+  serials: string[],
+  runtimeFactory: (serial: string) => AutomationRuntime,
+  options: AutomationBatchOptions = {},
+): Promise<AutomationBatchResult> {
+  const uniqueSerials = [...new Set(serials.map((serial) => serial.trim()).filter(Boolean))];
+  const results: AutomationBatchDeviceResult[] = [];
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(8, Math.floor(options.concurrency ?? 2), uniqueSerials.length || 1));
+  const worker = async () => {
+    while (cursor < uniqueSerials.length) {
+      ensureActive(options.signal);
+      const index = cursor;
+      cursor += 1;
+      const serial = uniqueSerials[index];
+      const result = await runAutomationScript(script, serial, runtimeFactory(serial), options);
+      const entry = { serial, result };
+      results[index] = entry;
+      options.onDeviceResult?.(entry);
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") {
+      return { status: "cancelled", results: results.filter(Boolean) };
+    }
+    throw cause;
+  }
+  const ordered = results.filter(Boolean);
+  const status = ordered.some((entry) => entry.result.status === "failed")
+    ? "failed"
+    : ordered.some((entry) => entry.result.status === "cancelled")
+      ? "cancelled"
+      : "completed";
+  return { status, results: ordered };
 }

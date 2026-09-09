@@ -11,6 +11,7 @@ vi.mock("../services/automationService", () => ({
   createDeviceAutomationRuntime: vi.fn(() => ({})),
 }));
 vi.mock("../lib/automationRunner", () => ({
+  createAutomationRunSession: vi.fn(() => ({ signal: new AbortController().signal, pause: vi.fn(), resume: vi.fn(), cancel: vi.fn(), isPaused: () => false, waitIfPaused: async () => {} })),
   runAutomationScript: vi.fn().mockResolvedValue({ status: "completed", completedSteps: 2, logs: [] }),
 }));
 
@@ -68,7 +69,7 @@ describe("AutomationPage", () => {
       expect.objectContaining({ name: "设备巡检示例" }),
       "serial-1",
       expect.anything(),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({ session: expect.objectContaining({ signal: expect.any(AbortSignal) }) }),
     ));
   });
 });

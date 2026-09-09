@@ -1988,6 +1988,24 @@ a {
   font-size: 12px;
 }
 
+.automation-step-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.automation-step-add select {
+  height: 28px;
+  max-width: 108px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  outline: none;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
 .automation-step-list {
   display: grid;
   gap: 5px;

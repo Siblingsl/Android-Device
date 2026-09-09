@@ -5,6 +5,7 @@ vi.mock("./deviceService", () => ({
   DeviceService: {
     tap: vi.fn().mockResolvedValue({ success: true }),
     swipe: vi.fn().mockResolvedValue({ success: true }),
+    longPress: vi.fn().mockResolvedValue({ success: true }),
     text: vi.fn().mockResolvedValue({ success: true }),
     keyevent: vi.fn().mockResolvedValue({ success: true }),
     shell: vi.fn().mockResolvedValue({ success: true }),

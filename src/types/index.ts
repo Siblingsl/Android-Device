@@ -217,6 +217,7 @@ export interface LogEntry {
 export type AutomationStepKind =
   | "tap"
   | "swipe"
+  | "longPress"
   | "text"
   | "key"
   | "shell"
@@ -237,6 +238,8 @@ export interface AutomationStep {
   label: string;
   enabled: boolean;
   continueOnError?: boolean;
+  beforeDelayMs?: number;
+  afterDelayMs?: number;
   params: Record<string, AutomationStepValue>;
 }
 
@@ -269,6 +272,16 @@ export interface AutomationRunResult {
   status: AutomationRunStatus;
   completedSteps: number;
   logs: AutomationRunLog[];
+}
+
+export interface AutomationBatchDeviceResult {
+  serial: string;
+  result: AutomationRunResult;
+}
+
+export interface AutomationBatchResult {
+  status: AutomationRunStatus;
+  results: AutomationBatchDeviceResult[];
 }
 
 export interface ShellResult {

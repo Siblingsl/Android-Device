@@ -5,6 +5,7 @@ import {
   GripVertical,
   Image,
   MousePointer2,
+  Pause,
   Play,
   Plus,
   Save,
@@ -20,13 +21,13 @@ import {
   readAutomationScripts,
   writeAutomationScripts,
 } from "../lib/automation";
-import { runAutomationScript } from "../lib/automationRunner";
+import { createAutomationRunSession, runAutomationBatch, runAutomationScript, type AutomationRunSession } from "../lib/automationRunner";
 import { createDeviceAutomationRuntime } from "../services/automationService";
 import { useAppStore } from "../stores/appStore";
-import type { AutomationRunResult, AutomationScript, AutomationStep, AutomationStepKind, AutomationStepValue } from "../types";
+import type { AutomationBatchResult, AutomationRunResult, AutomationScript, AutomationStep, AutomationStepKind, AutomationStepValue } from "../types";
 
 const STEP_KINDS: AutomationStepKind[] = [
-  "wait", "screenshot", "tap", "swipe", "text", "key", "shell", "record", "launch", "install", "imageMatch", "if", "loop",
+  "wait", "screenshot", "tap", "swipe", "longPress", "text", "key", "shell", "record", "launch", "install", "imageMatch", "if", "loop",
 ];
 
 function iconForStep(kind: AutomationStepKind) {
@@ -38,7 +39,7 @@ function iconForStep(kind: AutomationStepKind) {
 function makeStep(kind: AutomationStepKind, index: number, t: (key: string) => string): AutomationStep {
   const params: Record<AutomationStepKind, Record<string, AutomationStepValue>> = {
     wait: { milliseconds: 500 }, screenshot: { outputPath: "${screenshotDir}" }, tap: { x: 0, y: 0 },
-    swipe: { x1: 0, y1: 0, x2: 0, y2: 0, duration: 300 }, text: { text: "" }, key: { keycode: 3 },
+    swipe: { x1: 0, y1: 0, x2: 0, y2: 0, duration: 300 }, longPress: { x: 0, y: 0, duration: 800 }, text: { text: "" }, key: { keycode: 3 },
     shell: { command: "" }, record: { outputPath: "", durationSeconds: 0 }, launch: { packageName: "" },
     install: { path: "" }, imageMatch: { imagePath: "", threshold: 0.85, followMatchPoint: true },
     if: { expression: "" }, loop: { count: 1 },
@@ -57,10 +58,13 @@ export function AutomationPage() {
   });
   const [selectedId, setSelectedId] = useState(() => readAutomationScripts()[0]?.id ?? "");
   const [selectedStepId, setSelectedStepId] = useState("");
+  const [newStepKind, setNewStepKind] = useState<AutomationStepKind>("tap");
   const [targetSerial, setTargetSerial] = useState("");
   const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [runResult, setRunResult] = useState<AutomationRunResult | null>(null);
-  const runController = useRef<AbortController | null>(null);
+  const [batchResult, setBatchResult] = useState<AutomationBatchResult | null>(null);
+  const runController = useRef<AutomationRunSession | null>(null);
 
   const selected = useMemo(
     () => scripts.find((script) => script.id === selectedId) ?? scripts[0] ?? null,
@@ -119,21 +123,41 @@ export function AutomationPage() {
 
   const run = async () => {
     if (!selected || !targetSerial.trim() || running) return;
-    const controller = new AbortController();
-    runController.current = controller;
+    const serials = [...new Set(targetSerial.split(/[\s,;]+/).map((serial) => serial.trim()).filter(Boolean))];
+    const session = createAutomationRunSession();
+    runController.current = session;
     setRunning(true);
+    setPaused(false);
     setRunResult(null);
+    setBatchResult(null);
     try {
-      const result = await runAutomationScript(selected, targetSerial.trim(), createDeviceAutomationRuntime(), { signal: controller.signal });
-      setRunResult(result);
-      setStatusText(`${t("automation.run")}：${result.status}`);
+      if (serials.length === 1) {
+        const result = await runAutomationScript(selected, serials[0], createDeviceAutomationRuntime(), { session });
+        setRunResult(result);
+        setStatusText(`${t("automation.run")}：${result.status}`);
+      } else {
+        const result = await runAutomationBatch(selected, serials, () => createDeviceAutomationRuntime(), { session, concurrency: 2 });
+        setBatchResult(result);
+        setStatusText(`${t("automation.run")}：${result.status}`);
+      }
     } finally {
       runController.current = null;
       setRunning(false);
+      setPaused(false);
     }
   };
 
-  const cancelRun = () => runController.current?.abort();
+  const cancelRun = () => runController.current?.cancel();
+  const togglePause = () => {
+    if (!runController.current) return;
+    if (paused) {
+      runController.current.resume();
+      setPaused(false);
+    } else {
+      runController.current.pause();
+      setPaused(true);
+    }
+  };
 
   const exportScript = () => {
     if (!selected) return;
@@ -182,19 +206,20 @@ export function AutomationPage() {
                 </div>
                 <div className="row">
                   <Button variant="secondary" icon={<Trash2 size={14} />} onClick={remove}>{t("automation.delete")}</Button>
-                  <Button variant="secondary" icon={running ? <Square size={14} /> : <Play size={14} />} onClick={running ? cancelRun : () => void run()} disabled={!targetSerial.trim()}>{running ? "停止运行" : t("automation.run")}</Button>
+                  {running && <Button variant="secondary" icon={paused ? <Play size={14} /> : <Pause size={14} />} onClick={togglePause}>{paused ? t("automation.resume") : t("automation.pause")}</Button>}
+                  <Button variant="secondary" icon={running ? <Square size={14} /> : <Play size={14} />} onClick={running ? cancelRun : () => void run()} disabled={!targetSerial.trim()}>{running ? t("automation.stop") : t("automation.run")}</Button>
                   <Button variant="primary" icon={<Save size={14} />} onClick={save}>{t("automation.save")}</Button>
                 </div>
               </div>
               <div className="automation-meta-form">
                 <label><span>{t("automation.name")}</span><input aria-label={t("automation.name")} value={selected.name} onChange={(event) => updateSelected({ name: event.target.value })} /></label>
                 <label className="wide"><span>{t("automation.description")}</span><input value={selected.description} onChange={(event) => updateSelected({ description: event.target.value })} /></label>
-                <label><span>执行设备</span><input aria-label="执行设备" placeholder="设备 Serial" value={targetSerial} onChange={(event) => setTargetSerial(event.target.value)} /></label>
+                <label><span>{t("automation.targets")}</span><input aria-label="执行设备" placeholder="设备 Serial" value={targetSerial} onChange={(event) => setTargetSerial(event.target.value)} /></label>
                 <label className="switch-row"><input type="checkbox" checked={selected.enabled} onChange={(event) => updateSelected({ enabled: event.target.checked })} /><span>{t("automation.enabled")}</span></label>
               </div>
               <div className="automation-body">
                 <section className="automation-steps-panel">
-                  <div className="automation-panel-head"><strong>{t("automation.steps")}</strong><div className="automation-step-add"><Button size="sm" variant="ghost" icon={<Plus size={13} />} onClick={() => addStep("tap")}>{t("automation.addStep")}</Button></div></div>
+                  <div className="automation-panel-head"><strong>{t("automation.steps")}</strong><div className="automation-step-add"><select aria-label={t("automation.addStepType")} value={newStepKind} onChange={(event) => setNewStepKind(event.target.value as AutomationStepKind)}>{STEP_KINDS.map((kind) => <option key={kind} value={kind}>{t(`automation.step.${kind}`)}</option>)}</select><Button size="sm" variant="ghost" icon={<Plus size={13} />} onClick={() => addStep(newStepKind)}>{t("automation.addStep")}</Button></div></div>
                   <div className="automation-step-list">
                     {selected.steps.map((step, index) => {
                       const Icon = iconForStep(step.kind);
@@ -210,6 +235,7 @@ export function AutomationPage() {
                 <section className="automation-detail-panel">
                   <div className="automation-panel-head"><strong>{t("automation.stepDetails")}</strong><span className="muted">{selectedStep ? selectedStep.id : "—"}</span></div>
                   {runResult && <div className={`automation-run-result ${runResult.status}`}><strong>{runResult.status === "completed" ? "执行完成" : runResult.status === "cancelled" ? "已取消" : "执行失败"}</strong><span>{runResult.completedSteps}/{selected.steps.length} 步</span></div>}
+                  {batchResult && <div className={`automation-run-result ${batchResult.status}`}><strong>批量{batchResult.status === "completed" ? "完成" : batchResult.status === "cancelled" ? "已取消" : "部分失败"}</strong><span>{batchResult.results.filter((entry) => entry.result.status === "completed").length}/{batchResult.results.length} 台完成</span></div>}
                   {selectedStep ? <>
                     <h3>{selectedStep.label}</h3>
                     <label><span>{t("automation.stepType")}</span><select value={selectedStep.kind} onChange={(event) => updateSelectedStep({ kind: event.target.value as AutomationStepKind, label: t(`automation.step.${event.target.value}`) })}>{STEP_KINDS.map((kind) => <option key={kind} value={kind}>{t(`automation.step.${kind}`)}</option>)}</select></label>
