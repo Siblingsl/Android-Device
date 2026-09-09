@@ -1774,14 +1774,14 @@ export function Devices() {
                       </td>
                       <td className="devices-table-status-cell">
                         <div className={`devices-table-status devices-table-status-${statusTone}`} data-device-status={statusTone}>
-                          <div className="devices-table-status-main">
+                          <div className="devices-table-status-main devices-table-status-line">
                             <StatusDot online={online} />
+                            <span className="muted mono">{d.adbStatus}</span>
                           </div>
-                          <span className="muted mono">{d.adbStatus}</span>
                         </div>
                       </td>
                       <td className="devices-table-services-cell">
-                        <div className="devices-table-services">
+                        <div className="devices-table-services devices-table-services-inline">
                           <span className={`devices-table-service ${scrcpyOn ? "active" : "idle"}`} data-service="scrcpy">
                             <span className="devices-table-service-name">scrcpy</span>
                             <span className="devices-table-service-state">· {d.scrcpyStatus}</span>
@@ -1793,7 +1793,7 @@ export function Devices() {
                         </div>
                       </td>
                       <td className="devices-table-runtime-cell">
-                        <div className="devices-table-runtime">
+                        <div className="devices-table-runtime devices-table-runtime-inline">
                           <span className="devices-table-runtime-main mono">{d.ip || "—"}</span>
                           <span className="devices-table-runtime-secondary">
                             <span className="muted">{d.resolution || "—"}</span>

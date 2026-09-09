@@ -1668,15 +1668,19 @@ a {
 .devices-table-link:hover { text-decoration: underline; }
 .devices-table-status, .devices-table-services, .devices-table-runtime { display: flex; flex-direction: column; gap: 2px; line-height: 1.2; white-space: nowrap; }
 .devices-table-status-main { display: flex; align-items: center; }
+.devices-table-status-line { gap: 5px; min-width: 0; }
+.devices-table-status-line > .badge { max-width: 100%; }
 .devices-table-status-unauthorized .muted { color: var(--warning); }
 .devices-table-status .badge { width: fit-content; }
-.devices-table-services { gap: 3px; color: var(--text-secondary); font-size: 10px; }
-.devices-table-service { display: inline-flex; align-items: center; gap: 3px; width: fit-content; padding: 3px 5px; border-radius: 5px; background: var(--bg-hover); }
+.devices-table-services-inline { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; }
+.devices-table-services { color: var(--text-secondary); font-size: 10px; }
+.devices-table-service { display: inline-flex; align-items: center; gap: 3px; width: fit-content; padding: 2px 4px; border-radius: 5px; line-height: 1.15; background: var(--bg-hover); }
 .devices-table-service-name { color: var(--text); font-weight: 650; }
 .devices-table-service-state { color: var(--text-secondary); }
 .devices-table-service.active { color: var(--success); background: rgba(16, 185, 129, 0.1); }
 .devices-table-service.active .devices-table-service-name,
 .devices-table-service.active .devices-table-service-state { color: var(--success); }
+.devices-table-runtime-inline { flex-direction: row; align-items: baseline; flex-wrap: wrap; gap: 3px 8px; }
 .devices-table-runtime { color: var(--text-secondary); font-size: 10px; }
 .devices-table-runtime-main { color: var(--text); font-weight: 650; }
 .devices-table-runtime-secondary { display: flex; align-items: center; gap: 7px; }

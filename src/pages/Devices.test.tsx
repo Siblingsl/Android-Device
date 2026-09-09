@@ -296,6 +296,38 @@ describe("Devices batch controls", () => {
     expect(row.querySelector(".devices-table-runtime-secondary")?.textContent).toContain("18m");
   }, 15_000);
 
+  it("keeps status, services, and runtime details on compact inline rails", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      {
+        ...device("one"),
+        online: true,
+        adbStatus: "device",
+        scrcpyStatus: "running",
+        dockerStatus: "running",
+        ip: "192.168.1.20",
+        resolution: "1080x1920",
+        uptime: "18m",
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    const row = await screen.findByRole("row", { name: /设备 one/ });
+    expect(row.querySelector(".devices-table-status-line")).toBeTruthy();
+    expect(row.querySelector(".devices-table-services-inline")).toBeTruthy();
+    expect(row.querySelector(".devices-table-runtime-inline")).toBeTruthy();
+    expect(row.querySelector(".devices-table-status-line")?.textContent).toContain("device");
+    expect(row.querySelector(".devices-table-services-inline")?.textContent).toContain("scrcpy");
+    expect(row.querySelector(".devices-table-services-inline")?.textContent).toContain("Docker");
+    expect(row.querySelector(".devices-table-runtime-inline")?.textContent).toContain("192.168.1.20");
+    expect(row.querySelector(".devices-table-runtime-inline")?.textContent).toContain("1080x1920");
+    expect(row.querySelector(".devices-table-runtime-inline")?.textContent).toContain("18m");
+  }, 15_000);
+
   it("keeps the table shell responsive and repositions the hover card near viewport edges", async () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("devices-table-hover-anchor")) {
