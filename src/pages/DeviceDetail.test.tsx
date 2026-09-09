@@ -334,6 +334,24 @@ describe("DeviceDetail refresh ordering", () => {
     expect(openTerminalWindow).toHaveBeenCalledWith("device-session-1", { title: "独立终端" });
   });
 
+  it("keeps the detail workbench shell and compact control dock visible", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    sessionStorage.setItem("rdc.detail.tab.device-1", "control");
+
+    renderDetail("control");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector(".device-detail-workbench")).toBeTruthy();
+    expect(document.querySelector(".device-detail-header")).toBeTruthy();
+    expect(document.querySelector(".device-detail-tabs")).toBeTruthy();
+    expect(document.querySelector(".control-workbench")).toBeTruthy();
+    expect(document.querySelector(".control-action-dock")).toBeTruthy();
+    expect(document.querySelectorAll(".control-action-shelf")).toHaveLength(4);
+  });
+
   it("ignores an older file listing after navigating to a newer path", async () => {
     const first = deferred<FileEntry[]>();
     const second = deferred<FileEntry[]>();

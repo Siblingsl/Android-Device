@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { askConfirm } from "../lib/dialogs";
 import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -467,8 +467,8 @@ export function DeviceDetail() {
   };
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="device-detail-workbench">
+      <div className="page-header device-detail-header">
         <div className="row">
           <Button variant="ghost" icon={<ArrowLeft size={16} />} onClick={() => navigate("/devices")}>
             {t("detail.back")}
@@ -580,7 +580,7 @@ export function DeviceDetail() {
         </div>
       </div>
 
-      <div className="tabs">
+      <div className="tabs device-detail-tabs">
         {(
           [
             ["overview", "detail.tab.overview", false],
@@ -607,76 +607,78 @@ export function DeviceDetail() {
         })}
       </div>
 
-      {!(device.online && device.adbStatus === "device") && tab !== "overview" && (
-        <div className="notice" style={{ marginBottom: 12 }}>
-          {t("detail.notice.offline")}
-        </div>
-      )}
-      {tab === "overview" && (
-        <>
-          <DeviceHealthPanel
-            device={device}
-            refreshing={refreshing}
-            lastUpdatedAt={lastUpdatedAt}
-            refreshError={refreshError}
-            metricHistory={metricHistory}
-            alertThreshold={monitorPreferences.alertThreshold}
-            refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
-            monitorPreset={monitorPreferences.preset}
-            alertsEnabled={monitorPreferences.alertsEnabled}
-            warningAlertsEnabled={monitorPreferences.warningAlertsEnabled}
-            criticalAlertsEnabled={monitorPreferences.criticalAlertsEnabled}
-            quietHours={monitorPreferences.quietHours}
-            monitorRuleSaving={monitorRuleSaving}
-            onMonitorRuleChange={saveMonitorRule}
-            monitorAlerts={deviceMonitorAlerts}
-            onDismissMonitorAlert={dismissMonitorAlert}
-            onClearMonitorAlerts={() => clearMonitorAlerts(deviceId)}
-            autoRefresh={autoRefresh}
-            onAutoRefreshChange={setAutoRefresh}
-            onRefresh={() => void load()}
+      <div className="device-detail-content">
+        {!(device.online && device.adbStatus === "device") && tab !== "overview" && (
+          <div className="notice" style={{ marginBottom: 12 }}>
+            {t("detail.notice.offline")}
+          </div>
+        )}
+        {tab === "overview" && (
+          <>
+            <DeviceHealthPanel
+              device={device}
+              refreshing={refreshing}
+              lastUpdatedAt={lastUpdatedAt}
+              refreshError={refreshError}
+              metricHistory={metricHistory}
+              alertThreshold={monitorPreferences.alertThreshold}
+              refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
+              monitorPreset={monitorPreferences.preset}
+              alertsEnabled={monitorPreferences.alertsEnabled}
+              warningAlertsEnabled={monitorPreferences.warningAlertsEnabled}
+              criticalAlertsEnabled={monitorPreferences.criticalAlertsEnabled}
+              quietHours={monitorPreferences.quietHours}
+              monitorRuleSaving={monitorRuleSaving}
+              onMonitorRuleChange={saveMonitorRule}
+              monitorAlerts={deviceMonitorAlerts}
+              onDismissMonitorAlert={dismissMonitorAlert}
+              onClearMonitorAlerts={() => clearMonitorAlerts(deviceId)}
+              autoRefresh={autoRefresh}
+              onAutoRefreshChange={setAutoRefresh}
+              onRefresh={() => void load()}
+            />
+            <Overview device={device} onOpenTab={setTab} />
+            <RootPanel device={device} />
+          </>
+        )}
+        {tab === "control" && (
+          <Control
+            serial={serial}
+            resolution={device.resolution}
+            setStatusText={setStatusText}
+            disabled={!(device.online && device.adbStatus === "device")}
+            onOpenTerminal={() => void openDeviceTerminal()}
           />
-          <Overview device={device} onOpenTab={setTab} />
-          <RootPanel device={device} />
-        </>
-      )}
-      {tab === "control" && (
-        <Control
-          serial={serial}
-          resolution={device.resolution}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-          onOpenTerminal={() => void openDeviceTerminal()}
-        />
-      )}
-      {tab === "files" && (
-        <Files
-          serial={serial}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "apps" && (
-        <Apps
-          serial={serial}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "logs" && (
-        <DeviceLogs serial={serial} disabled={!(device.online && device.adbStatus === "device")} />
-      )}
-      {tab === "settings" && (
-        <DeviceSettings
-          serial={serial}
-          initialResolution={device.resolution}
-          initialDpi={device.dpi}
-          setStatusText={setStatusText}
-          onApplied={() => void load()}
-          deviceId={deviceId}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
+        )}
+        {tab === "files" && (
+          <Files
+            serial={serial}
+            setStatusText={setStatusText}
+            disabled={!(device.online && device.adbStatus === "device")}
+          />
+        )}
+        {tab === "apps" && (
+          <Apps
+            serial={serial}
+            setStatusText={setStatusText}
+            disabled={!(device.online && device.adbStatus === "device")}
+          />
+        )}
+        {tab === "logs" && (
+          <DeviceLogs serial={serial} disabled={!(device.online && device.adbStatus === "device")} />
+        )}
+        {tab === "settings" && (
+          <DeviceSettings
+            serial={serial}
+            initialResolution={device.resolution}
+            initialDpi={device.dpi}
+            setStatusText={setStatusText}
+            onApplied={() => void load()}
+            deviceId={deviceId}
+            disabled={!(device.online && device.adbStatus === "device")}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -1332,6 +1334,34 @@ function parseResolution(raw?: string): { w: number; h: number } {
   return { w: 1080, h: 1920 };
 }
 
+type ControlShelfKey = "media" | "input" | "device" | "terminal";
+
+function ControlActionShelf({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <details
+      className={`control-action-shelf ${open ? "is-open" : ""}`}
+      open={open}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="control-action-shelf-chevron" aria-hidden="true">▸</span>
+        <span className="control-action-shelf-label">{label}</span>
+      </summary>
+      <div className="control-action-shelf-body">{children}</div>
+    </details>
+  );
+}
+
 function Control({
   serial,
   resolution,
@@ -1357,6 +1387,12 @@ function Control({
   const [hideChrome, setHideChrome] = useState(false);
   const [scrcpyLabel, setScrcpyLabel] = useState("stopped");
   const [scrcpyBusy, setScrcpyBusy] = useState<"start" | "stop" | "restart" | null>(null);
+  const [openShelves, setOpenShelves] = useState<Record<ControlShelfKey, boolean>>({
+    media: false,
+    input: false,
+    device: true,
+    terminal: true,
+  });
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const swipedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -1373,6 +1409,14 @@ function Control({
   const { w: screenW, h: screenH } = parseResolution(resolution);
   previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
+
+  useEffect(() => {
+    setOpenShelves({ media: false, input: false, device: true, terminal: true });
+  }, [serial]);
+
+  const setShelfOpen = (key: ControlShelfKey, open: boolean) => {
+    setOpenShelves((current) => ({ ...current, [key]: open }));
+  };
 
   useEffect(
     () => () => {
@@ -1857,7 +1901,7 @@ function Control({
           if (mappedAction) runControlAction(mappedAction, mappedAction === "rotate" ? true : undefined);
         }}
       />
-      <div className="split-control">
+      <div className="split-control control-workbench">
       <DevicePreview
         serial={serial}
         disabled={disabled}
@@ -1927,103 +1971,126 @@ function Control({
         onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true), "rotate")}
       />
 
-      <div className="control-panel">
-        <DeviceMediaControls
-          disabled={disabled}
-          busy={actionBusy || scrcpyBusy}
-          onRecordingStart={(options: ScrcpyRecordingOptions) =>
-            runExtendedAction(
-              t("detail.media.startRecording"),
-              () => DeviceService.scrcpyStartRecording(serial, options),
-              "recording",
-            )
-          }
-          onRecordingStop={() =>
-            runExtendedAction(
-              t("detail.media.stopRecording"),
-              () => DeviceService.scrcpyStopRecording(serial),
-              "recording",
-            )
-          }
-          onRecordingStatus={() => DeviceService.scrcpyRecordingStatus(serial)}
-          onCameraStart={(options: ScrcpyCameraOptions) =>
-            runExtendedAction(
-              t("detail.media.startCamera"),
-              () => DeviceService.scrcpyStartCamera(serial, options),
-              "camera",
-            )
-          }
-          onCameraStop={() =>
-            runExtendedAction(
-              t("detail.media.stopCamera"),
-              () => DeviceService.scrcpyStopCamera(serial),
-              "camera",
-            )
-          }
-          onCameraStatus={() => DeviceService.scrcpyCameraStatus(serial)}
-          onRotation={(mode: RotationMode) =>
-            runExtendedAction(
-              t(`detail.media.rotation.${mode}`),
-              () => DeviceService.setRotationMode(serial, mode),
-              "rotation",
-            )
-          }
-          onDeviceAction={(action: DeviceMediaAction) => {
-            const operations: Record<DeviceMediaAction, () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>> = {
-              mute: () => DeviceService.volumeMute(serial),
-              screenOff: () => DeviceService.screenOff(serial),
-              reboot: () => DeviceService.rebootDevice(serial),
-              shutdown: () => DeviceService.shutdownDevice(serial),
-            };
-            return (async () => {
-              if (action === "reboot" || action === "shutdown") {
-                const confirmed = await askConfirm(t(`detail.media.confirm.${action}`));
-                if (!confirmed) return false;
-              }
-              return runExtendedAction(t(`detail.media.${action}`), operations[action], action);
-            })();
-          }}
-        />
-        <DeviceInputModes
-          disabled={disabled}
-          busy={actionBusy || scrcpyBusy}
-          onStart={(mode: ScrcpyInputMode, options: ScrcpyInputOptions) =>
-            runExtendedAction(
-              t(`detail.input.start.${mode}`),
-              () => DeviceService.scrcpyStartInput(serial, mode, options),
-              "input",
-            )
-          }
-          onStop={() =>
-            runExtendedAction(
-              t("detail.input.stop"),
-              () => DeviceService.scrcpyStopInput(serial),
-              "input",
-            )
-          }
-          onStatus={() => DeviceService.scrcpyInputStatus(serial)}
-        />
-        <DeviceControlPanel
-          disabled={disabled}
-          busyAction={actionBusy}
-          feedback={feedback}
-          retryingFeedbackId={retryingFeedbackId}
-          onRetryFeedback={retryFeedback}
-          onAction={runControlAction}
-          onScreenshot={takeShot}
-          onValidationError={(message) => {
-            setStatusText(message);
-            appendDiagnostic(message);
-          }}
-        />
-
-        <DeviceShell
-          serial={serial}
-          disabled={disabled}
-          diagnostic={shellDiagnostic}
-          onStatus={setStatusText}
-          onOpenTerminal={onOpenTerminal}
-        />
+      <div className="control-action-dock" aria-label={t("detail.control.panelTitle")}>
+        <ControlActionShelf
+          label={t("detail.media.title")}
+          open={openShelves.media}
+          onToggle={(open) => setShelfOpen("media", open)}
+        >
+          <DeviceMediaControls
+            disabled={disabled}
+            busy={actionBusy || scrcpyBusy}
+            onRecordingStart={(options: ScrcpyRecordingOptions) =>
+              runExtendedAction(
+                t("detail.media.startRecording"),
+                () => DeviceService.scrcpyStartRecording(serial, options),
+                "recording",
+              )
+            }
+            onRecordingStop={() =>
+              runExtendedAction(
+                t("detail.media.stopRecording"),
+                () => DeviceService.scrcpyStopRecording(serial),
+                "recording",
+              )
+            }
+            onRecordingStatus={() => DeviceService.scrcpyRecordingStatus(serial)}
+            onCameraStart={(options: ScrcpyCameraOptions) =>
+              runExtendedAction(
+                t("detail.media.startCamera"),
+                () => DeviceService.scrcpyStartCamera(serial, options),
+                "camera",
+              )
+            }
+            onCameraStop={() =>
+              runExtendedAction(
+                t("detail.media.stopCamera"),
+                () => DeviceService.scrcpyStopCamera(serial),
+                "camera",
+              )
+            }
+            onCameraStatus={() => DeviceService.scrcpyCameraStatus(serial)}
+            onRotation={(mode: RotationMode) =>
+              runExtendedAction(
+                t(`detail.media.rotation.${mode}`),
+                () => DeviceService.setRotationMode(serial, mode),
+                "rotation",
+              )
+            }
+            onDeviceAction={(action: DeviceMediaAction) => {
+              const operations: Record<DeviceMediaAction, () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>> = {
+                mute: () => DeviceService.volumeMute(serial),
+                screenOff: () => DeviceService.screenOff(serial),
+                reboot: () => DeviceService.rebootDevice(serial),
+                shutdown: () => DeviceService.shutdownDevice(serial),
+              };
+              return (async () => {
+                if (action === "reboot" || action === "shutdown") {
+                  const confirmed = await askConfirm(t(`detail.media.confirm.${action}`));
+                  if (!confirmed) return false;
+                }
+                return runExtendedAction(t(`detail.media.${action}`), operations[action], action);
+              })();
+            }}
+          />
+        </ControlActionShelf>
+        <ControlActionShelf
+          label={t("detail.input.title")}
+          open={openShelves.input}
+          onToggle={(open) => setShelfOpen("input", open)}
+        >
+          <DeviceInputModes
+            disabled={disabled}
+            busy={actionBusy || scrcpyBusy}
+            onStart={(mode: ScrcpyInputMode, options: ScrcpyInputOptions) =>
+              runExtendedAction(
+                t(`detail.input.start.${mode}`),
+                () => DeviceService.scrcpyStartInput(serial, mode, options),
+                "input",
+              )
+            }
+            onStop={() =>
+              runExtendedAction(
+                t("detail.input.stop"),
+                () => DeviceService.scrcpyStopInput(serial),
+                "input",
+              )
+            }
+            onStatus={() => DeviceService.scrcpyInputStatus(serial)}
+          />
+        </ControlActionShelf>
+        <ControlActionShelf
+          label={t("detail.control.panelTitle")}
+          open={openShelves.device}
+          onToggle={(open) => setShelfOpen("device", open)}
+        >
+          <DeviceControlPanel
+            disabled={disabled}
+            busyAction={actionBusy}
+            feedback={feedback}
+            retryingFeedbackId={retryingFeedbackId}
+            onRetryFeedback={retryFeedback}
+            onAction={runControlAction}
+            onScreenshot={takeShot}
+            onValidationError={(message) => {
+              setStatusText(message);
+              appendDiagnostic(message);
+            }}
+          />
+        </ControlActionShelf>
+        <ControlActionShelf
+          label="ADB Shell"
+          open={openShelves.terminal}
+          onToggle={(open) => setShelfOpen("terminal", open)}
+        >
+          <DeviceShell
+            serial={serial}
+            disabled={disabled}
+            diagnostic={shellDiagnostic}
+            onStatus={setStatusText}
+            onOpenTerminal={onOpenTerminal}
+          />
+        </ControlActionShelf>
       </div>
       </div>
     </div>
