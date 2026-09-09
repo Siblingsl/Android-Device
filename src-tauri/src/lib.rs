@@ -3,6 +3,7 @@ mod models;
 mod services;
 
 use commands::*;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +11,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(services::terminal::TerminalRegistry::default())
         .manage(services::transfer::TransferRegistry::default())
         .invoke_handler(tauri::generate_handler![
             // System
@@ -46,6 +48,11 @@ pub fn run() {
             device_open_settings,
             device_send_clipboard,
             device_shell,
+            // Persistent terminal sessions
+            terminal_session_start,
+            terminal_session_write,
+            terminal_session_stop,
+            terminal_session_list,
             // APK / Apps
             install_apk,
             uninstall_app,
@@ -156,6 +163,15 @@ pub fn run() {
             switch_wsl_kernel,
             verify_wsl_binder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(registry) =
+                    app_handle.try_state::<services::terminal::TerminalRegistry>()
+                {
+                    services::terminal::stop_all(registry.inner());
+                }
+            }
+        });
 }

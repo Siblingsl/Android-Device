@@ -1,5 +1,7 @@
 use crate::models::*;
-use crate::services::{adb, device, docker, log, root, scrcpy, settings, transfer, wsl_kernel};
+use crate::services::{
+    adb, device, docker, log, root, scrcpy, settings, terminal, transfer, wsl_kernel,
+};
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tauri::async_runtime::spawn_blocking(f)
@@ -186,6 +188,42 @@ pub async fn device_send_clipboard(serial: String, content: String) -> ShellResu
 #[tauri::command]
 pub async fn device_shell(serial: String, command: String) -> ShellResult {
     blocking(move || device::shell_command(&serial, &command)).await
+}
+
+// ---- Persistent terminal sessions ----
+
+#[tauri::command]
+pub async fn terminal_session_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, terminal::TerminalRegistry>,
+    request: terminal::TerminalStartRequest,
+) -> Result<terminal::TerminalSessionInfo, String> {
+    let registry = state.inner().clone();
+    blocking_res(move || terminal::start(app, registry, request)).await
+}
+
+#[tauri::command]
+pub async fn terminal_session_write(
+    state: tauri::State<'_, terminal::TerminalRegistry>,
+    id: String,
+    data: String,
+) -> Result<terminal::TerminalCommandResult, String> {
+    Ok(terminal::write(state.inner(), &id, &data))
+}
+
+#[tauri::command]
+pub async fn terminal_session_stop(
+    state: tauri::State<'_, terminal::TerminalRegistry>,
+    id: String,
+) -> Result<terminal::TerminalCommandResult, String> {
+    Ok(terminal::stop(state.inner(), &id))
+}
+
+#[tauri::command]
+pub async fn terminal_session_list(
+    state: tauri::State<'_, terminal::TerminalRegistry>,
+) -> Result<Vec<terminal::TerminalSessionInfo>, String> {
+    Ok(terminal::list(state.inner()))
 }
 
 // ---- APK / Apps ----
@@ -878,6 +916,14 @@ pub async fn verify_wsl_binder() -> ShellResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_commands_are_exposed() {
+        let _ = terminal_session_start;
+        let _ = terminal_session_write;
+        let _ = terminal_session_stop;
+        let _ = terminal_session_list;
+    }
 
     #[test]
     fn tracked_transfer_error_preserves_shell_result_contract() {
