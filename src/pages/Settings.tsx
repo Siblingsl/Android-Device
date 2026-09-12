@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { ExternalLink, FolderOpen, Save } from "lucide-react";
@@ -10,6 +10,12 @@ import { useToolProbe } from "../hooks/useToolProbe";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type { AppSettings } from "../types";
+import { ShortcutEditor } from "../components/settings/ShortcutEditor";
+import { ConfigTransfer } from "../components/settings/ConfigTransfer";
+import { UpdatePanel } from "../components/settings/UpdatePanel";
+import { SchedulerPanel } from "../components/settings/SchedulerPanel";
+import { askConfirm } from "../lib/dialogs";
+import { getAllDeviceMetadata, removeDeviceMetadata } from "../lib/deviceMetadata";
 
 const PATH_FIELDS = [
   { key: "logPath", label: "settings.path.logPath", kind: "dir" as const },
@@ -18,6 +24,8 @@ const PATH_FIELDS = [
   { key: "dockerPath", label: "settings.path.dockerPath", kind: "exe" as const },
   { key: "adbPath", label: "settings.path.adbPath", kind: "exe" as const },
   { key: "scrcpyPath", label: "settings.path.scrcpyPath", kind: "exe" as const },
+  { key: "recordingPath", label: "settings.path.recordingPath", kind: "dir" as const },
+  { key: "gnirehtetPath", label: "settings.path.gnirehtetPath", kind: "exe" as const },
   { key: "gappsZipPath", label: "settings.path.gappsZipPath", kind: "zip" as const },
 ] as const;
 
@@ -32,9 +40,11 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState<AppSettings | null>(null);
   const [appVersion, setAppVersion] = useState("0.1.0");
+  const [metadataRevision, setMetadataRevision] = useState(0);
   const dirty = Boolean(form && settings && JSON.stringify(form) !== JSON.stringify(settings));
   const { tools, busy: probing, probe, probeMany } = useToolProbe();
   const autoProbed = useRef(false);
+  const isWindowsHost = typeof navigator === "undefined" || /Windows/i.test(navigator.userAgent);
 
   useEffect(() => {
     loadSettings();
@@ -82,8 +92,14 @@ export function SettingsPage() {
       { kind: "docker", path: (form.dockerPath || "").trim() || "docker" },
       { kind: "adb", path: (form.adbPath || "").trim() || "adb" },
       { kind: "scrcpy", path: (form.scrcpyPath || "").trim() || "scrcpy" },
+      { kind: "gnirehtet", path: (form.gnirehtetPath || "").trim() || "gnirehtet" },
     ]);
   }, [form, probeMany]);
+
+  const staleMetadata = useMemo(() => {
+    const liveIds = new Set(devices.map((device) => device.id));
+    return Object.entries(getAllDeviceMetadata()).filter(([id]) => !liveIds.has(id));
+  }, [devices, metadataRevision]);
 
   if (!form) {
     return <div className="empty-state">{t("settings.loading")}</div>;
@@ -93,19 +109,36 @@ export function SettingsPage() {
     setForm({ ...form, [key]: value });
   };
 
-  const pathFor = (key: "dockerPath" | "adbPath" | "scrcpyPath") =>
-    (form[key] ?? "").trim() || (key === "dockerPath" ? "docker" : key === "adbPath" ? "adb" : "scrcpy");
+  const pathFor = (key: "dockerPath" | "adbPath" | "scrcpyPath" | "gnirehtetPath") =>
+    (form[key] ?? "").trim() || (key === "dockerPath" ? "docker" : key === "adbPath" ? "adb" : key === "scrcpyPath" ? "scrcpy" : "gnirehtet");
 
-  const runProbe = (key: "dockerPath" | "adbPath" | "scrcpyPath") =>
-    probe(key === "dockerPath" ? "docker" : key === "adbPath" ? "adb" : "scrcpy", pathFor(key));
+  const runProbe = (key: "dockerPath" | "adbPath" | "scrcpyPath" | "gnirehtetPath") =>
+    probe(key === "dockerPath" ? "docker" : key === "adbPath" ? "adb" : key === "scrcpyPath" ? "scrcpy" : "gnirehtet", pathFor(key));
 
   const runProbeAll = async () => {
     const r = await probeMany([
       { kind: "docker", path: pathFor("dockerPath") },
       { kind: "adb", path: pathFor("adbPath") },
       { kind: "scrcpy", path: pathFor("scrcpyPath") },
+      { kind: "gnirehtet", path: pathFor("gnirehtetPath") },
     ]);
     setStatusText(t("settings.probeResult", { ok: r.ok, total: r.total }));
+  };
+
+  const removeStaleMetadata = (id: string) => {
+    if (!removeDeviceMetadata(id)) {
+      setStatusText(t("settings.staleMetadataFailed"));
+      return;
+    }
+    setMetadataRevision((value) => value + 1);
+    setStatusText(t("settings.staleMetadataRemoved", { n: 1 }));
+  };
+
+  const removeAllStaleMetadata = async () => {
+    if (!staleMetadata.length || !(await askConfirm(t("settings.staleMetadataConfirm", { n: staleMetadata.length })))) return;
+    const removed = staleMetadata.reduce((count, [id]) => count + (removeDeviceMetadata(id) ? 1 : 0), 0);
+    setMetadataRevision((value) => value + 1);
+    setStatusText(removed === staleMetadata.length ? t("settings.staleMetadataRemoved", { n: removed }) : t("settings.staleMetadataFailed"));
   };
 
   return (
@@ -128,14 +161,11 @@ export function SettingsPage() {
           icon={<Save size={15} />}
           disabled={!dirty}
           onClick={async () => {
-            const live = new Set(devices.map((d) => d.id));
-            const cleaned = {
-              ...form,
-              autoStartDeviceIds: (form.autoStartDeviceIds ?? []).filter((id) => live.has(id)),
-            };
-            setForm(cleaned);
             try {
-              await saveSettings(cleaned);
+              // Keep saved device IDs even while Docker/ADB is temporarily
+              // unavailable. Stale entries are shown explicitly below and
+              // can only be removed by the user's remove action.
+              await saveSettings(form);
               setTheme(form.theme === "dark" ? "dark" : "light");
               setStatusText(t("settings.saved"));
             } catch (e) {
@@ -187,6 +217,14 @@ export function SettingsPage() {
               </div>
             </div>
             <div className="field">
+              <label>更新通道</label>
+              <select value={form.updateChannel || "stable"} onChange={(e) => set("updateChannel", e.target.value as "stable" | "beta")}>
+                <option value="stable">稳定版</option>
+                <option value="beta">测试版</option>
+              </select>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>更新检查会把此通道传给发布服务；正式发布前需配置更新端点和签名公钥。</div>
+            </div>
+            <div className="field">
               <label>{t("settings.proxy")}</label>
               <input value={form.proxy} onChange={(e) => set("proxy", e.target.value)} placeholder="http://127.0.0.1:7890" />
               <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
@@ -208,6 +246,14 @@ export function SettingsPage() {
                 {t("settings.defaultChecked")}
               </label>
             </div>
+            <div className="field">
+              <label>窗口与启动</label>
+              <label className="row"><input type="checkbox" checked={!!form.closeToTray} onChange={(e) => set("closeToTray", e.target.checked)} />关闭窗口时隐藏到托盘</label>
+              <label className="row"><input type="checkbox" checked={!!form.launchAtLogin} onChange={(e) => set("launchAtLogin", e.target.checked)} />登录系统时启动</label>
+              <label className="row"><input type="checkbox" checked={!!form.edgeHide} onChange={(e) => set("edgeHide", e.target.checked)} />窗口贴边时自动隐藏</label>
+              <label className="row"><input type="checkbox" checked={!!form.desktopShortcut} onChange={(e) => set("desktopShortcut", e.target.checked)} />创建桌面快捷方式</label>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>登录启动和桌面快捷方式在保存设置后生效；托盘菜单仍可恢复主窗口。</div>
+            </div>
           </div>
         </Card>
 
@@ -223,8 +269,8 @@ export function SettingsPage() {
             {PATH_FIELDS.map(({ key, label, kind }) => {
               const value = form[key] ?? "";
               const toolKind =
-                key === "dockerPath" ? "docker" : key === "adbPath" ? "adb" : "scrcpy";
-              const hit = kind === "exe" ? tools[toolKind] : undefined;
+                key === "dockerPath" ? "docker" : key === "adbPath" ? "adb" : key === "scrcpyPath" ? "scrcpy" : key === "gnirehtetPath" ? "gnirehtet" : undefined;
+              const hit = kind === "exe" && toolKind ? tools[toolKind] : undefined;
               return (
                 <div className="field" key={key}>
                   <label>{t(label)}</label>
@@ -246,7 +292,7 @@ export function SettingsPage() {
                             filters:
                               kind === "zip"
                                 ? [{ name: "GApps", extensions: ["zip"] }]
-                                : kind === "exe"
+                                : kind === "exe" && isWindowsHost
                                   ? [{ name: t("settings.filterExe"), extensions: ["exe"] }]
                                   : undefined,
                           });
@@ -276,7 +322,7 @@ export function SettingsPage() {
                         size="sm"
                         variant="ghost"
                         loading={probing === "all" || probing === toolKind}
-                        onClick={() => void runProbe(key as "dockerPath" | "adbPath" | "scrcpyPath")}
+                        onClick={() => void runProbe(key as "dockerPath" | "adbPath" | "scrcpyPath" | "gnirehtetPath")}
                       >
                         {t("settings.probe")}
                       </Button>
@@ -294,7 +340,7 @@ export function SettingsPage() {
         </Card>
       </div>
 
-      <Card title={t("settings.card.autoStart")}>
+      <Card className="auto-start-card" title={t("settings.card.autoStart")}>
         <label className="row" style={{ marginBottom: 12 }}>
           <input
             type="checkbox"
@@ -329,7 +375,7 @@ export function SettingsPage() {
         ) : (
           <div className="stack">
             {(form.autoStartDeviceIds ?? []).map((id) => {
-              const d = devices.find((x) => x.id === id);
+              const d = devices.find((x) => x.id === id || x.serial === id || x.containerId === id);
               return (
                 <div key={id} className="row-between">
                   <div>
@@ -394,10 +440,48 @@ export function SettingsPage() {
         )}
       </Card>
 
+      <Card
+        className="stale-metadata-card"
+        title={t("settings.card.staleMetadata")}
+        action={staleMetadata.length > 0 ? <Button size="sm" variant="danger" onClick={() => void removeAllStaleMetadata()}>{t("settings.staleMetadataClearAll")}</Button> : undefined}
+      >
+        <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>{t("settings.staleMetadataHint")}</div>
+        {staleMetadata.length === 0 ? <div className="empty-state">{t("settings.staleMetadataEmpty")}</div> : (
+          <div className="stack">
+            {staleMetadata.map(([id, metadata]) => (
+              <div key={id} className="row-between">
+                <div>
+                  <strong>{metadata.remark || id}</strong>
+                  <div className="muted mono" style={{ fontSize: 12 }}>{id}{metadata.group ? ` · ${metadata.group}` : ""}</div>
+                </div>
+                <Button size="sm" variant="danger" onClick={() => removeStaleMetadata(id)}>{t("settings.staleMetadataRemove")}</Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <ShortcutEditor devices={devices} setStatusText={setStatusText} />
+
+      <ConfigTransfer
+        settings={form}
+        setStatusText={setStatusText}
+        onImported={async (next) => {
+          await saveSettings(next);
+          setForm(next);
+          setTheme(next.theme === "dark" ? "dark" : "light");
+          setMetadataRevision((value) => value + 1);
+        }}
+      />
+
+      <UpdatePanel settings={form} currentVersion={appVersion} setStatusText={setStatusText} onSettingsChange={(patch) => setForm((current) => current ? { ...current, ...patch } : current)} />
+
+      <SchedulerPanel devices={devices} setStatusText={setStatusText} />
+
       <Card title={t("settings.card.about")} className="about-card">
         <div className="stack">
           <div>
-            <strong>Redroid Device Center</strong>
+            <strong>Just Run</strong>
           </div>
           <div className="muted">{t("settings.version", { v: appVersion })}</div>
           <div className="muted">

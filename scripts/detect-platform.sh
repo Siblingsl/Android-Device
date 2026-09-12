@@ -53,8 +53,8 @@ case "$PLATFORM" in
   linux-x64|linux-arm64)
     SUPPORTED=true; NEEDS_WSL_KERNEL=false; STRATEGY=host-binder
     ;;
-  darwin-*)
-    SUPPORTED=false; STRATEGY=unsupported
+  darwin-x64|darwin-arm64)
+    SUPPORTED=true; NEEDS_WSL_KERNEL=false; STRATEGY=docker-desktop-vm
     ;;
 esac
 

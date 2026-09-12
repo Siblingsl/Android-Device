@@ -16,7 +16,7 @@ log "platform=$PLATFORM strategy=$STRATEGY"
 log "kernel: $(uname -r) arch: $(uname -m)"
 
 if [[ "$OS" == "darwin" ]]; then
-  die "macOS is not supported. Use Windows (WSL) or Linux."
+  die "macOS 不在主机 binder 设置脚本范围内；请让 Docker Desktop Linux VM、QEMU 或远程 Linux 提供 binder。"
 fi
 if [[ "$OS" == "windows" ]]; then
   die "On Windows use: powershell -File scripts/install-wsl-kernel.ps1"

@@ -29,6 +29,10 @@ vendor/magisk/**
 !vendor/magisk/.gitkeep
 !vendor/magisk/README.md
 
+# Keep the downloaded Gnirehtet archive out of source control; the extracted
+# runtime files are the assets bundled by Tauri.
+vendor/gnirehtet/**/*.zip
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

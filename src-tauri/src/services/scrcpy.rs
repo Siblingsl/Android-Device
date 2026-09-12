@@ -2,23 +2,65 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::thread;
 use std::time::Duration;
 
 use crate::models::ShellResult;
-use crate::services::{adb, log, settings};
+use crate::services::{adb, log, settings, util};
 
 static PROCESSES: Lazy<Mutex<HashMap<String, Child>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static LAST_ARGS: Lazy<Mutex<HashMap<String, (u32, u32, String)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn extra_flags(raw: &str) -> Vec<String> {
-    raw.split_whitespace()
-        .filter(|t| t.starts_with("--") || t.starts_with('-') || t.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'))
-        .filter(|t| !t.contains('&') && !t.contains('|') && !t.contains(';') && !t.contains('`'))
-        .map(|t| t.to_string())
-        .collect()
+    let protected = [
+        "-s",
+        "--serial",
+        "--max-size",
+        "-m",
+        "--video-bit-rate",
+        "-b",
+        "--window-title",
+    ];
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    let mut args = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        if protected.iter().any(|flag| token == *flag) {
+            index += if index + 1 < tokens.len() { 2 } else { 1 };
+            continue;
+        }
+        if protected
+            .iter()
+            .any(|flag| token.starts_with(&format!("{}=", flag)))
+        {
+            index += 1;
+            continue;
+        }
+        if (token.starts_with("--")
+            || token.starts_with('-')
+            || token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'))
+            && !token.contains('&')
+            && !token.contains('|')
+            && !token.contains(';')
+            && !token.contains('`')
+        {
+            args.push(token.to_string());
+        }
+        index += 1;
+    }
+    args
+}
+
+fn should_disable_audio(extra: &str) -> bool {
+    extra.trim().is_empty()
+        || extra_flags(extra)
+            .iter()
+            .any(|flag| flag == "--no-audio" || flag.starts_with("--no-audio="))
 }
 
 pub fn scrcpy_bin() -> String {
@@ -27,11 +69,7 @@ pub fn scrcpy_bin() -> String {
         return configured;
     }
     // Common Windows installs / PATH
-    let candidates = [
-        configured.as_str(),
-        "scrcpy",
-        r"C:\scrcpy\scrcpy.exe",
-    ];
+    let candidates = [configured.as_str(), "scrcpy", r"C:\scrcpy\scrcpy.exe"];
     for c in candidates {
         if c == "scrcpy" {
             return c.to_string();
@@ -52,10 +90,10 @@ pub fn status(serial: &str) -> String {
                 "stopped".into()
             }
             Ok(None) => "running".into(),
-            Err(_) => {
-                map.remove(serial);
-                "error".into()
-            }
+            // Keep the child handle when the OS refuses to report its state;
+            // dropping it here would make a still-running process impossible
+            // to stop on the next attempt.
+            Err(_) => "error".into(),
         }
     } else {
         "stopped".into()
@@ -125,7 +163,10 @@ fn wake_screen(serial: &str) {
 }
 
 pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellResult {
-    stop(serial);
+    let previous_stop = stop(serial);
+    if !previous_stop.success {
+        return previous_stop;
+    }
     log::info("Scrcpy", &format!("Starting scrcpy for {}", serial));
 
     if let Err(e) = ensure_device_ready(serial) {
@@ -161,17 +202,13 @@ pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellRe
 
     // Prefer ADB from settings so scrcpy uses same adb binary
     let adb_path = settings::adb_path();
-    let mut cmd = Command::new(&bin);
+    let mut cmd = util::command(&bin);
     if Path::new(&adb_path).exists() {
         cmd.env("ADB", &adb_path);
     }
     // Put scrcpy dir on PATH so it finds adb if bundled
     if let Some(parent) = Path::new(&bin).parent() {
-        let path = std::env::var("PATH").unwrap_or_default();
-        cmd.env(
-            "PATH",
-            format!("{};{}", parent.display(), path),
-        );
+        util::prepend_path(&mut cmd, parent);
     }
 
     LAST_ARGS
@@ -188,8 +225,10 @@ pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellRe
         "--window-title".into(),
         title,
         "--stay-awake".into(),
-        "--no-audio".into(),
     ];
+    if should_disable_audio(extra) {
+        args.push("--no-audio".into());
+    }
     for f in extra_flags(extra) {
         if f == "-s" || f == "--max-size" || f == "--video-bit-rate" || f == "--window-title" {
             continue;
@@ -197,7 +236,8 @@ pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellRe
         args.push(f);
     }
 
-    match cmd.args(args)
+    match cmd
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -262,8 +302,22 @@ pub fn start(serial: &str, max_size: u32, bit_rate: u32, extra: &str) -> ShellRe
 pub fn stop(serial: &str) -> ShellResult {
     let mut map = PROCESSES.lock();
     if let Some(mut child) = map.remove(serial) {
-        let _ = child.kill();
-        let _ = child.wait();
+        let kill_error = child.kill().err();
+        if let Err(reason) = child.wait() {
+            map.insert(serial.to_string(), child);
+            return ShellResult {
+                success: false,
+                stderr: format!(
+                    "等待 scrcpy 退出失败: {}{}",
+                    reason,
+                    kill_error
+                        .map(|e| format!("（终止请求失败: {e}）"))
+                        .unwrap_or_default()
+                ),
+                exit_code: -1,
+                ..ShellResult::default()
+            };
+        }
         log::info("Scrcpy", &format!("scrcpy stopped for {}", serial));
         ShellResult {
             success: true,
@@ -282,11 +336,36 @@ pub fn stop(serial: &str) -> ShellResult {
 }
 
 pub fn restart(serial: &str) -> ShellResult {
-    let (max_size, bit_rate, extra) = LAST_ARGS
-        .lock()
-        .get(serial)
-        .cloned()
-        .unwrap_or((1080, 8, String::new()));
-    stop(serial);
+    let (max_size, bit_rate, extra) =
+        LAST_ARGS
+            .lock()
+            .get(serial)
+            .cloned()
+            .unwrap_or((1080, 8, String::new()));
+    let stopped = stop(serial);
+    if !stopped.success {
+        return stopped;
+    }
     start(serial, max_size, bit_rate, &extra)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extra_flags, should_disable_audio};
+
+    #[test]
+    fn removes_managed_flag_values_without_dropping_other_options() {
+        let args =
+            extra_flags("--max-size 1080 --video-bit-rate=8M --stay-awake --window-title demo");
+        assert_eq!(args, vec!["--stay-awake"]);
+    }
+
+    #[test]
+    fn keeps_legacy_silent_default_but_allows_explicit_audio_configuration() {
+        assert!(should_disable_audio(""));
+        assert!(should_disable_audio("--no-audio --stay-awake"));
+        assert!(!should_disable_audio(
+            "--audio-source output --audio-bit-rate 8M"
+        ));
+    }
 }

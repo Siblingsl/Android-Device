@@ -5,7 +5,6 @@ use crate::models::{
 };
 use crate::services::{adb, device, docker, log, util};
 
-
 /// adbd drops back to the shell user on every container restart; magisk
 /// client commands (--sqlite/--denylist) need root, so re-root adb first.
 fn ensure_adb_root(serial: &str) {
@@ -13,7 +12,11 @@ fn ensure_adb_root(serial: &str) {
     if id.stdout.trim() == "0" {
         return;
     }
-    let r = util::run_command_timeout(&adb::adb_bin(), &["-s", serial, "root"], Duration::from_secs(8));
+    let r = util::run_command_timeout(
+        &adb::adb_bin(),
+        &["-s", serial, "root"],
+        Duration::from_secs(8),
+    );
     if r.success {
         std::thread::sleep(Duration::from_millis(1500));
         let _ = adb::connect(serial);
@@ -177,7 +180,10 @@ pub fn root_status(serial: &str) -> RootStatus {
     }
 
     // preset log tail (first-boot configuration log)
-    let tail = exec.run("tail -n 40 /data/adb/rdc_preset.log 2>/dev/null", Duration::from_secs(10));
+    let tail = exec.run(
+        "tail -n 40 /data/adb/rdc_preset.log 2>/dev/null",
+        Duration::from_secs(10),
+    );
     if tail.success {
         st.preset_log_tail = tail.stdout;
     }
@@ -197,7 +203,10 @@ pub fn denylist_remove(serial: &str, package: &str) -> crate::models::ShellResul
 
 /// Re-run the baked-in spoof profile now (no reboot needed).
 pub fn apply_spoof(serial: &str) -> crate::models::ShellResult {
-    let r = root_exec(serial).run("sh /data/adb/service.d/rdc_apply_spoof.sh 2>&1", Duration::from_secs(30));
+    let r = root_exec(serial).run(
+        "sh /data/adb/service.d/rdc_apply_spoof.sh 2>&1",
+        Duration::from_secs(30),
+    );
     if r.success {
         log::info("Root", &format!("[{serial}] spoof props re-applied"));
     }
@@ -290,7 +299,12 @@ fn module_dir_arg(id: &str) -> String {
 /// Takes effect on the next container restart.
 pub fn module_set_enabled(serial: &str, id: &str, enabled: bool) -> ShellResult {
     if !valid_module_id(id) {
-        return ShellResult { success: false, stdout: String::new(), stderr: "模块 ID 无效".into(), exit_code: -1 };
+        return ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: "模块 ID 无效".into(),
+            exit_code: -1,
+        };
     }
     let dir = module_dir_arg(id);
     let op = if enabled { "rm -f" } else { "touch" };
@@ -301,7 +315,10 @@ pub fn module_set_enabled(serial: &str, id: &str, enabled: bool) -> ShellResult 
     if r.success {
         log::info(
             "Root",
-            &format!("[{serial}] module {id} -> {}（重启实例后生效）", if enabled { "enabled" } else { "disabled" }),
+            &format!(
+                "[{serial}] module {id} -> {}（重启实例后生效）",
+                if enabled { "enabled" } else { "disabled" }
+            ),
         );
     }
     r
@@ -311,7 +328,12 @@ pub fn module_set_enabled(serial: &str, id: &str, enabled: bool) -> ShellResult 
 /// the next boot). Takes effect on the next container restart.
 pub fn module_remove(serial: &str, id: &str) -> ShellResult {
     if !valid_module_id(id) {
-        return ShellResult { success: false, stdout: String::new(), stderr: "模块 ID 无效".into(), exit_code: -1 };
+        return ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: "模块 ID 无效".into(),
+            exit_code: -1,
+        };
     }
     let dir = module_dir_arg(id);
     let cmd = format!(
@@ -319,7 +341,10 @@ pub fn module_remove(serial: &str, id: &str) -> ShellResult {
     );
     let r = root_exec(serial).run(&cmd, Duration::from_secs(15));
     if r.success {
-        log::info("Root", &format!("[{serial}] module {id} marked for removal（重启实例后生效）"));
+        log::info(
+            "Root",
+            &format!("[{serial}] module {id} marked for removal（重启实例后生效）"),
+        );
     }
     r
 }
@@ -344,7 +369,10 @@ pub fn repair_managers(serial: &str) -> ShellResult {
         echo \"repaired:${repaired:- none}\"";
     let r = exec.run(cmd, Duration::from_secs(60));
     if r.success {
-        log::info("Root", &format!("[{serial}] manager repair: {}", r.stdout.trim()));
+        log::info(
+            "Root",
+            &format!("[{serial}] manager repair: {}", r.stdout.trim()),
+        );
     }
     r
 }
@@ -367,13 +395,25 @@ pub fn lsposed_scope(serial: &str) -> LsposedScopeReport {
 
     let dir = std::env::temp_dir().join(format!("rdc-lspd-{}", uuid::Uuid::new_v4()));
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return LsposedScopeReport { modules: Vec::new(), message: format!("创建临时目录失败: {e}") };
+        return LsposedScopeReport {
+            modules: Vec::new(),
+            message: format!("创建临时目录失败: {e}"),
+        };
     }
     let mut have_db = false;
-    for name in ["modules_config.db", "modules_config.db-wal", "modules_config.db-shm"] {
+    for name in [
+        "modules_config.db",
+        "modules_config.db-wal",
+        "modules_config.db-shm",
+    ] {
         let bytes = util::run_command_bytes(
             &docker::docker_bin(),
-            &["exec", &container, "cat", &format!("/data/adb/lspd/config/{name}")],
+            &[
+                "exec",
+                &container,
+                "cat",
+                &format!("/data/adb/lspd/config/{name}"),
+            ],
             Duration::from_secs(20),
         );
         match bytes {
@@ -407,11 +447,17 @@ pub fn lsposed_scope(serial: &str) -> LsposedScopeReport {
     match read_scope_db(&dir.join("modules_config.db")) {
         Ok(modules) => {
             let _ = std::fs::remove_dir_all(&dir);
-            LsposedScopeReport { modules, message: String::new() }
+            LsposedScopeReport {
+                modules,
+                message: String::new(),
+            }
         }
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dir);
-            LsposedScopeReport { modules: Vec::new(), message: format!("解析 LSPosed 配置库失败: {e}") }
+            LsposedScopeReport {
+                modules: Vec::new(),
+                message: format!("解析 LSPosed 配置库失败: {e}"),
+            }
         }
     }
 }
@@ -425,7 +471,9 @@ fn read_scope_db(path: &std::path::Path) -> Result<Vec<LsposedScopeModule>, Stri
     // (mid, module) pairs — mid is needed to attach scope rows below
     let mut entries: Vec<(i64, LsposedScopeModule)> = Vec::new();
     let mut stmt = conn
-        .prepare("SELECT mid, module_pkg_name, enabled FROM modules WHERE module_pkg_name != 'lspd'")
+        .prepare(
+            "SELECT mid, module_pkg_name, enabled FROM modules WHERE module_pkg_name != 'lspd'",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -452,7 +500,9 @@ fn read_scope_db(path: &std::path::Path) -> Result<Vec<LsposedScopeModule>, Stri
         .prepare("SELECT mid, app_pkg_name FROM scope ORDER BY mid")
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|e| e.to_string())?;
     let mut scopes: Vec<(i64, String)> = Vec::new();
     for row in rows {
@@ -560,7 +610,12 @@ pub fn su_policies(serial: &str) -> Vec<SuPolicyEntry> {
 /// an instance restart because magiskd caches the evaluated policy).
 pub fn set_su_policy(serial: &str, uid: i64, allow: bool) -> ShellResult {
     if uid <= 0 || uid >= 1_000_000 {
-        return ShellResult { success: false, stdout: String::new(), stderr: "uid 无效".into(), exit_code: -1 };
+        return ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: "uid 无效".into(),
+            exit_code: -1,
+        };
     }
     let policy = if allow { 2 } else { 1 };
     let exec = root_exec(serial);
@@ -571,7 +626,10 @@ pub fn set_su_policy(serial: &str, uid: i64, allow: bool) -> ShellResult {
         Duration::from_secs(15),
     );
     if r.success {
-        log::info("Root", &format!("[{serial}] su policy uid={uid} -> {policy}（重启实例后生效）"));
+        log::info(
+            "Root",
+            &format!("[{serial}] su policy uid={uid} -> {policy}（重启实例后生效）"),
+        );
     }
     r
 }
@@ -580,7 +638,12 @@ pub fn set_su_policy(serial: &str, uid: i64, allow: bool) -> ShellResult {
 /// prompt (or preset default for shell).
 pub fn remove_su_policy(serial: &str, uid: i64) -> ShellResult {
     if uid <= 0 || uid >= 1_000_000 {
-        return ShellResult { success: false, stdout: String::new(), stderr: "uid 无效".into(), exit_code: -1 };
+        return ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: "uid 无效".into(),
+            exit_code: -1,
+        };
     }
     let exec = root_exec(serial);
     let r = exec.run(
@@ -612,8 +675,14 @@ mod tests {
 
     #[test]
     fn su_policy_row_parsing() {
-        assert_eq!(parse_su_policy_row("uid=2000|policy=2|until=0"), Some((2000, 2)));
-        assert_eq!(parse_su_policy_row("uid=10123|policy=1|until=0"), Some((10123, 1)));
+        assert_eq!(
+            parse_su_policy_row("uid=2000|policy=2|until=0"),
+            Some((2000, 2))
+        );
+        assert_eq!(
+            parse_su_policy_row("uid=10123|policy=1|until=0"),
+            Some((10123, 1))
+        );
         assert_eq!(parse_su_policy_row("2000|2|0"), Some((2000, 2)));
         assert_eq!(parse_su_policy_row("garbage"), None);
         assert_eq!(parse_su_policy_row("a|b|c"), None);

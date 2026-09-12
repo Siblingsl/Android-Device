@@ -5,6 +5,7 @@ const LABELS: Record<ToolKind, string> = {
   docker: "Docker",
   adb: "ADB",
   scrcpy: "Scrcpy",
+  gnirehtet: "Gnirehtet",
 };
 
 export function ToolStatus({
@@ -16,7 +17,7 @@ export function ToolStatus({
 }) {
   const { t } = useI18n();
   return (
-    <span className={hit?.ok ? "ok" : "bad"} style={{ fontSize: 13, fontWeight: 600 }}>
+    <span className={`tool-status ${hit?.ok ? "ok" : "bad"}`}>
       {LABELS[kind]} {hit ? (hit.ok ? t("common.tool.available") : t("common.tool.unavailable")) : t("common.tool.probing")}
       {hit?.text ? ` · ${hit.text}` : ""}
     </span>

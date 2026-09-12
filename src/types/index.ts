@@ -205,6 +205,52 @@ export interface ScreenshotResult {
   error?: string;
 }
 
+export interface DeviceTelemetry {
+  serial: string;
+  batteryLevel: number;
+  batteryTemperature: string;
+  powerState: string;
+  voltage: string;
+  updatedAt: string;
+  status: string;
+  message: string;
+}
+
+export interface StreamSession {
+  serial: string;
+  status: "running" | "stopped" | "error";
+  url: string;
+  port: number;
+  message: string;
+}
+
+export interface TerminalSession {
+  id: string;
+  kind: "device" | "local" | string;
+  serial: string;
+  status: "running" | "stopped" | "error";
+  output: string;
+  cols: number;
+  rows: number;
+  message: string;
+}
+
+export interface RecordingSession {
+  serial: string;
+  mode: string;
+  status: "running" | "stopped" | "error";
+  outputPath: string;
+  message: string;
+}
+
+export interface GnirehtetSession {
+  serial: string;
+  status: "running" | "stopped" | "error";
+  message: string;
+  relay: string;
+  installed: boolean;
+}
+
 export interface AppSettings {
   theme: string;
   language: string;
@@ -216,6 +262,14 @@ export interface AppSettings {
   dockerPath: string;
   adbPath: string;
   scrcpyPath: string;
+  gnirehtetPath?: string;
+  recordingPath?: string;
+  closeToTray?: boolean;
+  launchAtLogin?: boolean;
+  edgeHide?: boolean;
+  desktopShortcut?: boolean;
+  updateChannel?: "stable" | "beta";
+  skippedUpdateVersion?: string;
   gappsZipPath?: string;
   installGapps?: boolean;
   lastCpu?: string;
@@ -290,4 +344,27 @@ export interface LanScanResult {
   connectedCount: number;
   durationMs: number;
   message: string;
+}
+
+export interface WirelessDiscovery {
+  status: string;
+  services: string[];
+  message: string;
+}
+
+export type QueueItemStatus = "fulfilled" | "rejected" | "cancelled";
+
+export type QueueItemResult<TItem, TValue> =
+  | { item: TItem; status: "fulfilled"; value: TValue }
+  | { item: TItem; status: "rejected"; reason: string }
+  | { item: TItem; status: "cancelled" };
+
+export interface QueueResult<TItem, TValue> {
+  results: Array<QueueItemResult<TItem, TValue>>;
+  cancelled: boolean;
+}
+
+export interface QueueHandle<TItem, TValue> {
+  done: Promise<QueueResult<TItem, TValue>>;
+  cancel: () => void;
 }

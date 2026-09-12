@@ -15,6 +15,28 @@ pub fn default_kernel_path() -> String {
     DEFAULT_KERNEL.into()
 }
 
+fn platform_strategy(platform: &str) -> (&'static str, bool, bool, &'static str, &'static str) {
+    match platform {
+        "windows-x64" => (
+            "wsl-prebuilt-or-build",
+            true,
+            true,
+            "wsl-kernel-binder-windows-x64-bzImage",
+            "wsl-kernel-binder-windows-x64-config",
+        ),
+        "windows-arm64" => (
+            "wsl-prebuilt-or-build",
+            true,
+            true,
+            "wsl-kernel-binder-windows-arm64-bzImage",
+            "wsl-kernel-binder-windows-arm64-config",
+        ),
+        "darwin-x64" | "darwin-arm64" => ("docker-desktop-vm", true, false, "", ""),
+        "linux-x64" | "linux-arm64" => ("host-binder", true, false, "", ""),
+        _ => ("unsupported", false, false, "", ""),
+    }
+}
+
 /// Host OS + CPU arch for prebuilt kernel / binder strategy.
 /// Returns: platform, os, arch, strategy, supported, needs_wsl, asset_bz, asset_cfg
 pub fn detect_platform() -> (String, String, String, String, bool, bool, String, String) {
@@ -38,9 +60,9 @@ pub fn detect_platform() -> (String, String, String, String, bool, bool, String,
 
     // Windows: prefer machine arch (handles WoW64)
     if cfg!(target_os = "windows") {
-        if let Ok(pa) = std::env::var("PROCESSOR_ARCHITEW6432").or_else(|_| {
-            std::env::var("PROCESSOR_ARCHITECTURE")
-        }) {
+        if let Ok(pa) = std::env::var("PROCESSOR_ARCHITEW6432")
+            .or_else(|_| std::env::var("PROCESSOR_ARCHITECTURE"))
+        {
             let u = pa.to_uppercase();
             arch = if u == "AMD64" || u == "X86_64" {
                 "x64".into()
@@ -53,24 +75,7 @@ pub fn detect_platform() -> (String, String, String, String, bool, bool, String,
     }
 
     let platform = format!("{os}-{arch}");
-    let (strategy, supported, needs_wsl, asset_bz, asset_cfg) = match platform.as_str() {
-        "windows-x64" => (
-            "wsl-prebuilt-or-build",
-            true,
-            true,
-            "wsl-kernel-binder-windows-x64-bzImage",
-            "wsl-kernel-binder-windows-x64-config",
-        ),
-        "windows-arm64" => (
-            "wsl-prebuilt-or-build",
-            true,
-            true,
-            "wsl-kernel-binder-windows-arm64-bzImage",
-            "wsl-kernel-binder-windows-arm64-config",
-        ),
-        "linux-x64" | "linux-arm64" => ("host-binder", true, false, "", ""),
-        _ => ("unsupported", false, false, "", ""),
-    };
+    let (strategy, supported, needs_wsl, asset_bz, asset_cfg) = platform_strategy(&platform);
 
     (
         platform,
@@ -106,7 +111,8 @@ fn scripts_dir() -> Option<PathBuf> {
         candidates.push(exe_parent.join("scripts"));
     }
     for c in candidates {
-        if c.join("switch-wsl-kernel.ps1").is_file() || c.join("build-wsl-binder-kernel.sh").is_file()
+        if c.join("switch-wsl-kernel.ps1").is_file()
+            || c.join("build-wsl-binder-kernel.sh").is_file()
         {
             return Some(c);
         }
@@ -148,7 +154,7 @@ fn read_configured_kernel() -> Option<String> {
 
 fn wsl_available() -> bool {
     let r = util::run_command_timeout("wsl", &["--status"], Duration::from_secs(4));
-    r.success || r.exit_code == 0 || !r.stderr.to_lowercase().contains("not recognized")
+    r.success || r.exit_code == 0
 }
 
 fn wsl_run(args: &[&str], timeout: Duration) -> ShellResult {
@@ -236,9 +242,9 @@ pub fn status() -> WslKernelStatus {
     };
 
     if !plat_ok {
-        st.message = format!("当前平台 {platform} 不在支持列表（仅 Windows/Linux × x64/arm64）");
+        st.message = format!("当前平台 {platform} 不在支持列表（Windows/Linux/macOS × x64/arm64）");
         st.docker_ready_hints
-            .push("macOS 与其它架构未提供 Redroid/WSL 内核方案".into());
+            .push("当前架构未提供 Redroid 内核方案".into());
         return st;
     }
 
@@ -251,11 +257,31 @@ pub fn status() -> WslKernelStatus {
         if binder {
             st.message = format!("Linux {arch}：主机 binder 可用，无需 WSL 内核");
         } else {
-            st.message = format!("Linux {arch}：未检测到 binder，请运行 scripts/setup-linux-binder.sh");
+            st.message =
+                format!("Linux {arch}：未检测到 binder，请运行 scripts/setup-linux-binder.sh");
             st.docker_ready_hints.push(
                 "Linux 不要安装 Windows 的 bzImage；在主机加载 binder_linux 或启用内核选项".into(),
             );
         }
+        return st;
+    }
+
+    // macOS uses Docker Desktop's Linux VM. The host application can use
+    // Docker/ADB/scrcpy normally, but binder availability belongs to the VM
+    // and cannot be inferred from the macOS kernel.
+    if strategy == "docker-desktop-vm" {
+        st.mode = "external-vm".into();
+        let docker_ok = crate::services::docker::is_running_fast();
+        st.message = if docker_ok {
+            "macOS Docker Desktop 引擎可连接；Redroid binder 需要由 Linux VM 提供".into()
+        } else {
+            "macOS 请先启动 Docker Desktop；Redroid binder 需要由 Linux VM 提供".into()
+        };
+        st.docker_ready_hints
+            .push("macOS 不使用 WSL 内核切换".into());
+        st.docker_ready_hints.push(
+            "请确认 Docker Desktop Linux VM 或 QEMU/远程 Linux 方案提供 Android binder".into(),
+        );
         return st;
     }
 
@@ -284,8 +310,10 @@ pub fn status() -> WslKernelStatus {
         );
     }
     if mode == "default" && custom_exists {
-        st.docker_ready_hints
-            .push("已有 binder 内核镜像，但当前使用微软默认内核；运行 Redroid 前请切换到自定义内核".into());
+        st.docker_ready_hints.push(
+            "已有 binder 内核镜像，但当前使用微软默认内核；运行 Redroid 前请切换到自定义内核"
+                .into(),
+        );
     }
     if mode == "custom" && !binder && !st.live_kernel_version.is_empty() {
         st.docker_ready_hints
@@ -442,10 +470,7 @@ fn write_wslconfig_mode(mode: &str) -> Result<String, String> {
         let _ = fs::copy(&path, &bak);
     }
 
-    let kernel_line = format!(
-        "kernel={}",
-        DEFAULT_KERNEL.replace('\\', r"\\")
-    );
+    let kernel_line = format!("kernel={}", DEFAULT_KERNEL.replace('\\', r"\\"));
 
     let mut out: Vec<String> = Vec::new();
     let mut in_wsl2 = false;
@@ -531,4 +556,48 @@ ls /proc/sys/net/bridge 2>/dev/null || echo "(no /proc/sys/net/bridge)"
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::platform_strategy;
 
+    #[test]
+    fn macos_uses_external_linux_vm_strategy() {
+        let (strategy, supported, needs_wsl, asset_bz, asset_cfg) =
+            platform_strategy("darwin-arm64");
+        assert_eq!(strategy, "docker-desktop-vm");
+        assert!(supported);
+        assert!(!needs_wsl);
+        assert!(asset_bz.is_empty());
+        assert!(asset_cfg.is_empty());
+    }
+
+    #[test]
+    fn windows_keeps_prebuilt_wsl_strategy() {
+        let (strategy, supported, needs_wsl, asset_bz, asset_cfg) =
+            platform_strategy("windows-x64");
+        assert_eq!(strategy, "wsl-prebuilt-or-build");
+        assert!(supported);
+        assert!(needs_wsl);
+        assert!(asset_bz.contains("windows-x64"));
+        assert!(asset_cfg.contains("windows-x64"));
+    }
+
+    #[test]
+    fn linux_uses_host_binder_strategy() {
+        let (strategy, supported, needs_wsl, _, _) = platform_strategy("linux-x64");
+        assert_eq!(strategy, "host-binder");
+        assert!(supported);
+        assert!(!needs_wsl);
+    }
+
+    #[test]
+    fn unknown_platform_is_rejected() {
+        let (strategy, supported, needs_wsl, asset_bz, asset_cfg) =
+            platform_strategy("freebsd-x64");
+        assert_eq!(strategy, "unsupported");
+        assert!(!supported);
+        assert!(!needs_wsl);
+        assert!(asset_bz.is_empty());
+        assert!(asset_cfg.is_empty());
+    }
+}

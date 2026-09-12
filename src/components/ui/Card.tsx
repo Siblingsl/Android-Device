@@ -21,18 +21,18 @@ export function Card({
   padding = true,
 }: Props) {
   return (
-    <div
-      className={clsx("card", hover && "hoverable", className)}
+    <section
+      className={clsx("module", hover && "hoverable", className)}
       onClick={onClick}
       role={onClick ? "button" : undefined}
     >
       {(title || action) && (
-        <div className="card-head">
-          {title && <div className="card-title">{title}</div>}
+        <div className="module-head">
+          {title && <div className="module-title">{title}</div>}
           {action}
         </div>
       )}
-      <div className={clsx(padding && "card-body")}>{children}</div>
-    </div>
+      <div className={clsx(padding && "module-body")}>{children}</div>
+    </section>
   );
 }

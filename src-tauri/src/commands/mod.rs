@@ -1,5 +1,10 @@
 use crate::models::*;
-use crate::services::{adb, device, docker, log, root, scrcpy, settings, wsl_kernel};
+use crate::services::{
+    adb, config, device, docker, gnirehtet, log, recording, root, scrcpy, settings, terminal,
+    transfer, wireless, wsl_kernel,
+};
+use base64::Engine;
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tauri::async_runtime::spawn_blocking(f)
@@ -7,8 +12,12 @@ async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 's
         .unwrap_or_default()
 }
 
-async fn blocking_opt<T: Send + 'static>(f: impl FnOnce() -> Option<T> + Send + 'static) -> Option<T> {
-    tauri::async_runtime::spawn_blocking(f).await.unwrap_or(None)
+async fn blocking_opt<T: Send + 'static>(
+    f: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Option<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .unwrap_or(None)
 }
 
 async fn blocking_res<T: Send + 'static, E: Send + 'static + Default>(
@@ -42,6 +51,81 @@ pub async fn list_devices() -> Vec<DeviceInfo> {
 #[tauri::command]
 pub async fn get_device(id: String) -> Option<DeviceInfo> {
     blocking_opt(move || device::get_device(&id)).await
+}
+
+fn encode_url_component(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (*byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn open_device_window(
+    app: AppHandle,
+    id: String,
+    title: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if id.trim().is_empty() || id.chars().any(|character| character.is_control()) {
+        return Err("设备标识不能为空或包含控制字符".into());
+    }
+    if title.chars().any(|character| character.is_control()) {
+        return Err("窗口标题包含控制字符".into());
+    }
+    let safe_width = width.clamp(320.0, 2400.0);
+    let safe_height = height.clamp(240.0, 1400.0);
+    let safe_x = if x.is_finite() {
+        x.clamp(-10_000.0, 10_000.0)
+    } else {
+        40.0
+    };
+    let safe_y = if y.is_finite() {
+        y.clamp(-10_000.0, 10_000.0)
+    } else {
+        40.0
+    };
+    let label = format!(
+        "device-window-{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
+    );
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.set_position(LogicalPosition::new(safe_x, safe_y));
+        let _ = window.set_size(LogicalSize::new(safe_width, safe_height));
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let url = format!(
+        "index.html?window=device&device={}",
+        encode_url_component(&id)
+    );
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title(if title.trim().is_empty() {
+            "Redroid Device"
+        } else {
+            title.trim()
+        })
+        .inner_size(safe_width, safe_height)
+        .position(safe_x, safe_y)
+        .resizable(true)
+        .build()
+        .map(|_| ())
+        .map_err(|error| format!("打开设备独立窗口失败: {error}"))
+}
+
+#[tauri::command]
+pub async fn get_device_telemetry(serial: String) -> DeviceTelemetry {
+    blocking(move || device::telemetry(&serial)).await
 }
 
 #[tauri::command]
@@ -159,8 +243,38 @@ pub async fn device_send_clipboard(serial: String, content: String) -> ShellResu
 }
 
 #[tauri::command]
+pub async fn device_read_clipboard(serial: String) -> ShellResult {
+    blocking(move || device::read_clipboard(&serial)).await
+}
+
+#[tauri::command]
 pub async fn device_shell(serial: String, command: String) -> ShellResult {
     blocking(move || device::shell_command(&serial, &command)).await
+}
+
+#[tauri::command]
+pub async fn terminal_start(kind: String, serial: String) -> TerminalSession {
+    blocking(move || terminal::start(&kind, &serial)).await
+}
+
+#[tauri::command]
+pub async fn terminal_write(id: String, input: String) -> ShellResult {
+    blocking(move || terminal::write(&id, &input)).await
+}
+
+#[tauri::command]
+pub async fn terminal_read(id: String) -> TerminalSession {
+    blocking(move || terminal::read(&id)).await
+}
+
+#[tauri::command]
+pub async fn terminal_resize(id: String, cols: u16, rows: u16) -> ShellResult {
+    blocking(move || terminal::resize(&id, cols, rows)).await
+}
+
+#[tauri::command]
+pub async fn terminal_stop(id: String) -> ShellResult {
+    blocking(move || terminal::stop(&id)).await
 }
 
 // ---- APK / Apps ----
@@ -181,8 +295,18 @@ pub async fn start_app(serial: String, package: String) -> ShellResult {
 }
 
 #[tauri::command]
+pub async fn start_app_activity(serial: String, package: String, activity: String) -> ShellResult {
+    blocking(move || device::start_app_activity(&serial, &package, &activity)).await
+}
+
+#[tauri::command]
 pub async fn stop_app(serial: String, package: String) -> ShellResult {
     blocking(move || device::stop_app(&serial, &package)).await
+}
+
+#[tauri::command]
+pub async fn create_app_shortcut(serial: String, package: String) -> Result<String, String> {
+    blocking_res(move || crate::services::launch::create_app_shortcut(&serial, &package)).await
 }
 
 #[tauri::command]
@@ -193,6 +317,19 @@ pub async fn clear_app_data(serial: String, package: String) -> ShellResult {
 #[tauri::command]
 pub async fn list_apps(serial: String, include_system: bool) -> Vec<AppInfo> {
     blocking(move || device::list_apps(&serial, include_system)).await
+}
+
+#[tauri::command]
+pub async fn list_apps_result(
+    serial: String,
+    include_system: bool,
+) -> Result<Vec<AppInfo>, String> {
+    blocking_res(move || device::list_apps_result(&serial, include_system)).await
+}
+
+#[tauri::command]
+pub async fn get_app_icon(serial: String, package: String) -> Result<String, String> {
+    blocking_res(move || device::app_icon_result(&serial, &package)).await
 }
 
 #[tauri::command]
@@ -210,11 +347,31 @@ pub async fn get_app_activities(serial: String, package: String) -> String {
     blocking(move || device::app_activities(&serial, &package)).await
 }
 
+#[tauri::command]
+pub async fn get_app_detail_result(serial: String, package: String) -> Result<AppInfo, String> {
+    blocking_res(move || device::app_detail_result(&serial, &package)).await
+}
+
+#[tauri::command]
+pub async fn get_app_permissions_result(serial: String, package: String) -> Result<String, String> {
+    blocking_res(move || device::app_permissions_result(&serial, &package)).await
+}
+
+#[tauri::command]
+pub async fn get_app_activities_result(serial: String, package: String) -> Result<String, String> {
+    blocking_res(move || device::app_activities_result(&serial, &package)).await
+}
+
 // ---- Files ----
 
 #[tauri::command]
 pub async fn list_files(serial: String, path: String) -> Vec<FileEntry> {
     blocking(move || device::list_files(&serial, &path)).await
+}
+
+#[tauri::command]
+pub async fn list_files_result(serial: String, path: String) -> Result<Vec<FileEntry>, String> {
+    blocking_res(move || device::list_files_result(&serial, &path)).await
 }
 
 #[tauri::command]
@@ -235,6 +392,31 @@ pub async fn delete_file(serial: String, path: String) -> ShellResult {
 #[tauri::command]
 pub async fn mkdir_remote(serial: String, path: String) -> ShellResult {
     blocking(move || device::mkdir(&serial, &path)).await
+}
+
+#[tauri::command]
+pub async fn move_remote_file(serial: String, source: String, target: String) -> ShellResult {
+    blocking(move || transfer::move_path(&serial, &source, &target)).await
+}
+
+#[tauri::command]
+pub async fn copy_remote_file(serial: String, source: String, target: String) -> ShellResult {
+    blocking(move || transfer::copy_path(&serial, &source, &target)).await
+}
+
+#[tauri::command]
+pub async fn delete_remote_path(serial: String, path: String) -> ShellResult {
+    blocking(move || transfer::delete_path(&serial, &path)).await
+}
+
+#[tauri::command]
+pub async fn read_remote_file(serial: String, path: String) -> ShellResult {
+    blocking(move || transfer::read_path(&serial, &path)).await
+}
+
+#[tauri::command]
+pub async fn write_remote_file(serial: String, path: String, content: String) -> ShellResult {
+    blocking(move || transfer::write_path(&serial, &path, &content)).await
 }
 
 #[tauri::command]
@@ -288,6 +470,11 @@ pub async fn refresh_docker_info() -> DockerInfo {
 #[tauri::command]
 pub async fn create_redroid_instance(req: CreateInstanceRequest) -> ShellResult {
     blocking(move || docker::create_redroid(&req)).await
+}
+
+#[tauri::command]
+pub async fn cancel_create_instance(name: String) -> ShellResult {
+    blocking(move || docker::cancel_create(&name)).await
 }
 
 #[tauri::command]
@@ -515,6 +702,21 @@ pub async fn adb_lan_scan(subnet: String, port: u16, auto_connect: bool) -> LanS
     blocking(move || adb::lan_scan(&subnet, port, auto_connect)).await
 }
 
+#[tauri::command]
+pub async fn adb_pair(address: String, code: String) -> ShellResult {
+    blocking(move || wireless::pair(&address, &code)).await
+}
+
+#[tauri::command]
+pub async fn adb_discover() -> WirelessDiscovery {
+    blocking(wireless::discover).await
+}
+
+#[tauri::command]
+pub async fn adb_tcpip(serial: String, port: u16) -> ShellResult {
+    blocking(move || wireless::tcpip(&serial, port)).await
+}
+
 // ---- Scrcpy ----
 
 #[tauri::command]
@@ -524,7 +726,8 @@ pub async fn scrcpy_start(
     bit_rate: u32,
     extra: Option<String>,
 ) -> ShellResult {
-    blocking(move || scrcpy::start(&serial, max_size, bit_rate, extra.as_deref().unwrap_or(""))).await
+    blocking(move || scrcpy::start(&serial, max_size, bit_rate, extra.as_deref().unwrap_or("")))
+        .await
 }
 
 #[tauri::command]
@@ -540,6 +743,118 @@ pub async fn scrcpy_restart(serial: String) -> ShellResult {
 #[tauri::command]
 pub async fn scrcpy_status(serial: String) -> String {
     blocking(move || scrcpy::status(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stream_start(
+    serial: String,
+    max_size: u32,
+    bit_rate: u32,
+    extra: Option<String>,
+) -> StreamSession {
+    blocking(move || {
+        crate::services::stream::start(&serial, max_size, bit_rate, extra.as_deref().unwrap_or(""))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stream_stop(serial: String) -> ShellResult {
+    blocking(move || crate::services::stream::stop(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stream_status(serial: String) -> StreamSession {
+    blocking(move || crate::services::stream::status(&serial)).await
+}
+
+// ---- Recording / camera / OTG ----
+
+#[tauri::command]
+pub async fn recording_start(
+    serial: String,
+    mode: String,
+    output_path: String,
+    camera_facing: String,
+    camera_id: String,
+    camera_ar: String,
+    camera_high_speed: bool,
+    camera_size: String,
+    camera_fps: u32,
+    time_limit: u32,
+    record_format: String,
+    record_orientation: String,
+    camera_torch: bool,
+    camera_zoom: Option<f64>,
+    gamepad: String,
+) -> RecordingSession {
+    blocking(move || {
+        recording::start(
+            &serial,
+            &mode,
+            &output_path,
+            &camera_facing,
+            &camera_id,
+            &camera_ar,
+            camera_high_speed,
+            &camera_size,
+            camera_fps,
+            time_limit,
+            &record_format,
+            &record_orientation,
+            camera_torch,
+            camera_zoom,
+            &gamepad,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn recording_stop(serial: String) -> ShellResult {
+    blocking(move || recording::stop(&serial)).await
+}
+
+#[tauri::command]
+pub async fn recording_status(serial: String) -> RecordingSession {
+    blocking(move || recording::status(&serial)).await
+}
+
+// ---- Gnirehtet reverse tethering ----
+
+#[tauri::command]
+pub async fn gnirehtet_install(serial: String) -> ShellResult {
+    blocking(move || gnirehtet::install(&serial)).await
+}
+
+#[tauri::command]
+pub async fn gnirehtet_start(
+    serial: String,
+    dns: String,
+    relay_port: u16,
+    routes: String,
+) -> GnirehtetSession {
+    blocking(move || gnirehtet::start(&serial, &dns, relay_port, &routes)).await
+}
+
+#[tauri::command]
+pub async fn gnirehtet_stop(serial: String) -> ShellResult {
+    blocking(move || gnirehtet::stop(&serial)).await
+}
+
+#[tauri::command]
+pub async fn gnirehtet_status(serial: String) -> GnirehtetSession {
+    blocking(move || gnirehtet::status(&serial)).await
+}
+
+#[tauri::command]
+pub async fn gnirehtet_repair(
+    serial: String,
+    dns: String,
+    relay_port: u16,
+    routes: String,
+) -> GnirehtetSession {
+    blocking(move || gnirehtet::repair(&serial, &dns, relay_port, &routes)).await
 }
 
 // ---- System logs ----
@@ -590,6 +905,16 @@ pub async fn update_settings(settings: AppSettings) -> Result<AppSettings, Strin
 }
 
 #[tauri::command]
+pub async fn read_config_file(path: String) -> Result<String, String> {
+    blocking_res(move || config::read(&path)).await
+}
+
+#[tauri::command]
+pub async fn write_config_file(path: String, content: String) -> Result<(), String> {
+    blocking_res(move || config::write(&path, &content)).await
+}
+
+#[tauri::command]
 pub async fn probe_tool(kind: String, path: String) -> ShellResult {
     blocking(move || probe_tool_bin(&kind, &path)).await
 }
@@ -608,6 +933,9 @@ fn probe_tool_bin(kind: &str, path: &str) -> ShellResult {
         "docker" => &["version", "--format", "{{.Client.Version}}"],
         "adb" => &["version"],
         "scrcpy" => &["--version"],
+        // The official Rust build has no --version flag; invoking it without
+        // arguments prints its CLI help and exits successfully.
+        "gnirehtet" => &[],
         _ => {
             return ShellResult {
                 success: false,
@@ -617,12 +945,31 @@ fn probe_tool_bin(kind: &str, path: &str) -> ShellResult {
             };
         }
     };
-    let mut r = crate::services::util::run_command_timeout(bin, args, std::time::Duration::from_secs(8));
-    if r.success || !r.stdout.is_empty() {
-        r.success = true;
-        r.stdout = r.stdout.lines().next().unwrap_or(&r.stdout).trim().to_string();
+    let mut r =
+        crate::services::util::run_command_timeout(bin, args, std::time::Duration::from_secs(8));
+    // A tool may print a version/help line before exiting non-zero. That is
+    // still a failed probe; never turn useful-looking stdout into a fake OK.
+    if r.success {
+        r.stdout = r
+            .stdout
+            .lines()
+            .next()
+            .unwrap_or(&r.stdout)
+            .trim()
+            .to_string();
     }
     r
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn probes_gnirehtet_without_an_unsupported_version_flag() {
+    let result = probe_tool_bin("gnirehtet", "gnirehtet");
+    assert!(result.success, "probe failed: {result:?}");
+    assert!(
+        result.stderr.contains("Syntax: gnirehtet"),
+        "probe output: {result:?}"
+    );
 }
 
 #[tauri::command]

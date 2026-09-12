@@ -10,11 +10,15 @@ export const dockerZh: Record<string, string> = {
 
   // Binder / WSL kernel card
   "docker.kernelCard.title": "Binder / WSL 内核（Redroid）",
+  "docker.kernel.expand": "展开详情",
+  "docker.kernel.collapse": "收起详情",
   "docker.refreshStatus": "刷新状态",
   "docker.kernel.platform": "平台",
   "docker.kernel.strategy": "策略",
   "docker.kernel.strategyWsl": "WSL 内核切换",
   "docker.kernel.strategyHost": "主机 binder",
+  "docker.kernel.strategyMac": "Docker Desktop Linux VM",
+  "docker.kernel.externalVm": "由外部 Linux VM 提供",
   "docker.kernel.unsupported": "不支持",
   "docker.kernel.currentMode": "当前模式",
   "docker.kernel.liveKernel": "运行中内核",
@@ -47,6 +51,14 @@ export const dockerZh: Record<string, string> = {
 
   // Create form
   "docker.createForm.title": "创建 Redroid 实例",
+  "docker.createCollapse": "收起创建",
+  "docker.createExpand": "继续创建",
+  "docker.creating": "创建中",
+  "docker.cancellingCreate": "正在取消…",
+  "docker.cancelCreate": "删除",
+  "docker.cancelCreateConfirm": "确定取消并删除正在创建的实例「{name}」？本次新建的容器和数据卷会清理，已有同名数据卷会保留。",
+  "docker.createCancelled": "已取消创建",
+  "docker.cancelCreateFailed": "取消创建失败",
   "docker.justCreated": "刚创建成功 · ",
   "docker.prevReady": "上一台已就绪：",
   "docker.stayOnForm": "创建后留在此表单（连续建机）",
@@ -228,11 +240,15 @@ export const dockerEn: Record<string, string> = {
 
   // Binder / WSL kernel card
   "docker.kernelCard.title": "Binder / WSL Kernel (Redroid)",
+  "docker.kernel.expand": "Expand details",
+  "docker.kernel.collapse": "Collapse details",
   "docker.refreshStatus": "Refresh status",
   "docker.kernel.platform": "Platform",
   "docker.kernel.strategy": "Strategy",
   "docker.kernel.strategyWsl": "WSL kernel switching",
   "docker.kernel.strategyHost": "Host binder",
+  "docker.kernel.strategyMac": "Docker Desktop Linux VM",
+  "docker.kernel.externalVm": "Provided by external Linux VM",
   "docker.kernel.unsupported": "Unsupported",
   "docker.kernel.currentMode": "Current mode",
   "docker.kernel.liveKernel": "Running kernel",
@@ -265,6 +281,14 @@ export const dockerEn: Record<string, string> = {
 
   // Create form
   "docker.createForm.title": "Create Redroid instance",
+  "docker.createCollapse": "Collapse create",
+  "docker.createExpand": "Continue creating",
+  "docker.creating": "Creating",
+  "docker.cancellingCreate": "Cancelling…",
+  "docker.cancelCreate": "Delete",
+  "docker.cancelCreateConfirm": "Cancel and delete the instance being created ({name})? Artifacts created by this attempt will be removed; an existing data volume with the same name is kept.",
+  "docker.createCancelled": "Creation cancelled",
+  "docker.cancelCreateFailed": "Failed to cancel creation",
   "docker.justCreated": "Just created · ",
   "docker.prevReady": "Previous instance ready: ",
   "docker.stayOnForm": "Stay on this form after creation (batch creation)",

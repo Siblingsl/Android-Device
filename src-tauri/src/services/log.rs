@@ -114,7 +114,12 @@ pub fn export(path: &str, content: Option<&str>) -> Result<String, String> {
         list(None, None, None, 10000)
             .iter()
             .rev()
-            .map(|l| format!("[{}] [{}] [{}] {}", l.timestamp, l.level, l.source, l.message))
+            .map(|l| {
+                format!(
+                    "[{}] [{}] [{}] {}",
+                    l.timestamp, l.level, l.source, l.message
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };

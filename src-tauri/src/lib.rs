@@ -1,15 +1,52 @@
 mod commands;
-mod models;
-mod services;
+pub mod models;
+pub mod services;
 
 use commands::*;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    Emitter, Manager,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    services::log::info("System", "Redroid Device Center starting");
+    services::log::info("System", "Just Run starting");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
+            let show = MenuItem::with_id(app, "show", "显示主窗口", true, Option::<&str>::None)?;
+            let devices =
+                MenuItem::with_id(app, "devices", "打开设备中心", true, Option::<&str>::None)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, Option::<&str>::None)?;
+            let menu = Menu::with_items(app, &[&show, &devices, &quit])?;
+            let tray = TrayIconBuilder::with_id("main")
+                .icon(tauri::include_image!("icons/icon.png"))
+                .menu(&menu)
+                .tooltip("Just Run")
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| {
+                    if event.id() == "quit" {
+                        app.exit(0);
+                        return;
+                    }
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        if event.id() == "devices" {
+                            let _ = window.emit("rdc://navigate", "/devices");
+                        }
+                    }
+                })
+                .build(app)?;
+            let _ = tray;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // System
             get_dashboard,
@@ -17,6 +54,8 @@ pub fn run() {
             // Devices
             list_devices,
             get_device,
+            open_device_window,
+            get_device_telemetry,
             connect_device,
             disconnect_device,
             restart_device,
@@ -39,23 +78,42 @@ pub fn run() {
             device_open_notifications,
             device_open_settings,
             device_send_clipboard,
+            device_read_clipboard,
             device_shell,
+            terminal_start,
+            terminal_write,
+            terminal_read,
+            terminal_resize,
+            terminal_stop,
             // APK / Apps
             install_apk,
             uninstall_app,
             start_app,
+            start_app_activity,
+            create_app_shortcut,
             stop_app,
             clear_app_data,
             list_apps,
+            list_apps_result,
+            get_app_icon,
             get_app_detail,
             get_app_permissions,
             get_app_activities,
+            get_app_detail_result,
+            get_app_permissions_result,
+            get_app_activities_result,
             // Files
             list_files,
+            list_files_result,
             upload_file,
             download_file,
             delete_file,
             mkdir_remote,
+            move_remote_file,
+            copy_remote_file,
+            delete_remote_path,
+            read_remote_file,
+            write_remote_file,
             storage_info,
             // Screenshot
             take_screenshot,
@@ -69,6 +127,7 @@ pub fn run() {
             get_docker_info,
             refresh_docker_info,
             create_redroid_instance,
+            cancel_create_instance,
             get_create_stage,
             next_free_adb_port,
             check_instance_name,
@@ -114,11 +173,27 @@ pub fn run() {
             adb_auto_fix,
             adb_local_subnet,
             adb_lan_scan,
+            adb_pair,
+            adb_discover,
+            adb_tcpip,
             // Scrcpy
             scrcpy_start,
             scrcpy_stop,
             scrcpy_restart,
             scrcpy_status,
+            scrcpy_stream_start,
+            scrcpy_stream_stop,
+            scrcpy_stream_status,
+            // Recording / camera / OTG
+            recording_start,
+            recording_stop,
+            recording_status,
+            // Gnirehtet reverse tethering
+            gnirehtet_install,
+            gnirehtet_start,
+            gnirehtet_stop,
+            gnirehtet_status,
+            gnirehtet_repair,
             // Logs
             get_system_logs,
             clear_system_logs,
@@ -127,6 +202,8 @@ pub fn run() {
             // Settings
             get_settings,
             update_settings,
+            read_config_file,
+            write_config_file,
             reveal_in_folder,
             probe_tool,
             // WSL binder kernel (switch / restore / verify)

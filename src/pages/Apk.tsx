@@ -132,7 +132,7 @@ export function ApkPage() {
       for (const d of targets) {
         setStatusText(t("apk.installingTo", { name: d.name }));
         const r = await DeviceService.installApk(d.serial, apkPath, replace);
-        const ok = r.success || r.stdout.includes("Success");
+        const ok = r.success;
         if (ok) okCount += 1;
         lines.push({
           id: d.id,

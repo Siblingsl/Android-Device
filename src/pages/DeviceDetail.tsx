@@ -4,10 +4,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft,
-  Camera,
-  Expand,
-  Home,
-  RotateCcw,
   RefreshCw,
   Keyboard,
   Clipboard,
@@ -18,13 +14,26 @@ import {
   Play,
   Square,
   Search,
+  Star,
 } from "lucide-react";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
-import { StatusDot } from "../components/ui/StatusDot";
+import { DeviceStream } from "../components/device/DeviceStream";
+import { DeviceControlBar } from "../components/device/DeviceControlBar";
+import { FileExplorer } from "../components/device/FileExplorer";
+import { InteractiveTerminal } from "../components/device/InteractiveTerminal";
+import { RecordingPanel } from "../components/device/RecordingPanel";
+import { ScrcpyPreferences } from "../components/device/ScrcpyPreferences";
+import { GnirehtetPanel } from "../components/device/GnirehtetPanel";
+import { DeviceMetadataPanel } from "../components/device/DeviceMetadataPanel";
+import { KeyboardMappingPanel } from "../components/device/KeyboardMappingPanel";
+import { AutomationPanel } from "../components/device/AutomationPanel";
+import { AgentPanel } from "../components/device/AgentPanel";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
+import { resolveStoredScrcpyArgs } from "../lib/scrcpyPreferences";
+import { getDeviceMetadata } from "../lib/deviceMetadata";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -33,6 +42,7 @@ import type {
   FileEntry,
   LsposedScopeReport,
   RootStatus,
+  ShellResult,
   SuPolicyEntry,
 } from "../types";
 
@@ -172,24 +182,36 @@ export function DeviceDetail() {
   }
 
   const serial = device.serial;
+  const online = device.online && device.adbStatus === "device";
+  const detailTabs: Array<readonly [Tab, string, boolean]> = [
+    ["overview", "detail.tab.overview", false],
+    ["control", "detail.tab.control", true],
+    ["files", "detail.tab.files", true],
+    ["apps", "detail.tab.apps", true],
+    ["logs", "detail.tab.logs", true],
+    ["settings", "detail.tab.settings", true],
+  ];
+  const activeTabLabel = t(`detail.tab.${tab}`);
+  const activeTabSummary = t(`detail.workspace.${tab}`);
 
   return (
-    <div>
-      <div className="page-header">
-        <div className="row">
+    <div className="detail-shell">
+      <div className="detail-context">
+        <div className="detail-context-main">
           <Button variant="ghost" icon={<ArrowLeft size={16} />} onClick={() => navigate("/devices")}>
             {t("detail.back")}
           </Button>
-          <div>
-            <div className="page-title" style={{ fontSize: 22 }}>
-              {device.name}
-            </div>
+          <div className="detail-context-identity">
+            <div className="page-title">{device.name}</div>
             <div className="page-subtitle mono">{device.serial}</div>
           </div>
-          <StatusDot online={device.online && device.adbStatus === "device"} />
+          <span className={`detail-context-state ${online ? "is-online" : ""}`}>
+            <span className="detail-context-state-dot" />
+            {online ? t("common.online") : t("common.offline")}
+          </span>
         </div>
-        <div className="row">
-          {!(device.online && device.adbStatus === "device") && device.containerId && (
+        <div className="detail-context-actions">
+          {!online && device.containerId && (
             <Button
               variant="primary"
               loading={connecting}
@@ -217,7 +239,7 @@ export function DeviceDetail() {
               {t("detail.startContainer")}
             </Button>
           )}
-          {!(device.online && device.adbStatus === "device") && device.serial.includes(":") && (
+          {!online && device.serial.includes(":") && (
             <Button
               variant="primary"
               loading={connecting}
@@ -271,80 +293,93 @@ export function DeviceDetail() {
         </div>
       </div>
 
-      <div className="tabs">
-        {(
-          [
-            ["overview", "detail.tab.overview", false],
-            ["control", "detail.tab.control", true],
-            ["files", "detail.tab.files", true],
-            ["apps", "detail.tab.apps", true],
-            ["logs", "detail.tab.logs", true],
-            ["settings", "detail.tab.settings", true],
-          ] as const
-        ).map(([k, labelKey, needsOnline]) => {
-          const offlineTab = needsOnline && !(device.online && device.adbStatus === "device");
+      <nav className="detail-tabbar" aria-label={t("detail.tabNavigation")}>
+        {detailTabs.map(([k, labelKey, needsOnline], index) => {
+          const offlineTab = needsOnline && !online;
           const label = t(labelKey);
           return (
             <button
               key={k}
-              className={`tab ${tab === k ? "active" : ""}`}
+              className={`detail-tab ${tab === k ? "active" : ""}`}
+              aria-current={tab === k ? "page" : undefined}
               title={offlineTab ? t("detail.title.needsAdb") : undefined}
-              style={offlineTab ? { opacity: 0.55 } : undefined}
               onClick={() => setTab(k)}
             >
-              {offlineTab ? t("detail.tab.offline", { label }) : label}
+              <span className="detail-tab-index">0{index + 1}</span>
+              <span>{label}</span>
+              {offlineTab && (
+                <span className="detail-tab-status">
+                  <span className="detail-tab-status-dot" />
+                  {t("detail.tab.requiresOnline")}
+                </span>
+              )}
             </button>
           );
         })}
-      </div>
+      </nav>
 
-      {!(device.online && device.adbStatus === "device") && tab !== "overview" && (
-        <div className="notice" style={{ marginBottom: 12 }}>
-          {t("detail.notice.offline")}
+      <main className="detail-workspace">
+        <div className="detail-workspace-head">
+          <div>
+            <div className="detail-workspace-title">{activeTabLabel}</div>
+            <div className="detail-workspace-summary">{activeTabSummary}</div>
+          </div>
+          <div className="detail-workspace-actions">
+            <span className={`detail-context-state ${online ? "is-online" : ""}`}>
+              <span className="detail-context-state-dot" />
+              {online ? t("detail.status.ready") : t("detail.tab.requiresOnline")}
+            </span>
+          </div>
         </div>
-      )}
-      {tab === "overview" && (
-        <>
-          <Overview device={device} onOpenTab={setTab} />
-          <RootPanel device={device} />
-        </>
-      )}
-      {tab === "control" && (
-        <Control
-          serial={serial}
-          resolution={device.resolution}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "files" && (
-        <Files
-          serial={serial}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "apps" && (
-        <Apps
-          serial={serial}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "logs" && (
-        <DeviceLogs serial={serial} disabled={!(device.online && device.adbStatus === "device")} />
-      )}
-      {tab === "settings" && (
-        <DeviceSettings
-          serial={serial}
-          initialResolution={device.resolution}
-          initialDpi={device.dpi}
-          setStatusText={setStatusText}
-          onApplied={() => void load()}
-          deviceId={deviceId}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
+        <div className="detail-scroll-region">
+          {!online && tab !== "overview" && (
+            <div className="notice" style={{ marginBottom: 0 }}>
+              {t("detail.notice.offline")}
+            </div>
+          )}
+          {tab === "overview" && (
+            <div className="detail-overview-workspace">
+              <Overview device={device} onOpenTab={setTab} />
+              <DeviceMetadataPanel device={device} />
+              <RootPanel device={device} />
+            </div>
+          )}
+          {tab === "control" && (
+            <Control
+              serial={serial}
+              device={device}
+              resolution={device.resolution}
+              setStatusText={setStatusText}
+              onOpenFiles={() => setTab("files")}
+              onOpenApps={() => setTab("apps")}
+              onOpenNetwork={() => document.querySelector<HTMLElement>(".gnirehtet-panel")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+              onOpenScrcpyConfig={() => {
+                setTab("settings");
+                window.setTimeout(() => document.querySelector<HTMLElement>(".scrcpy-preferences")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+              }}
+              onOpenTerminal={() => {
+                document.querySelector<HTMLElement>(".interactive-terminal")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                document.querySelector<HTMLInputElement>(".interactive-terminal-input input")?.focus();
+              }}
+              disabled={!online}
+            />
+          )}
+          {tab === "files" && <FileExplorer serial={serial} setStatusText={setStatusText} disabled={!online} />}
+          {tab === "apps" && <Apps serial={serial} setStatusText={setStatusText} disabled={!online} />}
+          {tab === "logs" && <DeviceLogs serial={serial} disabled={!online} />}
+          {tab === "settings" && (
+            <DeviceSettings
+              serial={serial}
+              initialResolution={device.resolution}
+              initialDpi={device.dpi}
+              setStatusText={setStatusText}
+              onApplied={() => void load()}
+              deviceId={deviceId}
+              disabled={!online}
+            />
+          )}
+        </div>
+      </main>
     </div>
   );
 }
@@ -842,6 +877,7 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
   ];
   return (
     <Card
+      className="detail-module"
       title={t("detail.overview.title")}
       action={
         <div className="row" style={{ flexWrap: "wrap" }}>
@@ -954,25 +990,27 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
   );
 }
 
-function parseResolution(raw?: string): { w: number; h: number } {
-  const m = (raw || "").match(/(\d+)\s*[x×]\s*(\d+)/i);
-  if (m) {
-    const w = Number(m[1]);
-    const h = Number(m[2]);
-    if (w > 0 && h > 0) return { w, h };
-  }
-  return { w: 1080, h: 1920 };
-}
-
 function Control({
   serial,
+  device,
   resolution,
   setStatusText,
+  onOpenFiles,
+  onOpenApps,
+  onOpenNetwork,
+  onOpenScrcpyConfig,
+  onOpenTerminal,
   disabled = false,
 }: {
   serial: string;
+  device: DeviceInfo;
   resolution?: string;
   setStatusText: (s: string) => void;
+  onOpenFiles?: () => void;
+  onOpenApps?: () => void;
+  onOpenNetwork?: () => void;
+  onOpenScrcpyConfig?: () => void;
+  onOpenTerminal?: () => void;
   disabled?: boolean;
 }) {
   const { t } = useI18n();
@@ -1009,25 +1047,6 @@ function Control({
       return fallback;
     }
   });
-  const [preview, setPreview] = useState<string | null>(null);
-  const [shotPath, setShotPath] = useState("");
-  const [previewStamp, setPreviewStamp] = useState("");
-  const [previewFlash, setPreviewFlash] = useState(false);
-  const [livePreview, setLivePreview] = useState(true);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [hideChrome, setHideChrome] = useState(false);
-  const [scrcpyLabel, setScrcpyLabel] = useState("stopped");
-  const dragRef = useRef<{ x: number; y: number } | null>(null);
-  const swipedRef = useRef(false);
-  const screenRef = useRef<HTMLDivElement>(null);
-  const frameRef = useRef<HTMLElement | null>(null);
-  const previewRef = useRef(false);
-  const livePreviewRef = useRef(true);
-  const refreshTimer = useRef(0);
-  const chromeTimer = useRef(0);
-  const { w: screenW, h: screenH } = parseResolution(resolution);
-  previewRef.current = Boolean(preview);
-  livePreviewRef.current = livePreview;
 
   useEffect(() => {
     try {
@@ -1045,134 +1064,17 @@ function Control({
     }
   }, [history]);
 
-  useEffect(
-    () => () => {
-      window.clearTimeout(refreshTimer.current);
-      window.clearTimeout(chromeTimer.current);
-    },
-    [],
-  );
-
-  const syncScrcpy = async () => {
-    try {
-      const s = await DeviceService.scrcpyStatus(serial);
-      setScrcpyLabel(s || "stopped");
-    } catch {
-      setScrcpyLabel("unknown");
-    }
-  };
-
-  useEffect(() => {
-    void syncScrcpy();
-    const t = setInterval(() => void syncScrcpy(), 4000);
-    return () => clearInterval(t);
-  }, [serial]);
-
-  useEffect(() => {
-    const onFs = () => {
-      const on = document.fullscreenElement === screenRef.current;
-      setFullscreen(on);
-      setHideChrome(false);
-      window.clearTimeout(chromeTimer.current);
-      if (on) {
-        chromeTimer.current = window.setTimeout(() => setHideChrome(true), 1600);
-      }
-    };
-    document.addEventListener("fullscreenchange", onFs);
-    return () => document.removeEventListener("fullscreenchange", onFs);
-  }, []);
-
-  const bumpChrome = (e: React.MouseEvent) => {
-    if (!fullscreen) return;
-    const el = screenRef.current;
-    if (!el) return;
-    const y = e.clientY - el.getBoundingClientRect().top;
-    const show = y < 80;
-    setHideChrome(!show);
-    window.clearTimeout(chromeTimer.current);
-    if (show) {
-      chromeTimer.current = window.setTimeout(() => setHideChrome(true), 1600);
-    }
-  };
-
-  const refreshPreview = () => {
-    if (!previewRef.current || !livePreviewRef.current || disabled) return;
-    window.clearTimeout(refreshTimer.current);
-    refreshTimer.current = window.setTimeout(() => {
-      void DeviceService.screenshot(serial).then((r) => {
-        if (!r.success) return;
-        setPreview(r.base64 ? `data:image/png;base64,${r.base64}` : null);
-        if (r.path) setShotPath(r.path);
-        setPreviewStamp(new Date().toLocaleTimeString());
-        setPreviewFlash(true);
-        window.setTimeout(() => setPreviewFlash(false), 1600);
-      });
-    }, 800);
-  };
-
-  const act = async (label: string, fn: () => Promise<unknown>) => {
+  const act = async (label: string, fn: () => Promise<ShellResult>) => {
     if (disabled) {
       setStatusText(t("detail.status.deviceOffline"));
       return;
     }
     setStatusText(label);
     try {
-      await fn();
-      refreshPreview();
-    } finally {
-      setStatusText(t("detail.status.ready"));
-    }
-  };
-
-  const toDevicePoint = (e: React.MouseEvent) => {
-    const el = frameRef.current ?? screenRef.current;
-    if (!el) return { x: 0, y: 0 };
-    const rect = el.getBoundingClientRect();
-    const nx = (e.clientX - rect.left) / Math.max(rect.width, 1);
-    const ny = (e.clientY - rect.top) / Math.max(rect.height, 1);
-    const x = Math.round(Math.min(1, Math.max(0, nx)) * screenW);
-    const y = Math.round(Math.min(1, Math.max(0, ny)) * screenH);
-    return { x, y };
-  };
-
-  const onScreenClick = (e: React.MouseEvent) => {
-    if (e.detail === 2) return;
-    if (swipedRef.current) {
-      swipedRef.current = false;
-      return;
-    }
-    const { x, y } = toDevicePoint(e);
-    void act(t("detail.control.tap", { x, y }), () => DeviceService.tap(serial, x, y));
-  };
-
-  const onContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    void act(t("detail.control.back"), () => DeviceService.back(serial));
-  };
-
-  const onAuxClick = (e: React.MouseEvent) => {
-    if (e.button === 1) {
-      e.preventDefault();
-      void act("HOME", () => DeviceService.home(serial));
-    }
-  };
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    dragRef.current = toDevicePoint(e);
-  };
-
-  const onMouseUp = (e: React.MouseEvent) => {
-    if (!dragRef.current || e.button !== 0) return;
-    const end = toDevicePoint(e);
-    const start = dragRef.current;
-    dragRef.current = null;
-    const dist = Math.hypot(end.x - start.x, end.y - start.y);
-    if (dist > 20) {
-      swipedRef.current = true;
-      void act(t("detail.control.swipe"), () =>
-        DeviceService.swipe(serial, start.x, start.y, end.x, end.y, 300)
-      );
+      const result = await fn();
+      setStatusText(result.success ? t("detail.status.ready") : result.stderr || result.stdout || `${label} 失败`);
+    } catch (error) {
+      setStatusText(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -1180,21 +1082,20 @@ function Control({
     const c = (cmd ?? shellCmd).trim();
     if (!c) return;
     setStatusText(t("detail.control.runningShell"));
-    const r = await DeviceService.shell(serial, c);
-    setShellOut((r.stdout || r.stderr || "(empty)") + `\n[exit ${r.exitCode}]`);
-    setHistory((h) => [c, ...h.filter((x) => x !== c)].slice(0, 30));
-    setStatusText(t("detail.status.ready"));
+    try {
+      const r = await DeviceService.shell(serial, c);
+      setShellOut((r.stdout || r.stderr || "(empty)") + `\n[exit ${r.exitCode}]`);
+      setHistory((h) => [c, ...h.filter((x) => x !== c)].slice(0, 30));
+      setStatusText(r.success ? t("detail.status.ready") : r.stderr || r.stdout || "Shell 执行失败");
+    } catch (error) {
+      setStatusText(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const takeShot = async () => {
     setStatusText(t("detail.control.shooting"));
     const r = await DeviceService.screenshot(serial);
     if (r.success) {
-      setPreview(r.base64 ? `data:image/png;base64,${r.base64}` : null);
-      setShotPath(r.path);
-      setPreviewStamp(new Date().toLocaleTimeString());
-      setPreviewFlash(true);
-      window.setTimeout(() => setPreviewFlash(false), 1600);
       setStatusText(t("detail.control.shotSaved", { path: r.path }));
     } else {
       const reason = (r.error || t("detail.control.shotFailed")).trim();
@@ -1203,245 +1104,32 @@ function Control({
     }
   };
 
-  const startScrcpy = async () => {
-    setStatusText(t("detail.control.startingScrcpy"));
-    // Ensure network devices are connected first
-    if (serial.includes(":")) {
-      const c = await DeviceService.connect(serial);
-      if (!c.success && c.stderr) {
-        setScrcpyLabel("stopped");
-        setStatusText(c.stderr);
-        setShellOut((c.stdout || "") + "\n" + (c.stderr || ""));
-        return;
-      }
+  const installApkQuick = async () => {
+    if (disabled) {
+      setStatusText(t("detail.status.deviceOffline"));
+      return;
     }
-    let extra = "";
-    try {
-      const raw = sessionStorage.getItem(`rdc.settings.draft.${serial}`);
-      extra = raw ? String((JSON.parse(raw) as { scrcpyArgs?: string }).scrcpyArgs || "") : "";
-    } catch {
-      extra = "";
-    }
-    const sizeHit = extra.match(/--max-size[=\s]+(\d+)/);
-    const rateHit = extra.match(/--video-bit-rate[=\s]+(\d+)/);
-    const maxSize = sizeHit ? Number(sizeHit[1]) : 1080;
-    const bitRate = rateHit ? Number(rateHit[1]) : 8;
-    const r = await DeviceService.scrcpyStart(serial, maxSize || 1080, bitRate || 8, extra);
-    setScrcpyLabel(r.success ? "running" : "stopped");
-    if (r.success) {
-      setStatusText(t("detail.control.scrcpyStarted"));
-    } else {
-      setStatusText(r.stderr || r.stdout || t("detail.control.scrcpyStartFailed"));
-      setShellOut((prev) => `${prev}\n[scrcpy]\n${r.stderr || r.stdout || "failed"}`.trim());
-    }
-  };
-
-  const stopScrcpy = async () => {
-    await DeviceService.scrcpyStop(serial);
-    setScrcpyLabel("stopped");
-    setStatusText(t("detail.control.scrcpyStopped"));
-  };
-
-  const restartScrcpy = async () => {
-    setStatusText(t("detail.control.reconnectingScrcpy"));
-    const r = await DeviceService.scrcpyRestart(serial);
-    setScrcpyLabel(r.success ? "running" : "stopped");
-    if (r.success) {
-      setStatusText(t("detail.control.scrcpyReconnected"));
-    } else {
-      setStatusText(r.stderr || r.stdout || t("detail.control.scrcpyReconnectFailed"));
-      setShellOut((prev) => `${prev}\n[scrcpy restart]\n${r.stderr || r.stdout || "failed"}`.trim());
-    }
+    const picked = await open({ multiple: false, directory: false, filters: [{ name: "APK", extensions: ["apk"] }] });
+    if (typeof picked !== "string" || !picked) return;
+    const name = picked.split(/[\\\\/]/).pop() || picked;
+    setStatusText(`正在安装 ${name}`);
+    const result = await DeviceService.installApk(serial, picked, true);
+    setStatusText(result.success ? `${name} 安装成功` : result.stderr || result.stdout || `${name} 安装失败`);
   };
 
   return (
-    <div className="split-control">
-      <div className="screen-area" ref={screenRef}
-        onMouseMove={bumpChrome}
-        onClick={disabled ? undefined : onScreenClick}
-        onDoubleClick={
-          disabled
-            ? undefined
-            : (e) => {
-                const { x, y } = toDevicePoint(e);
-                void act(t("detail.control.doubleClick"), async () => {
-                  await DeviceService.tap(serial, x, y);
-                  await DeviceService.tap(serial, x, y);
-                });
-              }
-        }
-        onContextMenu={disabled ? undefined : onContextMenu}
-        onAuxClick={disabled ? undefined : onAuxClick}
-        onMouseDown={disabled ? undefined : onMouseDown}
-        onMouseUp={disabled ? undefined : onMouseUp}
-        onWheel={
-          disabled
-            ? undefined
-            : (e) => {
-                const { x, y } = toDevicePoint(e as unknown as React.MouseEvent);
-                const dy = e.deltaY > 0 ? 300 : -300;
-                void DeviceService.swipe(serial, x, y, x, y + dy, 200).then(() => refreshPreview());
-              }
-        }
-      >
-        <div
-          className="screen-toolbar"
-          style={{ opacity: hideChrome ? 0 : 1, pointerEvents: hideChrome ? "none" : "auto", transition: "opacity .2s" }}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onMouseUp={(e) => e.stopPropagation()}
-        >
-          <div className="row">
-            {scrcpyLabel === "running" ? (
-              <Button size="sm" variant="primary" onClick={() => void stopScrcpy()}>
-                {t("detail.control.mirroringActive")}
-              </Button>
-            ) : (
-              <Button size="sm" variant="secondary" disabled={disabled} onClick={() => void startScrcpy()}>
-                {t("detail.control.startMirroring")}
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={scrcpyLabel !== "running"}
-              onClick={() => void stopScrcpy()}
-            >
-              {t("detail.control.disconnect")}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={disabled || scrcpyLabel !== "running"}
-              onClick={() => void restartScrcpy()}
-            >
-              {t("detail.control.reconnect")}
-            </Button>
-            <Button size="sm" icon={<Camera size={14} />} disabled={disabled} onClick={() => void takeShot()}>
-              {t("detail.control.screenshot")}
-            </Button>
-            {shotPath && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  void DeviceService.revealInFolder(shotPath).catch((e) => void alert(String(e)))
-                }
-              >
-                {t("detail.control.openFolder")}
-              </Button>
-            )}
-          </div>
-          <div className="row">
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Expand size={14} />}
-              onClick={() => {
-                const el = screenRef.current;
-                if (!el) return;
-                if (document.fullscreenElement === el) {
-                  void document.exitFullscreen();
-                } else {
-                  void el.requestFullscreen().catch((e) => void alert(String(e)));
-                }
-              }}
-            >
-              {fullscreen ? t("detail.control.exitFullscreen") : t("detail.control.fullscreen")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<RotateCcw size={14} />}
-              disabled={disabled}
-              onClick={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true))}
-            >
-              {t("detail.control.rotate")}
-            </Button>
-          </div>
-        </div>
+    <div className="detail-control-workspace split-control">
+      <div className="screen-area">
+        <DeviceStream
+          serial={serial}
+          deviceId={device.id}
+          resolution={resolution}
+          disabled={disabled}
+          setStatusText={setStatusText}
+          onTakeScreenshot={() => void takeShot()}
+        />
 
-        {preview ? (
-          <>
-            <img
-              ref={frameRef as React.Ref<HTMLImageElement>}
-              src={preview}
-              alt="screenshot"
-              style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-            />
-            <div
-              className="row"
-              onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{
-                position: "absolute",
-                top: 52,
-                right: 12,
-                zIndex: 2,
-                gap: 6,
-                opacity: hideChrome ? 0 : 1,
-                pointerEvents: hideChrome ? "none" : "auto",
-                transition: "opacity .2s",
-              }}
-            >
-              {previewStamp && (
-                <span className="badge info" style={{ opacity: previewFlash ? 1 : 0.7 }}>
-                  {previewFlash ? t("detail.control.updated", { time: previewStamp }) : previewStamp}
-                </span>
-              )}
-              <button
-                type="button"
-                className="badge"
-                onClick={() => {
-                  setLivePreview((v) => {
-                    const next = !v;
-                    if (!next) window.clearTimeout(refreshTimer.current);
-                    return next;
-                  });
-                }}
-              >
-                {livePreview ? t("detail.control.stopRefresh") : t("detail.control.resumeRefresh")}
-              </button>
-              <button
-                type="button"
-                className="badge"
-                onClick={() => {
-                  window.clearTimeout(refreshTimer.current);
-                  setPreview(null);
-                  setPreviewStamp("");
-                  setPreviewFlash(false);
-                }}
-              >
-                {t("detail.control.closePreview")}
-              </button>
-            </div>
-          </>
-        ) : (
-          <div ref={frameRef as React.Ref<HTMLDivElement>} className="screen-placeholder">
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>{t("detail.control.liveView")}</div>
-            <div style={{ fontSize: 13, opacity: 0.8, maxWidth: 360, lineHeight: 1.6 }}>
-              {t("detail.control.liveViewHint")}
-            </div>
-            <div style={{ marginTop: 12 }} className="badge info">
-              scrcpy: {scrcpyLabel}
-            </div>
-            {shotPath && (
-              <div style={{ marginTop: 12 }}>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    void DeviceService.revealInFolder(shotPath).catch((e) => void alert(String(e)))
-                  }
-                >
-                  {t("detail.control.openLastShotFolder")}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="screen-stats" hidden={fullscreen} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onMouseUp={(e) => e.stopPropagation()}>
+        <div className="screen-stats">
           <span className="badge">{t("detail.control.hint.click")}</span>
           <span className="badge">{t("detail.control.hint.drag")}</span>
           <span className="badge">{t("detail.control.hint.wheel")}</span>
@@ -1452,46 +1140,28 @@ function Control({
       </div>
 
       <div className="control-panel">
+        <KeyboardMappingPanel device={device} setStatusText={setStatusText} />
+        <AutomationPanel device={device} setStatusText={setStatusText} />
+        <AgentPanel device={device} setStatusText={setStatusText} />
+        <RecordingPanel serial={serial} online={!disabled} setStatusText={setStatusText} />
+        <GnirehtetPanel serial={serial} online={!disabled} setStatusText={setStatusText} />
+        <InteractiveTerminal serial={serial} online={!disabled} />
         <Card title={t("detail.control.panelTitle")} padding>
           <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
             {t("detail.control.panelHint")}
           </div>
-          <div className="control-group">
-            <Button disabled={disabled} onClick={() => act("HOME", () => DeviceService.home(serial))} icon={<Home size={14} />}>HOME</Button>
-            <Button disabled={disabled} onClick={() => act("BACK", () => DeviceService.back(serial))}>BACK</Button>
-            <Button disabled={disabled} onClick={() => void takeShot()} icon={<Camera size={14} />}>{t("detail.control.screenshot")}</Button>
-            <select
-              disabled={disabled}
-              defaultValue=""
-              style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
-              onChange={(e) => {
-                const v = e.target.value;
-                e.target.value = "";
-                if (v === "recent") void act("RECENT", () => DeviceService.recent(serial));
-                if (v === "power") void act("POWER", () => DeviceService.power(serial));
-                if (v === "volup") void act(t("detail.control.volUp"), () => DeviceService.volumeUp(serial));
-                if (v === "voldown") void act(t("detail.control.volDown"), () => DeviceService.volumeDown(serial));
-                if (v === "lock") void act(t("detail.control.lock"), () => DeviceService.lock(serial));
-                if (v === "wake") void act(t("detail.control.wake"), () => DeviceService.wake(serial));
-                if (v === "rotate") void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true));
-                if (v === "notify") void act(t("detail.control.notify"), () => DeviceService.openNotifications(serial));
-                if (v === "settings") void act(t("detail.control.settings"), () => DeviceService.openSettings(serial));
-              }}
-            >
-              <option value="" disabled>
-                {t("detail.control.moreKeys")}
-              </option>
-              <option value="recent">RECENT</option>
-              <option value="power">POWER</option>
-              <option value="volup">{t("detail.control.volUp")}</option>
-              <option value="voldown">{t("detail.control.volDown")}</option>
-              <option value="lock">{t("detail.control.lock")}</option>
-              <option value="wake">{t("detail.control.wake")}</option>
-              <option value="rotate">{t("detail.control.rotate")}</option>
-              <option value="notify">{t("detail.control.notify")}</option>
-              <option value="settings">{t("detail.control.settings")}</option>
-            </select>
-          </div>
+          <DeviceControlBar
+            serial={serial}
+            online={!disabled}
+            setStatusText={setStatusText}
+            onScreenshot={() => void takeShot()}
+            onInstallApk={() => void installApkQuick()}
+            onOpenApps={onOpenApps}
+            onOpenNetwork={onOpenNetwork}
+            onOpenScrcpyConfig={onOpenScrcpyConfig}
+            onOpenFiles={onOpenFiles}
+            onOpenTerminal={onOpenTerminal}
+          />
 
           <div className="field" style={{ marginTop: 12 }}>
             <label>{t("detail.control.inputText")}</label>
@@ -1514,13 +1184,15 @@ function Control({
           </div>
         </Card>
 
-        <Card title="ADB Shell">
+        <Card title="一次性 ADB Shell">
           <div className="field">
             <label>{t("detail.control.command")}</label>
             <div className="row">
               <input
                 style={{ flex: 1 }}
-                className="mono"
+                aria-label="ADB Shell 命令"
+                data-testid="shell-command-input"
+                className="mono shell-command-input"
                 value={shellCmd}
                 onChange={(e) => setShellCmd(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && runShell()}
@@ -1614,7 +1286,7 @@ function Control({
   );
 }
 
-function Files({
+export function Files({
   serial,
   setStatusText,
   disabled = false,
@@ -1678,7 +1350,7 @@ function Files({
   const load = async (p = path) => {
     setLoading(true);
     try {
-      setFiles(await DeviceService.listFiles(serial, p));
+      setFiles(await DeviceService.listFilesResult(serial, p));
       setStorage(await DeviceService.storageInfo(serial));
     } catch (e) {
       setStatusText(e instanceof Error ? t("detail.files.listFailedWith", { msg: e.message }) : t("detail.files.listFailed"));
@@ -1723,7 +1395,7 @@ function Files({
   };
 
   return (
-    <div className="stack">
+    <div className="detail-files-workspace stack">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
         <div className="row-between" style={{ marginBottom: 12 }}>
@@ -1885,6 +1557,7 @@ function Files({
             </Button>
           </div>
         ) : (
+          <div className="table-wrap detail-table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -1984,10 +1657,56 @@ function Files({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
       </fieldset>
     </div>
+  );
+}
+
+const appIconCache = new Map<string, string>();
+const appIconFailures = new Set<string>();
+
+function AppIcon({ serial, packageName, label }: { serial: string; packageName: string; label: string }) {
+  const cacheKey = `${serial}\u0000${packageName}`;
+  const [source, setSource] = useState(() => appIconCache.get(cacheKey) || "");
+  const [visible, setVisible] = useState(false);
+  const hostRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "160px" });
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible || source || appIconFailures.has(cacheKey)) return;
+    let disposed = false;
+    void DeviceService.getAppIcon(serial, packageName).then((icon) => {
+      if (disposed || !icon) return;
+      appIconCache.set(cacheKey, icon);
+      setSource(icon);
+    }).catch(() => {
+      appIconFailures.add(cacheKey);
+    });
+    return () => { disposed = true; };
+  }, [cacheKey, packageName, serial, source, visible]);
+
+  return (
+    <span ref={hostRef} className="app-list-icon" title={source ? label : `${label}（图标不可用）`} aria-hidden="true">
+      {source ? <img src={source} alt="" loading="lazy" /> : <span>{label.trim().slice(0, 1).toUpperCase() || "?"}</span>}
+    </span>
   );
 }
 
@@ -2021,11 +1740,27 @@ function Apps({
   const [detailBusy, setDetailBusy] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(`rdc.apps.favorites.${serial}`) || "[]") as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const [recent, setRecent] = useState<string[]>(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(`rdc.apps.recent.${serial}`) || "[]") as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
 
   const load = async () => {
     setLoading(true);
     try {
-      setApps(await DeviceService.listApps(serial, includeSystem));
+      setApps(await DeviceService.listAppsResult(serial, includeSystem));
     } catch (e) {
       setStatusText(e instanceof Error ? t("detail.apps.listFailedWith", { msg: e.message }) : t("detail.apps.listFailed"));
     } finally {
@@ -2046,6 +1781,32 @@ function Apps({
     }
   }, [serial, keyword, includeSystem]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(`rdc.apps.favorites.${serial}`, JSON.stringify(favorites));
+      localStorage.setItem(`rdc.apps.recent.${serial}`, JSON.stringify(recent));
+    } catch {
+      /* optional persistence */
+    }
+  }, [serial, favorites, recent]);
+
+  const noteRecent = (packageName: string) => setRecent((current) => [packageName, ...current.filter((item) => item !== packageName)].slice(0, 12));
+  const launch = async (app: AppInfo) => {
+    setAppBusy(`start:${app.packageName}`);
+    setStatusText(t("detail.apps.starting", { pkg: app.packageName }));
+    try {
+      const result = await DeviceService.startApp(serial, app.packageName);
+      if (result.success) {
+        noteRecent(app.packageName);
+        setStatusText(t("detail.apps.started", { pkg: app.packageName }));
+      } else {
+        setStatusText(result.stderr || result.stdout || t("detail.apps.startFailed"));
+      }
+    } finally {
+      setAppBusy(null);
+    }
+  };
+
   const filtered = apps.filter(
     (a) =>
       a.packageName.toLowerCase().includes(keyword.toLowerCase()) ||
@@ -2053,7 +1814,7 @@ function Apps({
   );
 
   return (
-    <div className="stack">
+    <div className="detail-apps-workspace stack">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
         <div className="row-between" style={{ marginBottom: 12 }}>
@@ -2073,6 +1834,21 @@ function Apps({
             <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
               {keyword ? t("detail.files.matchCount", { m: filtered.length, n: apps.length }) : t("detail.apps.totalCount", { n: apps.length })}
             </span>
+            <select
+              className="app-launch-picker"
+              defaultValue=""
+              aria-label="快速启动应用"
+              onChange={(event) => {
+                const packageName = event.target.value;
+                event.target.value = "";
+                const app = apps.find((item) => item.packageName === packageName);
+                if (app) void launch(app);
+              }}
+            >
+              <option value="" disabled>快速启动应用</option>
+              {favorites.length > 0 && <optgroup label="收藏">{favorites.map((pkg) => <option key={`fav-${pkg}`} value={pkg}>{apps.find((app) => app.packageName === pkg)?.label || pkg}</option>)}</optgroup>}
+              {recent.length > 0 && <optgroup label="最近">{recent.map((pkg) => <option key={`recent-${pkg}`} value={pkg}>{apps.find((app) => app.packageName === pkg)?.label || pkg}</option>)}</optgroup>}
+            </select>
             <label className="row muted" style={{ fontSize: 12 }}>
               <input type="checkbox" checked={includeSystem} onChange={(e) => setIncludeSystem(e.target.checked)} />
               {t("detail.apps.includeSystem")}
@@ -2098,8 +1874,7 @@ function Apps({
                   setInstalling(true);
                   setStatusText(t("detail.apps.installing", { name }));
                   const r = await DeviceService.installApk(serial, path, true);
-                  const ok = r.success || /success/i.test(r.stdout);
-                  if (ok) {
+                   if (r.success) {
                     setStatusText(t("detail.apps.installSuccess", { name }));
                     await load();
                   } else {
@@ -2138,6 +1913,7 @@ function Apps({
             </Button>
           </div>
         ) : (
+          <div className="table-wrap detail-table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -2151,7 +1927,10 @@ function Apps({
               {filtered.map((a) => (
                 <tr key={a.packageName}>
                   <td>
-                    <div style={{ fontWeight: 600 }}>{a.label}</div>
+                    <div className="app-name-line">
+                      <AppIcon serial={serial} packageName={a.packageName} label={a.label} />
+                      <div style={{ fontWeight: 600 }}>{a.label}</div>
+                    </div>
                     <button
                       type="button"
                       className="mono muted"
@@ -2173,25 +1952,20 @@ function Apps({
                   </td>
                   <td>
                     <div className="row">
+                      <button
+                        type="button"
+                        className={`app-favorite ${favorites.includes(a.packageName) ? "active" : ""}`}
+                        title={favorites.includes(a.packageName) ? "取消收藏" : "收藏应用"}
+                        onClick={() => setFavorites((current) => current.includes(a.packageName) ? current.filter((item) => item !== a.packageName) : [a.packageName, ...current].slice(0, 30))}
+                      >
+                        <Star size={14} fill={favorites.includes(a.packageName) ? "currentColor" : "none"} />
+                      </button>
                       <Button
                         size="sm"
                         icon={<Play size={13} />}
                         loading={appBusy === `start:${a.packageName}`}
                         disabled={appBusy !== null}
-                        onClick={async () => {
-                          setAppBusy(`start:${a.packageName}`);
-                          setStatusText(t("detail.apps.starting", { pkg: a.packageName }));
-                          try {
-                            const r = await DeviceService.startApp(serial, a.packageName);
-                            if (r.success) setStatusText(t("detail.apps.started", { pkg: a.packageName }));
-                            else {
-                              setStatusText(r.stderr || r.stdout || t("detail.apps.startFailed"));
-                              void alert(r.stderr || r.stdout || t("detail.apps.startFailed"));
-                            }
-                          } finally {
-                            setAppBusy(null);
-                          }
-                        }}
+                        onClick={() => void launch(a)}
                       >
                         {t("detail.apps.startBtn")}
                       </Button>
@@ -2226,9 +2000,9 @@ function Apps({
                           setDetailBusy(a.packageName);
                           setStatusText(t("detail.apps.loadingDetail", { pkg: a.packageName }));
                           try {
-                            const d = await DeviceService.getAppDetail(serial, a.packageName);
-                            const perm = await DeviceService.getAppPermissions(serial, a.packageName);
-                            const act = await DeviceService.getAppActivities(serial, a.packageName);
+                             const d = await DeviceService.getAppDetailResult(serial, a.packageName);
+                             const perm = await DeviceService.getAppPermissionsResult(serial, a.packageName);
+                             const act = await DeviceService.getAppActivitiesResult(serial, a.packageName);
                             setDetail(
                               `Package: ${d.packageName}\nVersion: ${d.versionName} (${d.versionCode})\nFirst: ${d.firstInstallTime}\nUpdate: ${d.lastUpdateTime}\nPath: ${d.apkPath}\n\nPermissions:\n${perm}\n\nActivities:\n${act}`
                             );
@@ -2265,6 +2039,21 @@ function Apps({
                               () => void alert(t("common.panel.copyFailed")),
                             );
                           }
+                          if (v === "activity") {
+                            const activity = prompt("Activity 完整类名（可带前导 .）", "");
+                            if (!activity) return;
+                            setStatusText(`正在启动 ${a.packageName}/${activity}`);
+                            const r = await DeviceService.startAppActivity(serial, a.packageName, activity);
+                            setStatusText(r.success ? "Activity 已启动" : r.stderr || r.stdout || "Activity 启动失败");
+                          }
+                          if (v === "shortcut") {
+                            try {
+                              const shortcut = await DeviceService.createAppShortcut(serial, a.packageName);
+                              setStatusText(`应用桌面快捷方式已创建：${shortcut}`);
+                            } catch (error) {
+                              setStatusText(`创建应用快捷方式失败：${error instanceof Error ? error.message : String(error)}`);
+                            }
+                          }
                           if (v === "uninstall") {
                             if (!(await askConfirm(t("detail.apps.confirmUninstall", { pkg: a.packageName })))) return;
                             setStatusText(t("detail.apps.uninstalling", { pkg: a.packageName }));
@@ -2284,7 +2073,9 @@ function Apps({
                           {t("detail.more")}
                         </option>
                         <option value="copy">{t("detail.apps.copyPkg")}</option>
-                        <option value="clear">{t("detail.apps.clearData")}</option>
+                         <option value="activity">启动指定 Activity</option>
+                         <option value="shortcut">创建桌面快捷方式</option>
+                         <option value="clear">{t("detail.apps.clearData")}</option>
                         <option value="uninstall">{t("detail.apps.uninstall")}</option>
                       </select>
                     </div>
@@ -2293,6 +2084,7 @@ function Apps({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
       {detail && (
@@ -2425,9 +2217,10 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
   const filtered = Boolean(filter || errorOnly);
 
   return (
-    <Card
-      title={t("detail.logs.title")}
-      action={
+    <div className="detail-logs-workspace">
+      <Card
+        title={t("detail.logs.title")}
+        action={
         <div className="row">
           <Button
             size="sm"
@@ -2494,8 +2287,8 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
           </select>
         </div>
       }
-    >
-      <div className="row" style={{ marginBottom: 10 }}>
+      >
+        <div className="row" style={{ marginBottom: 10 }}>
         <input
           style={{ flex: 1 }}
           placeholder={t("detail.logs.filterPlaceholder")}
@@ -2555,8 +2348,9 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
             </button>
           ))
         )}
-      </div>
-    </Card>
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -2605,7 +2399,13 @@ function DeviceSettings({
     const m = serial.match(/:(\d+)$/);
     return m?.[1] || "5555";
   });
-  const [scrcpyArgs, setScrcpyArgs] = useState(draft.scrcpyArgs || "--max-size 1080 --video-bit-rate 8M");
+  const [scrcpyArgs, setScrcpyArgs] = useState(
+    draft.scrcpyArgs || resolveStoredScrcpyArgs(
+      serial,
+      getDeviceMetadata(deviceId).group,
+      "--max-size 1080 --video-bit-rate 8M",
+    ),
+  );
   const [proxyInput, setProxyInput] = useState(draft.proxy || "");
   const [proxyCurrent, setProxyCurrent] = useState<string>("");
   const settings = useAppStore((s) => s.settings);
@@ -2653,8 +2453,9 @@ function DeviceSettings({
   }, [serial]);
 
   return (
-    <fieldset disabled={offline} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-    <Card title={t("detail.settings.title")}>
+    <div className="detail-settings-workspace">
+      <fieldset disabled={offline} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      <Card title={t("detail.settings.title")}>
       <div className="form-grid">
         <div className="field">
           <label>{t("common.panel.resolution")}</label>
@@ -2797,52 +2598,13 @@ function DeviceSettings({
             </Button>
           </div>
         </div>
-        <div className="field">
-          <label>{t("detail.settings.scrcpyArgs")}</label>
-          <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
-            {(
-              [
-                [t("detail.settings.presetLowData"), "--max-size 720 --video-bit-rate 2M"],
-                [t("detail.settings.presetDefault"), "--max-size 1080 --video-bit-rate 8M"],
-                [t("detail.settings.presetHd"), "--max-size 1080 --video-bit-rate 16M"],
-                [t("detail.settings.presetBorderless"), "--max-size 1080 --video-bit-rate 8M --window-borderless"],
-              ] as const
-            ).map(([name, args]) => (
-              <Button
-                key={name}
-                size="sm"
-                variant={scrcpyArgs === args ? "primary" : "ghost"}
-                onClick={() => setScrcpyArgs(args)}
-              >
-                {name}
-              </Button>
-            ))}
-          </div>
-          <input value={scrcpyArgs} onChange={(e) => setScrcpyArgs(e.target.value)} />
-          <Button
-            size="sm"
-            style={{ marginTop: 8 }}
-            onClick={async () => {
-              setStatusText(t("detail.settings.startingScrcpy"));
-              const sizeHit = scrcpyArgs.match(/--max-size[=\s]+(\d+)/);
-              const rateHit = scrcpyArgs.match(/--video-bit-rate[=\s]+(\d+)/);
-              const r = await DeviceService.scrcpyStart(
-                serial,
-                Number(sizeHit?.[1]) || 1080,
-                Number(rateHit?.[1]) || 8,
-                scrcpyArgs,
-              );
-              if (r.success) setStatusText(t("detail.settings.scrcpyStarted"));
-              else {
-                const reason = (r.stderr || r.stdout || t("detail.control.scrcpyStartFailed")).trim();
-                setStatusText(reason);
-                void alert(reason);
-              }
-            }}
-          >
-            {t("detail.settings.startScrcpyBtn")}
-          </Button>
-        </div>
+        <ScrcpyPreferences
+          serial={serial}
+          initialArgs={scrcpyArgs}
+          disabled={offline}
+          onChange={setScrcpyArgs}
+          setStatusText={setStatusText}
+        />
         <div className="field">
           <label>{t("detail.settings.container")}</label>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
@@ -2961,7 +2723,8 @@ function DeviceSettings({
           {t("detail.settings.applyLangBtn")}
         </Button>
       </div>
-    </Card>
-    </fieldset>
+      </Card>
+      </fieldset>
+    </div>
   );
 }

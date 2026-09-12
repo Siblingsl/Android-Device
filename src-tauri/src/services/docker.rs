@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
@@ -9,6 +10,11 @@ use crate::models::{
 use crate::services::{adb, cache, log, settings, util};
 
 static CREATE_STAGE: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
+static CREATE_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+static CREATE_CONTAINER_CREATED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+static CREATE_VOLUME_CREATED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+
+const CREATE_CANCELLED_EXIT_CODE: i32 = -2;
 
 pub fn create_stage() -> String {
     CREATE_STAGE.lock().clone()
@@ -18,6 +24,62 @@ fn set_create_stage(msg: &str) {
     *CREATE_STAGE.lock() = msg.to_string();
     if !msg.is_empty() {
         log::info("Docker", msg);
+    }
+}
+
+fn create_cancel_requested() -> bool {
+    CREATE_CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+fn cancelled_create_result(container_name: &str) -> ShellResult {
+    cleanup_create_artifacts(container_name);
+    set_create_stage("创建已取消");
+    ShellResult {
+        success: false,
+        stdout: String::new(),
+        stderr: "创建已取消".into(),
+        exit_code: CREATE_CANCELLED_EXIT_CODE,
+    }
+}
+
+fn cleanup_create_artifacts(container_name: &str) {
+    if CREATE_CONTAINER_CREATED.load(Ordering::SeqCst) {
+        let _ = util::run_command_timeout(
+            &docker_bin(),
+            &["rm", "-f", container_name],
+            Duration::from_secs(30),
+        );
+    }
+    let sanitized = container_name.trim_start_matches("rdc-");
+    if CREATE_VOLUME_CREATED.load(Ordering::SeqCst) && !sanitized.is_empty() {
+        let _ = util::run_command_timeout(
+            &docker_bin(),
+            &["volume", "rm", "-f", &data_volume_name(sanitized)],
+            Duration::from_secs(20),
+        );
+    }
+    cache::invalidate_docker();
+    cache::invalidate_devices();
+}
+
+pub fn cancel_create(name: &str) -> ShellResult {
+    let container_name = create_container_name(name);
+    if container_name == "rdc-" {
+        return ShellResult {
+            success: false,
+            stdout: String::new(),
+            stderr: "实例名称无效".into(),
+            exit_code: -1,
+        };
+    }
+    CREATE_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    set_create_stage(&format!("正在取消创建 {}…", container_name));
+    cleanup_create_artifacts(&container_name);
+    ShellResult {
+        success: true,
+        stdout: format!("已请求取消创建 {}", container_name),
+        stderr: String::new(),
+        exit_code: 0,
     }
 }
 
@@ -52,7 +114,11 @@ pub fn is_running_fast() -> bool {
     if let Some(v) = cache::docker_running(Duration::from_secs(5)) {
         return v;
     }
-    let r = util::run_command_timeout(&docker_bin(), &["version", "--format", "{{.Server.Version}}"], Duration::from_secs(3));
+    let r = util::run_command_timeout(
+        &docker_bin(),
+        &["version", "--format", "{{.Server.Version}}"],
+        Duration::from_secs(3),
+    );
     let ok = r.success && !r.stdout.is_empty();
     cache::set_docker_running(ok);
     if ok {
@@ -149,9 +215,8 @@ pub fn list_containers(all: bool) -> Vec<DockerContainer> {
             let p: Vec<&str> = line.split('\t').collect();
             let name = p.get(1).unwrap_or(&"").to_string();
             let image = p.get(2).unwrap_or(&"").to_string();
-            let is_redroid = name.contains("redroid")
-                || image.contains("redroid")
-                || name.starts_with("rdc-");
+            let is_redroid =
+                name.contains("redroid") || image.contains("redroid") || name.starts_with("rdc-");
             DockerContainer {
                 id: p.first().unwrap_or(&"").to_string(),
                 name,
@@ -222,7 +287,9 @@ fn bindings_to_ports(json: &str) -> String {
     };
     let mut parts: Vec<String> = Vec::new();
     for (key, targets) in map {
-        let Some(arr) = targets.as_array() else { continue };
+        let Some(arr) = targets.as_array() else {
+            continue;
+        };
         for t in arr {
             let host_port = t.get("HostPort").and_then(|x| x.as_str()).unwrap_or("");
             if host_port.is_empty() {
@@ -241,10 +308,16 @@ fn bindings_to_ports(json: &str) -> String {
 }
 
 pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
+    CREATE_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    CREATE_CONTAINER_CREATED.store(false, Ordering::SeqCst);
+    CREATE_VOLUME_CREATED.store(false, Ordering::SeqCst);
     cache::invalidate_docker();
     cache::invalidate_devices();
     set_create_stage(&format!("检查名称与端口：{}", req.name));
-    log::info("Docker", &format!("Creating Redroid instance: {}", req.name));
+    log::info(
+        "Docker",
+        &format!("Creating Redroid instance: {}", req.name),
+    );
 
     let sanitized = sanitize_name(&req.name);
     if sanitized.is_empty() {
@@ -255,7 +328,10 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
             exit_code: -1,
         };
     }
-    let container_name = format!("rdc-{}", sanitized);
+    let container_name = create_container_name(&req.name);
+    if create_cancel_requested() {
+        return cancelled_create_result(&container_name);
+    }
     let res_parts: Vec<&str> = req.resolution.split('x').collect();
     let width = res_parts.first().copied().unwrap_or("1080");
     let height = res_parts.get(1).copied().unwrap_or("1920");
@@ -313,7 +389,10 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     // Ensure image exists first — pull can take several minutes
     if !image_exists(&base_image) {
         set_create_stage(&format!("拉取镜像 {base_image}（可能较久）…"));
-        log::info("Docker", &format!("Image not found locally, pulling {} ...", base_image));
+        log::info(
+            "Docker",
+            &format!("Image not found locally, pulling {} ...", base_image),
+        );
         let pull = util::run_command_timeout(
             &docker_bin(),
             &["pull", &base_image],
@@ -335,6 +414,10 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
             };
         }
         log::info("Docker", &format!("Image pulled: {}", base_image));
+    }
+
+    if create_cancel_requested() {
+        return cancelled_create_result(&container_name);
     }
 
     let image = if req.install_magisk {
@@ -404,6 +487,12 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     let volume = data_volume_name(&sanitized);
     let volume_map = format!("{volume}:/data");
 
+    if create_cancel_requested() {
+        return cancelled_create_result(&container_name);
+    }
+
+    CREATE_VOLUME_CREATED.store(!volume_exists(&volume).unwrap_or(true), Ordering::SeqCst);
+
     set_create_stage(&format!("创建数据卷 {volume}"));
     let created_vol = util::run_command_timeout(
         &docker_bin(),
@@ -413,7 +502,10 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     if !created_vol.success {
         log::warn(
             "Docker",
-            &format!("volume create {volume} failed (will retry via -v): {}", created_vol.stderr),
+            &format!(
+                "volume create {volume} failed (will retry via -v): {}",
+                created_vol.stderr
+            ),
         );
     }
 
@@ -445,20 +537,35 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     );
 
     if r.success {
+        CREATE_CONTAINER_CREATED.store(true, Ordering::SeqCst);
+        if create_cancel_requested() {
+            return cancelled_create_result(&container_name);
+        }
         log::info(
             "Docker",
-            &format!("Created container {} vol={volume} ({})", container_name, r.stdout),
+            &format!(
+                "Created container {} vol={volume} ({})",
+                container_name, r.stdout
+            ),
         );
         let serial = format!("127.0.0.1:{}", req.adb_port);
         if req.wait_adb {
             set_create_stage(&format!("等待 ADB 就绪 {serial}（最长约 4 分钟）"));
             let limit = 240u64;
-            let ready = adb::wait_ready_with(&serial, Duration::from_secs(limit), |secs, state, boot| {
-                let boot = if boot.is_empty() { "—" } else { boot };
-                set_create_stage(&format!(
-                    "等待 ADB {serial}：已等 {secs}/{limit} 秒 · state={state} · boot={boot}"
-                ));
-            });
+            let ready = adb::wait_ready_with_cancel(
+                &serial,
+                Duration::from_secs(limit),
+                create_cancel_requested,
+                |secs, state, boot| {
+                    let boot = if boot.is_empty() { "—" } else { boot };
+                    set_create_stage(&format!(
+                        "等待 ADB {serial}：已等 {secs}/{limit} 秒 · state={state} · boot={boot}"
+                    ));
+                },
+            );
+            if create_cancel_requested() {
+                return cancelled_create_result(&container_name);
+            }
             r.stdout = format!(
                 "{}\n数据卷: {volume}\nADB: {serial}\n{}",
                 r.stdout.trim(),
@@ -507,6 +614,9 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
                 r.stdout.trim()
             );
         }
+        if create_cancel_requested() {
+            return cancelled_create_result(&container_name);
+        }
     } else {
         log::error(
             "Docker",
@@ -525,6 +635,25 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
 
 fn data_volume_name(sanitized: &str) -> String {
     format!("rdc-{sanitized}-data")
+}
+
+fn create_container_name(name: &str) -> String {
+    format!("rdc-{}", sanitize_name(name))
+}
+
+fn volume_exists(name: &str) -> Option<bool> {
+    let result = util::run_command_timeout(
+        &docker_bin(),
+        &["volume", "inspect", "--format", "{{.Name}}", name],
+        Duration::from_secs(10),
+    );
+    if result.success {
+        Some(true)
+    } else if result.stderr.to_lowercase().contains("no such volume") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn wait_container_adb(id_or_name: &str, timeout: Duration) -> ShellResult {
@@ -576,7 +705,11 @@ fn normalize_memory(raw: &str) -> String {
     if s.is_empty() {
         return "2g".into();
     }
-    if s.chars().last().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+    if s.chars()
+        .last()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false)
+    {
         return s;
     }
     if s.parse::<u64>().is_ok() {
@@ -633,32 +766,76 @@ pub fn adb_port_taken(port: u16) -> bool {
 }
 
 /// Launch Docker Desktop when the engine is unreachable. Returns true if the
-/// exe was spawned; the engine needs ~30-60s to come up, so callers should
-/// keep polling the docker probe afterwards.
+/// the desktop launcher was requested; the engine needs ~30-60s to come up,
+/// so callers should keep polling the docker probe afterwards.
 pub fn start_docker_desktop() -> bool {
-    let exe = std::env::var("ProgramFiles")
-        .map(|p| {
-            std::path::PathBuf::from(p)
-                .join("Docker")
-                .join("Docker")
-                .join("Docker Desktop.exe")
-        })
-        .unwrap_or_else(|_| std::path::PathBuf::from("C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe"));
-    if !exe.exists() {
+    #[cfg(target_os = "macos")]
+    {
+        return match std::process::Command::new("open")
+            .args(["-a", "Docker"])
+            .status()
+        {
+            Ok(status) if status.success() => {
+                log::info(
+                    "Docker",
+                    "已请求启动 Docker Desktop，等待引擎就绪（约 30-60s）…",
+                );
+                true
+            }
+            Ok(status) => {
+                log::warn(
+                    "Docker",
+                    &format!("启动 macOS Docker Desktop 失败（exit={:?}）", status.code()),
+                );
+                false
+            }
+            Err(e) => {
+                log::warn("Docker", &format!("启动 macOS Docker Desktop 失败: {e}"));
+                false
+            }
+        };
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
         log::warn(
             "Docker",
-            &format!("未找到 Docker Desktop.exe（{}），请手动启动", exe.display()),
+            "当前 Linux 平台不自动启动 Docker Desktop，请使用系统服务管理 Docker",
         );
         return false;
     }
-    match std::process::Command::new(&exe).spawn() {
-        Ok(_) => {
-            log::info("Docker", "已启动 Docker Desktop，等待引擎就绪（约 30-60s）…");
-            true
+
+    #[cfg(windows)]
+    {
+        let exe = std::env::var("ProgramFiles")
+            .map(|p| {
+                std::path::PathBuf::from(p)
+                    .join("Docker")
+                    .join("Docker")
+                    .join("Docker Desktop.exe")
+            })
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from("C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe")
+            });
+        if !exe.exists() {
+            log::warn(
+                "Docker",
+                &format!("未找到 Docker Desktop.exe（{}），请手动启动", exe.display()),
+            );
+            return false;
         }
-        Err(e) => {
-            log::warn("Docker", &format!("启动 Docker Desktop 失败: {e}"));
-            false
+        match std::process::Command::new(&exe).spawn() {
+            Ok(_) => {
+                log::info(
+                    "Docker",
+                    "已启动 Docker Desktop，等待引擎就绪（约 30-60s）…",
+                );
+                true
+            }
+            Err(e) => {
+                log::warn("Docker", &format!("启动 Docker Desktop 失败: {e}"));
+                false
+            }
         }
     }
 }
@@ -672,7 +849,9 @@ pub fn container_name_taken(name: &str) -> bool {
     }
     list_containers(true).iter().any(|c| {
         let n = c.name.trim_start_matches('/');
-        n == container_name || n == raw || sanitize_name(n.strip_prefix("rdc-").unwrap_or(n)) == sanitize_name(base)
+        n == container_name
+            || n == raw
+            || sanitize_name(n.strip_prefix("rdc-").unwrap_or(n)) == sanitize_name(base)
     })
 }
 
@@ -778,9 +957,7 @@ fn ensure_gapps_image(base_image: &str, zip_or_dir: &str) -> Result<String, Stri
     }
     let src_path = std::path::Path::new(src);
     if !src_path.exists() {
-        return Err(format!(
-            "GApps 路径不存在: {src}\n基础镜像: {base_image}"
-        ));
+        return Err(format!("GApps 路径不存在: {src}\n基础镜像: {base_image}"));
     }
 
     let stamp = gapps_stamp(src_path)?;
@@ -913,7 +1090,11 @@ fn dir_stamp(root: &std::path::Path) -> String {
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                let r = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+                let r = if rel.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{rel}/{name}")
+                };
                 let p = e.path();
                 if p.is_dir() {
                     walk(&p, &r, acc);
@@ -1032,11 +1213,7 @@ fn find_module_zip(modules_dir: &std::path::Path, prefix: &str) -> Option<std::p
                     .map(|e| e.eq_ignore_ascii_case("zip"))
                     .unwrap_or(false)
                 && p.file_name()
-                    .map(|n| {
-                        n.to_string_lossy()
-                            .to_ascii_lowercase()
-                            .starts_with(prefix)
-                    })
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase().starts_with(prefix))
                     .unwrap_or(false)
         })
         .min()
@@ -1054,10 +1231,9 @@ pub fn magisk_assets() -> crate::models::MagiskAssets {
         return a;
     }
     if let Some(bin) = magisk_bin_dir(&dir) {
-        a.magisk_ok =
-            (bin.join("magisk").exists() || bin.join("magisk64").exists())
-                && bin.join("magiskpolicy").exists()
-                && bin.join("magisk.apk").exists();
+        a.magisk_ok = (bin.join("magisk").exists() || bin.join("magisk64").exists())
+            && bin.join("magiskpolicy").exists()
+            && bin.join("magisk.apk").exists();
     }
     let modules = std::path::Path::new(&dir).join("modules");
     a.lsposed_ok = find_module_zip(&modules, "lsposed").is_some();
@@ -1087,7 +1263,8 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
     let overlay_src = resolve_overlay_dir();
     if overlay_src.is_empty() {
         return Err(
-            "未找到 vendor/magisk-overlay（镜像内 init rc 与首启脚本）。请检查项目文件完整性。".into(),
+            "未找到 vendor/magisk-overlay（镜像内 init rc 与首启脚本）。请检查项目文件完整性。"
+                .into(),
         );
     }
     let modules_src = std::path::Path::new(&magisk_root).join("modules");
@@ -1123,7 +1300,10 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
     // Stamp = everything that changes the derived image.
     let mut stamp_srcs: Vec<String> = vec![
         base_image.to_string(),
-        format!("magisk={}", gapps_stamp(&bin_src.join("magisk.apk")).unwrap_or_default()),
+        format!(
+            "magisk={}",
+            gapps_stamp(&bin_src.join("magisk.apk")).unwrap_or_default()
+        ),
         format!("conf={}", gapps_stamp(&spoof_conf).unwrap_or_default()),
         format!("gapps={}", req.install_gapps),
         format!("lsposed={}", req.install_lsposed),
@@ -1190,7 +1370,8 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
             let system = find_system_overlay(&extracted).ok_or_else(|| {
                 "zip/目录里找不到 system/app、system/priv-app 或 system/product。请使用 MindTheGapps。".to_string()
             })?;
-            copy_dir_all(&system, &ctx_overlay).map_err(|e| format!("复制 GApps overlay 失败: {e}"))?;
+            copy_dir_all(&system, &ctx_overlay)
+                .map_err(|e| format!("复制 GApps overlay 失败: {e}"))?;
         }
 
         // 2. Magisk binaries from the fetched assets (need the exec bit → COPY --chmod=755)
@@ -1224,7 +1405,12 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
                 bin_src.display()
             ));
         }
-        for required in ["magiskpolicy", "busybox", "magisk_preset.sh", "rdc_apply_spoof.sh"] {
+        for required in [
+            "magiskpolicy",
+            "busybox",
+            "magisk_preset.sh",
+            "rdc_apply_spoof.sh",
+        ] {
             if !ctx_bin.join(required).exists() {
                 return Err(format!(
                     "Magisk 资产缺少 {required}（来源 {}）。\n请重跑 .\\scripts\\fetch-magisk.ps1。",
@@ -1244,9 +1430,11 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
             .map_err(|e| e.to_string())?;
         let util_fn = bin_src.join("util_functions.sh");
         if util_fn.exists() {
-            copy_text_normalized(&util_fn, &ctx_data.join("util_functions.sh")).map_err(|e| e.to_string())?;
+            copy_text_normalized(&util_fn, &ctx_data.join("util_functions.sh"))
+                .map_err(|e| e.to_string())?;
         }
-        copy_text_normalized(&spoof_conf, &ctx_data.join("spoof.conf")).map_err(|e| e.to_string())?;
+        copy_text_normalized(&spoof_conf, &ctx_data.join("spoof.conf"))
+            .map_err(|e| e.to_string())?;
 
         // 4. init rc
         copy_text_normalized(
@@ -1388,9 +1576,15 @@ fn first_boot_screen_on(serial: &str) {
                   input keyevent KEYCODE_WAKEUP; true";
     let r = adb::shell_timeout(serial, script, Duration::from_secs(20));
     if r.success {
-        log::info("Docker", &format!("已点亮并保持 {serial} 屏幕常亮（stay_on_while_plugged_in=7）"));
+        log::info(
+            "Docker",
+            &format!("已点亮并保持 {serial} 屏幕常亮（stay_on_while_plugged_in=7）"),
+        );
     } else {
-        log::warn("Docker", &format!("屏幕常亮设置未确认（{serial}）：{}", r.stderr));
+        log::warn(
+            "Docker",
+            &format!("屏幕常亮设置未确认（{serial}）：{}", r.stderr),
+        );
     }
 }
 
@@ -1459,12 +1653,12 @@ fn inject_host_adb_key(container_name: &str) {
         Duration::from_secs(20),
     );
     if r.success {
-        log::info("Docker", &format!("已注入宿主机 ADB 公钥到 {container_name}（user 构建授权）"));
-    } else {
-        log::warn(
+        log::info(
             "Docker",
-            &format!("ADB 公钥注入失败: {}", r.stderr.trim()),
+            &format!("已注入宿主机 ADB 公钥到 {container_name}（user 构建授权）"),
         );
+    } else {
+        log::warn("Docker", &format!("ADB 公钥注入失败: {}", r.stderr.trim()));
     }
 }
 
@@ -1511,7 +1705,10 @@ fn wait_preset_done(container_name: &str, timeout: Duration) -> bool {
 
 fn extract_archive(zip_path: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
     extract_zip_native(zip_path, dest).or_else(|native_err| {
-        log::warn("Docker", &format!("native unzip failed, fallback: {native_err}"));
+        log::warn(
+            "Docker",
+            &format!("native unzip failed, fallback: {native_err}"),
+        );
         extract_zip_external(zip_path, dest).map_err(|ext_err| {
             format!("解压 GApps 失败。内置解压: {native_err}；系统解压: {ext_err}")
         })
@@ -1551,7 +1748,11 @@ fn extract_zip_external(zip: &std::path::Path, dest: &std::path::Path) -> Result
             Duration::from_secs(180),
         )
     } else {
-        util::run_command_timeout("unzip", &["-oq", &zip_s, "-d", &dest_s], Duration::from_secs(180))
+        util::run_command_timeout(
+            "unzip",
+            &["-oq", &zip_s, "-d", &dest_s],
+            Duration::from_secs(180),
+        )
     };
     if r.success {
         Ok(())
@@ -1633,7 +1834,11 @@ fn sanitize_name(name: &str) -> String {
 
 pub fn start_container(id_or_name: &str) -> ShellResult {
     log::info("Docker", &format!("Starting container {}", id_or_name));
-    let mut r = util::run_command_timeout(&docker_bin(), &["start", id_or_name], Duration::from_secs(30));
+    let mut r = util::run_command_timeout(
+        &docker_bin(),
+        &["start", id_or_name],
+        Duration::from_secs(30),
+    );
     cache::invalidate_docker();
     cache::invalidate_devices();
     if r.success {
@@ -1652,7 +1857,11 @@ pub fn start_container(id_or_name: &str) -> ShellResult {
 
 pub fn stop_container(id_or_name: &str) -> ShellResult {
     log::info("Docker", &format!("Stopping container {}", id_or_name));
-    let r = util::run_command_timeout(&docker_bin(), &["stop", id_or_name], Duration::from_secs(20));
+    let r = util::run_command_timeout(
+        &docker_bin(),
+        &["stop", id_or_name],
+        Duration::from_secs(20),
+    );
     cache::invalidate_docker();
     cache::invalidate_devices();
     r
@@ -1660,7 +1869,11 @@ pub fn stop_container(id_or_name: &str) -> ShellResult {
 
 pub fn restart_container(id_or_name: &str) -> ShellResult {
     log::info("Docker", &format!("Restarting container {}", id_or_name));
-    let mut r = util::run_command_timeout(&docker_bin(), &["restart", id_or_name], Duration::from_secs(40));
+    let mut r = util::run_command_timeout(
+        &docker_bin(),
+        &["restart", id_or_name],
+        Duration::from_secs(40),
+    );
     cache::invalidate_docker();
     cache::invalidate_devices();
     if r.success {
@@ -1680,7 +1893,11 @@ pub fn restart_container(id_or_name: &str) -> ShellResult {
 pub fn remove_container(id_or_name: &str, force: bool) -> ShellResult {
     log::info("Docker", &format!("Removing container {}", id_or_name));
     let r = if force {
-        util::run_command_timeout(&docker_bin(), &["rm", "-f", id_or_name], Duration::from_secs(30))
+        util::run_command_timeout(
+            &docker_bin(),
+            &["rm", "-f", id_or_name],
+            Duration::from_secs(30),
+        )
     } else {
         util::run_command_timeout(&docker_bin(), &["rm", id_or_name], Duration::from_secs(20))
     };
@@ -1723,7 +1940,10 @@ pub fn rename_container(id_or_name: &str, new_name: &str) -> ShellResult {
 }
 
 pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
-    log::info("Docker", &format!("Cloning container {} -> {}", id_or_name, new_name));
+    log::info(
+        "Docker",
+        &format!("Cloning container {} -> {}", id_or_name, new_name),
+    );
     let sanitized = sanitize_name(new_name);
     if sanitized.is_empty() {
         return ShellResult {
@@ -1807,7 +2027,10 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
             let wizard = adb::shell(&serial, "pm path com.google.android.setupwizard");
             if wizard.success && wizard.stdout.contains("package:") {
                 apply_headless_gapps_provisioning(&serial);
-                log::info("Docker", &format!("克隆实例 {serial} 携带 GApps，已重放无头引导修复"));
+                log::info(
+                    "Docker",
+                    &format!("克隆实例 {serial} 携带 GApps，已重放无头引导修复"),
+                );
             }
             // Magisk preset replay: modules, spoof, denylist and the manager
             // apps live on the source's data volume; the clone boots a fresh
@@ -1816,7 +2039,13 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
             // one more container restart to actually inject the zygote.
             let has_magisk = util::run_command_timeout(
                 &docker_bin(),
-                &["exec", &format!("rdc-{sanitized}"), "sh", "-c", "test -f /system/etc/init/magisk/magisk && echo yes"],
+                &[
+                    "exec",
+                    &format!("rdc-{sanitized}"),
+                    "sh",
+                    "-c",
+                    "test -f /system/etc/init/magisk/magisk && echo yes",
+                ],
                 Duration::from_secs(15),
             );
             if has_magisk.success && has_magisk.stdout.contains("yes") {
@@ -1833,7 +2062,8 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
                         .map(|l| l.trim().split('|').next().unwrap_or("").trim().to_string())
                         .filter(|p| {
                             !p.is_empty()
-                                && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+                                && p.chars()
+                                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
                         })
                         .collect();
                     if !pkgs.is_empty() {
@@ -1848,7 +2078,10 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
                         );
                         log::info(
                             "Docker",
-                            &format!("克隆实例 {serial} 继承 denylist {} 项（重启后由预设脚本应用）", pkgs.len()),
+                            &format!(
+                                "克隆实例 {serial} 继承 denylist {} 项（重启后由预设脚本应用）",
+                                pkgs.len()
+                            ),
                         );
                     }
                 }
@@ -1867,7 +2100,10 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
                     Duration::from_secs(15),
                 );
                 let mut inherited = Vec::new();
-                for db in ["/data/adb/magisk.db", "/data/adb/lspd/config/modules_config.db"] {
+                for db in [
+                    "/data/adb/magisk.db",
+                    "/data/adb/lspd/config/modules_config.db",
+                ] {
                     if copy_db_into(id_or_name, &dst, db) {
                         inherited.push(db);
                     }
@@ -1878,7 +2114,10 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
                         &format!("克隆实例 {serial} 继承配置库: {}", inherited.join(", ")),
                     );
                 }
-                log::info("Docker", &format!("重启克隆实例 {serial} 以激活 Zygisk / 模块（约 1-3 分钟）…"));
+                log::info(
+                    "Docker",
+                    &format!("重启克隆实例 {serial} 以激活 Zygisk / 模块（约 1-3 分钟）…"),
+                );
                 let _ = util::run_command_timeout(
                     &docker_bin(),
                     &["restart", &format!("rdc-{sanitized}")],
@@ -1887,7 +2126,12 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
                 let ready2 = adb::wait_ready(&serial, Duration::from_secs(180));
                 if ready2.success {
                     first_boot_screen_on(&serial);
-                    r.stdout = format!("{}\nMagisk 预设已重放（Zygisk/模块/伪装/denylist）", r.stdout.trim()).trim().to_string();
+                    r.stdout = format!(
+                        "{}\nMagisk 预设已重放（Zygisk/模块/伪装/denylist）",
+                        r.stdout.trim()
+                    )
+                    .trim()
+                    .to_string();
                 } else {
                     r.success = false;
                     r.stderr = ready2.stderr;
@@ -1923,7 +2167,11 @@ pub fn copy_db_into(src: &str, dst: &str, path: &str) -> bool {
     let mut copied = false;
     for suffix in ["", "-wal"] {
         let p = format!("{path}{suffix}");
-        let data = util::run_command_bytes(&docker_bin(), &["exec", src, "cat", &p], Duration::from_secs(20));
+        let data = util::run_command_bytes(
+            &docker_bin(),
+            &["exec", src, "cat", &p],
+            Duration::from_secs(20),
+        );
         let data = match data {
             Ok(d) if !d.is_empty() => d,
             _ => continue,
@@ -2068,12 +2316,7 @@ fn volume_usage_map() -> std::collections::HashMap<String, (String, String)> {
     for c in list_containers(true) {
         let mounts = util::run_command_timeout(
             &docker_bin(),
-            &[
-                "inspect",
-                "-f",
-                "{{range .Mounts}}{{.Name}} {{end}}",
-                &c.id,
-            ],
+            &["inspect", "-f", "{{range .Mounts}}{{.Name}} {{end}}", &c.id],
             Duration::from_secs(8),
         );
         if !mounts.success {
@@ -2268,12 +2511,17 @@ mod tests {
     }
 
     #[test]
+    fn create_container_name_matches_the_name_used_by_create_flow() {
+        assert_eq!(
+            create_container_name("Pixel 8 / Test"),
+            "rdc-pixel-8---test"
+        );
+    }
+
+    #[test]
     fn suggest_counts_stopped_container_bindings() {
         // Exited container holding 5555 via a binding that docker ps hides
-        let containers = vec![container(
-            "rdc-redroid-1",
-            "0.0.0.0:5555->5555/tcp",
-        )];
+        let containers = vec![container("rdc-redroid-1", "0.0.0.0:5555->5555/tcp")];
         // Don't pin the exact port: the suggestion also skips real loopback
         // listeners, so the result depends on the host environment.
         let suggested = suggest_free_adb_port(&containers);

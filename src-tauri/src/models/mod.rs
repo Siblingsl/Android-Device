@@ -81,6 +81,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_gnirehtet_path() -> String {
+    "gnirehtet".into()
+}
+
+fn default_update_channel() -> String {
+    "stable".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DockerInfo {
@@ -203,6 +211,70 @@ pub struct ScreenshotResult {
     pub error: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamSession {
+    pub serial: String,
+    pub status: String,
+    pub url: String,
+    pub port: u16,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSession {
+    pub id: String,
+    pub kind: String,
+    pub serial: String,
+    pub status: String,
+    pub output: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WirelessDiscovery {
+    pub status: String,
+    pub services: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingSession {
+    pub serial: String,
+    pub mode: String,
+    pub status: String,
+    pub output_path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GnirehtetSession {
+    pub serial: String,
+    pub status: String,
+    pub message: String,
+    pub relay: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceTelemetry {
+    pub serial: String,
+    pub battery_level: i32,
+    pub battery_temperature: String,
+    pub power_state: String,
+    pub voltage: String,
+    pub updated_at: String,
+    pub status: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -216,6 +288,22 @@ pub struct AppSettings {
     pub docker_path: String,
     pub adb_path: String,
     pub scrcpy_path: String,
+    #[serde(default = "default_gnirehtet_path")]
+    pub gnirehtet_path: String,
+    #[serde(default)]
+    pub recording_path: String,
+    #[serde(default)]
+    pub close_to_tray: bool,
+    #[serde(default)]
+    pub launch_at_login: bool,
+    #[serde(default)]
+    pub edge_hide: bool,
+    #[serde(default)]
+    pub desktop_shortcut: bool,
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
+    #[serde(default)]
+    pub skipped_update_version: String,
     /// Local OpenGApps / MindTheGapps zip (user-supplied, never bundled).
     #[serde(default)]
     pub gapps_zip_path: String,
@@ -258,6 +346,14 @@ impl Default for AppSettings {
             docker_path: "docker".into(),
             adb_path: "adb".into(),
             scrcpy_path: "scrcpy".into(),
+            gnirehtet_path: "gnirehtet".into(),
+            recording_path: base.join("recordings").to_string_lossy().into(),
+            close_to_tray: false,
+            launch_at_login: false,
+            edge_hide: false,
+            desktop_shortcut: false,
+            update_channel: "stable".into(),
+            skipped_update_version: String::new(),
             gapps_zip_path: String::new(),
             install_gapps: true,
             last_cpu: "2".into(),
@@ -401,7 +497,7 @@ pub struct LanScanResult {
 #[serde(rename_all = "camelCase")]
 pub struct WslKernelStatus {
     pub wsl_available: bool,
-    /// "custom" | "default" | "unknown"
+    /// "custom" | "default" | "host" | "external-vm" | "unknown"
     pub mode: String,
     pub configured_kernel: String,
     pub custom_kernel_path: String,
@@ -417,7 +513,7 @@ pub struct WslKernelStatus {
     pub platform: String,
     pub os: String,
     pub arch: String,
-    /// wsl-prebuilt-or-build | host-binder | unsupported
+    /// wsl-prebuilt-or-build | host-binder | docker-desktop-vm | unsupported
     pub strategy: String,
     pub platform_supported: bool,
     pub needs_wsl_kernel: bool,
