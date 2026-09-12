@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { askConfirm } from "../lib/dialogs";
 import { useNavigate, useParams } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -9,9 +9,18 @@ import {
   ArrowLeft,
   RefreshCw,
   FolderPlus,
+  FilePlus2,
   Trash2,
   Upload,
   Download,
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  Pencil,
+  Eye,
+  Clock3,
+  X,
+  Save as SaveIcon,
   Play,
   Square,
   Search,
@@ -19,7 +28,6 @@ import {
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
-import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/displaySpec";
 import { formatShellOutput, runDeviceAction, scrcpyStateFromResult } from "../lib/deviceActions";
@@ -32,6 +40,15 @@ import {
   type PreviewState,
 } from "../lib/devicePreview";
 import { shortcutForScreenKey } from "../lib/deviceInput";
+import {
+  dialogPaths,
+  encodeUtf8Base64,
+  normalizeRemotePath,
+  remoteBaseName,
+  remoteChildPath,
+  remoteFileCommand,
+  type FileClipboard,
+} from "../lib/fileManager";
 import {
   isRetryableControlAction,
   prependControlFeedback,
@@ -52,9 +69,15 @@ import {
   type MonitorAlertTracker,
 } from "../lib/monitorAlerts";
 import { DevicePreview } from "../components/device/DevicePreview";
+import { ScrcpyControlBar } from "../components/device/ScrcpyControlBar";
+import { ScrcpyOptionsPanel } from "../components/device/ScrcpyOptionsPanel";
+import { DeviceMediaControls, type DeviceMediaAction, type RotationMode } from "../components/device/DeviceMediaControls";
+import { DeviceInputModes } from "../components/device/DeviceInputModes";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
+import { TerminalSessionService } from "../services/terminalSessionService";
+import { openTerminalWindow } from "../lib/terminalWindow";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
@@ -67,13 +90,18 @@ import type {
   RootStatus,
   SuPolicyEntry,
   FileTransferProgress,
+  ScrcpyCameraOptions,
+  ScrcpyInputMode,
+  ScrcpyInputOptions,
+  ScrcpyRecordingOptions,
 } from "../types";
 
 type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
-type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture";
+type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture" | "recording" | "camera" | "rotation" | "input" | DeviceMediaAction;
 type PreviewOutcome = { success: boolean; message: string };
 type FileTransferState = {
   kind: "upload" | "download";
+  recursive: boolean;
   operationId: string;
   target: string;
   label: string;
@@ -83,6 +111,13 @@ type FileTransferState = {
   percent: number | null;
   cancelling: boolean;
   error: string | null;
+};
+type FileBatchTransferState = {
+  kind: "upload" | "download";
+  current: number;
+  total: number;
+  completed: number;
+  failed: number;
 };
 type InstallRetry = { path: string; name: string; error: string | null };
 
@@ -414,23 +449,44 @@ export function DeviceDetail() {
   }
 
   const serial = device.serial;
+  const online = device.online && device.adbStatus === "device";
+  const activeTabLabel = t(`detail.tab.${tab}`);
+  const activeTabSummary = t(`detail.workspace.${tab}`);
+
+  const openDeviceTerminal = async () => {
+    if (!device.online || device.adbStatus !== "device") {
+      setStatusText(t("detail.status.deviceOffline"));
+      return;
+    }
+    try {
+      const session = await TerminalSessionService.start({ kind: "device", serial, shell: "" });
+      await openTerminalWindow(session.id, { title: t("terminal.title") });
+      setStatusText(t("terminal.opened"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusText(t("terminal.openFailed", { message }));
+    }
+  };
 
   return (
-    <div>
-      <div className="page-header">
-        <div className="row">
+    <div className="detail-shell">
+      <div className="detail-context">
+        <div className="row detail-context-main">
           <Button variant="ghost" icon={<ArrowLeft size={16} />} onClick={() => navigate("/devices")}>
             {t("detail.back")}
           </Button>
-          <div>
+          <div className="detail-context-identity">
             <div className="page-title" style={{ fontSize: 22 }}>
               {device.name}
             </div>
             <div className="page-subtitle mono">{device.serial}</div>
           </div>
-          <StatusDot online={device.online && device.adbStatus === "device"} />
+          <span className={`detail-context-state ${online ? "is-online" : ""}`}>
+            <span className="detail-context-state-dot" />
+            {online ? t("common.online") : t("common.offline")}
+          </span>
         </div>
-        <div className="row">
+        <div className="row detail-context-actions">
           {!(device.online && device.adbStatus === "device") && device.containerId && (
             <Button
               variant="primary"
@@ -529,7 +585,7 @@ export function DeviceDetail() {
         </div>
       </div>
 
-      <div className="tabs">
+      <nav className="detail-tabbar" aria-label={t("detail.tabNavigation")}>
         {(
           [
             ["overview", "detail.tab.overview", false],
@@ -545,86 +601,111 @@ export function DeviceDetail() {
           return (
             <button
               key={k}
-              className={`tab ${tab === k ? "active" : ""}`}
+              className={`detail-tab tab ${tab === k ? "active" : ""}`}
+              aria-current={tab === k ? "page" : undefined}
               title={offlineTab ? t("detail.title.needsAdb") : undefined}
               style={offlineTab ? { opacity: 0.55 } : undefined}
               onClick={() => setTab(k)}
             >
-              {offlineTab ? t("detail.tab.offline", { label }) : label}
+              <span className="detail-tab-index">0{["overview", "control", "files", "apps", "logs", "settings"].indexOf(k) + 1}</span>
+              <span>{offlineTab ? t("detail.tab.offline", { label }) : label}</span>
+              {offlineTab && (
+                <span className="detail-tab-status">
+                  <span className="detail-tab-status-dot" />
+                  {t("detail.tab.requiresOnline")}
+                </span>
+              )}
             </button>
           );
         })}
-      </div>
+      </nav>
 
-      {!(device.online && device.adbStatus === "device") && tab !== "overview" && (
-        <div className="notice" style={{ marginBottom: 12 }}>
-          {t("detail.notice.offline")}
+      <main className="detail-workspace">
+        <div className="detail-workspace-head">
+          <div>
+            <div className="detail-workspace-title">{activeTabLabel}</div>
+            <div className="detail-workspace-summary">{activeTabSummary}</div>
+          </div>
+          <div className="detail-workspace-actions">
+            <span className={`detail-context-state ${online ? "is-online" : ""}`}>
+              <span className="detail-context-state-dot" />
+              {online ? t("detail.status.ready") : t("detail.tab.requiresOnline")}
+            </span>
+          </div>
         </div>
-      )}
-      {tab === "overview" && (
-        <>
-          <DeviceHealthPanel
-            device={device}
-            refreshing={refreshing}
-            lastUpdatedAt={lastUpdatedAt}
-            refreshError={refreshError}
-            metricHistory={metricHistory}
-            alertThreshold={monitorPreferences.alertThreshold}
-            refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
-            monitorPreset={monitorPreferences.preset}
-            alertsEnabled={monitorPreferences.alertsEnabled}
-            warningAlertsEnabled={monitorPreferences.warningAlertsEnabled}
-            criticalAlertsEnabled={monitorPreferences.criticalAlertsEnabled}
-            quietHours={monitorPreferences.quietHours}
-            monitorRuleSaving={monitorRuleSaving}
-            onMonitorRuleChange={saveMonitorRule}
-            monitorAlerts={deviceMonitorAlerts}
-            onDismissMonitorAlert={dismissMonitorAlert}
-            onClearMonitorAlerts={() => clearMonitorAlerts(deviceId)}
-            autoRefresh={autoRefresh}
-            onAutoRefreshChange={setAutoRefresh}
-            onRefresh={() => void load()}
+        <div className="detail-scroll-region">
+        {!(device.online && device.adbStatus === "device") && tab !== "overview" && (
+          <div className="notice" style={{ marginBottom: 12 }}>
+            {t("detail.notice.offline")}
+          </div>
+        )}
+        {tab === "overview" && (
+          <>
+            <DeviceHealthPanel
+              device={device}
+              refreshing={refreshing}
+              lastUpdatedAt={lastUpdatedAt}
+              refreshError={refreshError}
+              metricHistory={metricHistory}
+              alertThreshold={monitorPreferences.alertThreshold}
+              refreshIntervalSecs={monitorPreferences.refreshIntervalSecs}
+              monitorPreset={monitorPreferences.preset}
+              alertsEnabled={monitorPreferences.alertsEnabled}
+              warningAlertsEnabled={monitorPreferences.warningAlertsEnabled}
+              criticalAlertsEnabled={monitorPreferences.criticalAlertsEnabled}
+              quietHours={monitorPreferences.quietHours}
+              monitorRuleSaving={monitorRuleSaving}
+              onMonitorRuleChange={saveMonitorRule}
+              monitorAlerts={deviceMonitorAlerts}
+              onDismissMonitorAlert={dismissMonitorAlert}
+              onClearMonitorAlerts={() => clearMonitorAlerts(deviceId)}
+              autoRefresh={autoRefresh}
+              onAutoRefreshChange={setAutoRefresh}
+              onRefresh={() => void load()}
+            />
+            <Overview device={device} onOpenTab={setTab} />
+            <RootPanel device={device} />
+          </>
+        )}
+        {tab === "control" && (
+          <Control
+            serial={serial}
+            resolution={device.resolution}
+            setStatusText={setStatusText}
+            disabled={!(device.online && device.adbStatus === "device")}
+            onOpenTerminal={() => void openDeviceTerminal()}
           />
-          <Overview device={device} onOpenTab={setTab} />
-          <RootPanel device={device} />
-        </>
-      )}
-      {tab === "control" && (
-        <Control
-          serial={serial}
-          resolution={device.resolution}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "files" && (
-        <Files
-          serial={serial}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "apps" && (
-        <Apps
-          serial={serial}
-          setStatusText={setStatusText}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
-      {tab === "logs" && (
-        <DeviceLogs serial={serial} disabled={!(device.online && device.adbStatus === "device")} />
-      )}
-      {tab === "settings" && (
-        <DeviceSettings
-          serial={serial}
-          initialResolution={device.resolution}
-          initialDpi={device.dpi}
-          setStatusText={setStatusText}
-          onApplied={() => void load()}
-          deviceId={deviceId}
-          disabled={!(device.online && device.adbStatus === "device")}
-        />
-      )}
+        )}
+        {tab === "files" && (
+          <Files
+            serial={serial}
+            setStatusText={setStatusText}
+            disabled={!(device.online && device.adbStatus === "device")}
+          />
+        )}
+        {tab === "apps" && (
+          <Apps
+            serial={serial}
+            setStatusText={setStatusText}
+            disabled={!(device.online && device.adbStatus === "device")}
+          />
+        )}
+        {tab === "logs" && (
+          <DeviceLogs serial={serial} disabled={!(device.online && device.adbStatus === "device")} />
+        )}
+        {tab === "settings" && (
+          <DeviceSettings
+            serial={serial}
+            initialResolution={device.resolution}
+            initialDpi={device.dpi}
+            setStatusText={setStatusText}
+            onApplied={() => void load()}
+            deviceId={deviceId}
+            disabled={!(device.online && device.adbStatus === "device")}
+          />
+        )}
+        </div>
+      </main>
     </div>
   );
 }
@@ -1158,6 +1239,7 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
   ];
   return (
     <Card
+      className="detail-module"
       title={t("detail.overview.title")}
       action={
         <div className="row" style={{ flexWrap: "wrap" }}>
@@ -1280,16 +1362,46 @@ function parseResolution(raw?: string): { w: number; h: number } {
   return { w: 1080, h: 1920 };
 }
 
+type ControlShelfKey = "media" | "input" | "device" | "terminal";
+
+function ControlActionShelf({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <details
+      className={`control-action-shelf ${open ? "is-open" : ""}`}
+      open={open}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="control-action-shelf-chevron" aria-hidden="true">▸</span>
+        <span className="control-action-shelf-label">{label}</span>
+      </summary>
+      <div className="control-action-shelf-body">{children}</div>
+    </details>
+  );
+}
+
 function Control({
   serial,
   resolution,
   setStatusText,
   disabled = false,
+  onOpenTerminal,
 }: {
   serial: string;
   resolution?: string;
   setStatusText: (s: string) => void;
   disabled?: boolean;
+  onOpenTerminal?: () => void;
 }) {
   const { t } = useI18n();
   const [actionBusy, setActionBusy] = useState<ControlBusyAction | null>(null);
@@ -1303,6 +1415,12 @@ function Control({
   const [hideChrome, setHideChrome] = useState(false);
   const [scrcpyLabel, setScrcpyLabel] = useState("stopped");
   const [scrcpyBusy, setScrcpyBusy] = useState<"start" | "stop" | "restart" | null>(null);
+  const [openShelves, setOpenShelves] = useState<Record<ControlShelfKey, boolean>>({
+    media: false,
+    input: false,
+    device: true,
+    terminal: true,
+  });
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const swipedRef = useRef(false);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -1319,6 +1437,14 @@ function Control({
   const { w: screenW, h: screenH } = parseResolution(resolution);
   previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
+
+  useEffect(() => {
+    setOpenShelves({ media: false, input: false, device: true, terminal: true });
+  }, [serial]);
+
+  const setShelfOpen = (key: ControlShelfKey, open: boolean) => {
+    setOpenShelves((current) => ({ ...current, [key]: open }));
+  };
 
   useEffect(
     () => () => {
@@ -1537,6 +1663,43 @@ function Control({
     void act(t("detail.control.back"), () => DeviceService.back(serial), "back");
   };
 
+  const runExtendedAction = async (
+    label: string,
+    fn: () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>,
+    busyAction: ControlBusyAction,
+  ): Promise<boolean> => {
+    if (disabled) {
+      setStatusText(t("detail.status.deviceOffline"));
+      return false;
+    }
+    if (actionBusy || scrcpyBusy) return false;
+    setActionBusy(busyAction);
+    setStatusText(label);
+    let success = false;
+    try {
+      await runDeviceAction(fn, {
+        fallback: t("detail.control.actionFailed"),
+        onSuccess: (result) => {
+          success = true;
+          const output = formatShellOutput(result.stdout || "", result.stderr || "", result.exitCode);
+          recordFeedback(busyAction, label, "success", output || t("detail.control.actionCompleted"));
+          refreshPreview();
+        },
+        onError: (error) => {
+          recordFeedback(busyAction, label, "error", error.message);
+          setStatusText(error.message);
+          appendDiagnostic(error.message);
+        },
+      });
+      if (success) setStatusText(t("detail.status.ready"));
+    } catch {
+      // The operation error is already reflected in feedback and diagnostics.
+    } finally {
+      setActionBusy(null);
+    }
+    return success;
+  };
+
   const onAuxClick = (e: React.MouseEvent) => {
     if (e.button === 1) {
       e.preventDefault();
@@ -1734,7 +1897,39 @@ function Control({
   };
 
   return (
-    <div className="split-control">
+    <div>
+      <ScrcpyControlBar
+        scrcpyStatus={scrcpyLabel}
+        disabled={disabled}
+        busy={actionBusy || scrcpyBusy}
+        onAction={(action) => {
+          if (action === "start") return void startScrcpy();
+          if (action === "stop") return void stopScrcpy();
+          if (action === "restart") return void restartScrcpy();
+          if (action === "screenshot") return void takeShot();
+          if (action === "fullscreen") {
+            const el = screenRef.current;
+            if (!el) return;
+            if (document.fullscreenElement === el) void document.exitFullscreen();
+            else void el.requestFullscreen().catch((e) => setStatusText(String(e)));
+            return;
+          }
+          const mapped: Partial<Record<Exclude<typeof action, "start" | "stop" | "restart" | "screenshot" | "fullscreen">, DeviceControlAction>> = {
+            volumeUp: "volup",
+            volumeDown: "voldown",
+            power: "power",
+            lock: "lock",
+            wake: "wake",
+            rotate: "rotate",
+            home: "home",
+            back: "back",
+            recent: "recent",
+          };
+          const mappedAction = mapped[action as keyof typeof mapped];
+          if (mappedAction) runControlAction(mappedAction, mappedAction === "rotate" ? true : undefined);
+        }}
+      />
+      <div className="detail-control-workspace split-control control-workbench">
       <DevicePreview
         serial={serial}
         disabled={disabled}
@@ -1804,27 +1999,127 @@ function Control({
         onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true), "rotate")}
       />
 
-      <div className="control-panel">
-        <DeviceControlPanel
-          disabled={disabled}
-          busyAction={actionBusy}
-          feedback={feedback}
-          retryingFeedbackId={retryingFeedbackId}
-          onRetryFeedback={retryFeedback}
-          onAction={runControlAction}
-          onScreenshot={takeShot}
-          onValidationError={(message) => {
-            setStatusText(message);
-            appendDiagnostic(message);
-          }}
-        />
-
-        <DeviceShell
-          serial={serial}
-          disabled={disabled}
-          diagnostic={shellDiagnostic}
-          onStatus={setStatusText}
-        />
+      <div className="control-action-dock" aria-label={t("detail.control.panelTitle")}>
+        <ControlActionShelf
+          label={t("detail.media.title")}
+          open={openShelves.media}
+          onToggle={(open) => setShelfOpen("media", open)}
+        >
+          <DeviceMediaControls
+            disabled={disabled}
+            busy={actionBusy || scrcpyBusy}
+            onRecordingStart={(options: ScrcpyRecordingOptions) =>
+              runExtendedAction(
+                t("detail.media.startRecording"),
+                () => DeviceService.scrcpyStartRecording(serial, options),
+                "recording",
+              )
+            }
+            onRecordingStop={() =>
+              runExtendedAction(
+                t("detail.media.stopRecording"),
+                () => DeviceService.scrcpyStopRecording(serial),
+                "recording",
+              )
+            }
+            onRecordingStatus={() => DeviceService.scrcpyRecordingStatus(serial)}
+            onCameraStart={(options: ScrcpyCameraOptions) =>
+              runExtendedAction(
+                t("detail.media.startCamera"),
+                () => DeviceService.scrcpyStartCamera(serial, options),
+                "camera",
+              )
+            }
+            onCameraStop={() =>
+              runExtendedAction(
+                t("detail.media.stopCamera"),
+                () => DeviceService.scrcpyStopCamera(serial),
+                "camera",
+              )
+            }
+            onCameraStatus={() => DeviceService.scrcpyCameraStatus(serial)}
+            onRotation={(mode: RotationMode) =>
+              runExtendedAction(
+                t(`detail.media.rotation.${mode}`),
+                () => DeviceService.setRotationMode(serial, mode),
+                "rotation",
+              )
+            }
+            onDeviceAction={(action: DeviceMediaAction) => {
+              const operations: Record<DeviceMediaAction, () => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>> = {
+                mute: () => DeviceService.volumeMute(serial),
+                screenOff: () => DeviceService.screenOff(serial),
+                reboot: () => DeviceService.rebootDevice(serial),
+                shutdown: () => DeviceService.shutdownDevice(serial),
+              };
+              return (async () => {
+                if (action === "reboot" || action === "shutdown") {
+                  const confirmed = await askConfirm(t(`detail.media.confirm.${action}`));
+                  if (!confirmed) return false;
+                }
+                return runExtendedAction(t(`detail.media.${action}`), operations[action], action);
+              })();
+            }}
+          />
+        </ControlActionShelf>
+        <ControlActionShelf
+          label={t("detail.input.title")}
+          open={openShelves.input}
+          onToggle={(open) => setShelfOpen("input", open)}
+        >
+          <DeviceInputModes
+            disabled={disabled}
+            busy={actionBusy || scrcpyBusy}
+            onStart={(mode: ScrcpyInputMode, options: ScrcpyInputOptions) =>
+              runExtendedAction(
+                t(`detail.input.start.${mode}`),
+                () => DeviceService.scrcpyStartInput(serial, mode, options),
+                "input",
+              )
+            }
+            onStop={() =>
+              runExtendedAction(
+                t("detail.input.stop"),
+                () => DeviceService.scrcpyStopInput(serial),
+                "input",
+              )
+            }
+            onStatus={() => DeviceService.scrcpyInputStatus(serial)}
+          />
+        </ControlActionShelf>
+        <ControlActionShelf
+          label={t("detail.control.panelTitle")}
+          open={openShelves.device}
+          onToggle={(open) => setShelfOpen("device", open)}
+        >
+          <DeviceControlPanel
+            disabled={disabled}
+            busyAction={actionBusy}
+            feedback={feedback}
+            retryingFeedbackId={retryingFeedbackId}
+            onRetryFeedback={retryFeedback}
+            onAction={runControlAction}
+            onScreenshot={takeShot}
+            onValidationError={(message) => {
+              setStatusText(message);
+              appendDiagnostic(message);
+            }}
+          />
+        </ControlActionShelf>
+        <ControlActionShelf
+          label="ADB Shell"
+          open={openShelves.terminal}
+          onToggle={(open) => setShelfOpen("terminal", open)}
+        >
+          <DeviceShell
+            serial={serial}
+            disabled={disabled}
+            diagnostic={shellDiagnostic}
+            onStatus={setStatusText}
+            onOpenTerminal={onOpenTerminal}
+          />
+        </ControlActionShelf>
+      </div>
       </div>
     </div>
   );
@@ -1863,11 +2158,38 @@ function Files({
       return defaults;
     }
   });
+  const [recentPaths, setRecentPaths] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("rdc.files.recentPaths");
+      const parsed = raw ? JSON.parse(raw) as unknown : [];
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string").slice(0, 12) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [clipboard, setClipboard] = useState<FileClipboard | null>(() => {
+    try {
+     const raw = sessionStorage.getItem(`rdc.files.clipboard.${serial}`);
+     const parsed = raw ? JSON.parse(raw) as Partial<FileClipboard> : null;
+      if ((parsed?.mode === "copy" || parsed?.mode === "cut") && Array.isArray(parsed.paths) && parsed.paths.every((value) => typeof value === "string")) {
+        return { mode: parsed.mode, paths: parsed.paths };
+     }
+    } catch {
+      /* storage is optional */
+    }
+    return null;
+  });
+  const [editor, setEditor] = useState<{ path: string; name: string; content: string; readOnly: boolean } | null>(null);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [fileQuery, setFileQuery] = useState("");
   const [sortKey, setSortKey] = useState<"name" | "size" | "modified">("name");
   const [sortAsc, setSortAsc] = useState(true);
   const [transfer, setTransfer] = useState<FileTransferState | null>(null);
-  const transferRetry = useRef<(() => Promise<void>) | null>(null);
+  const [batchTransfer, setBatchTransfer] = useState<FileBatchTransferState | null>(null);
+  const transferRetry = useRef<(() => Promise<boolean>) | null>(null);
   const activeTransferId = useRef<string | null>(null);
   const cancelledTransferIds = useRef(new Set<string>());
   const cancelInFlight = useRef<string | null>(null);
@@ -1932,6 +2254,24 @@ function Files({
 
   useEffect(() => {
     try {
+      localStorage.setItem("rdc.files.recentPaths", JSON.stringify(recentPaths));
+    } catch {
+      /* ignore */
+    }
+  }, [recentPaths]);
+
+  useEffect(() => {
+    try {
+      const key = `rdc.files.clipboard.${serial}`;
+      if (clipboard) sessionStorage.setItem(key, JSON.stringify(clipboard));
+      else sessionStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }, [serial, clipboard]);
+
+  useEffect(() => {
+    try {
       sessionStorage.setItem(`rdc.files.path.${serial}`, path);
     } catch {
       /* ignore */
@@ -1982,8 +2322,10 @@ function Files({
   }, []);
 
   const go = (p: string) => {
-    const next = p.trim() || "/";
+    const next = normalizeRemotePath(p);
     setPath(next);
+    setRecentPaths((items) => [next, ...items.filter((item) => item !== next)].slice(0, 12));
+    setSelectedPaths([]);
     setFileQuery("");
     void load(next);
   };
@@ -1996,11 +2338,16 @@ function Files({
     go(path.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/");
   };
 
-  const runUpload = async (local: string, remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`) => {
+  const runUpload = async (
+    local: string,
+    remote = `${path.replace(/\/+$/, "")}/${local.split(/[/\\]/).pop() || "file"}`,
+    recursive = false,
+  ): Promise<boolean> => {
     const name = local.split(/[/\\]/).pop() || "file";
     const operationId = createTransferId();
     const state: FileTransferState = {
       kind: "upload",
+      recursive,
       operationId,
       target: remote,
       label: name,
@@ -2015,12 +2362,12 @@ function Files({
     cancelledTransferIds.current.delete(operationId);
     cancelInFlight.current = null;
     setTransfer(state);
-    transferRetry.current = () => runUpload(local, remote);
+    transferRetry.current = () => runUpload(local, remote, recursive);
     setStatusText(t("detail.files.uploading"));
     try {
       await listenerReady.current;
       const r = await DeviceService.uploadFileTracked(serial, local, remote, operationId);
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       if (!r.success) {
         const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.uploadFailed"));
         setStatusText(reason);
@@ -2028,27 +2375,30 @@ function Files({
         setTransfer((current) => current && current.operationId === operationId
           ? { ...current, status: "failed", cancelling: false, error: reason }
           : current);
-        return;
+        return false;
       }
       setStatusText(t("detail.files.uploadDone"));
       setTransfer(null);
       transferRetry.current = null;
       activeTransferId.current = null;
       await load();
+      return true;
     } catch (e) {
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       const reason = operationErrorMessage(e, t("detail.files.uploadFailed"));
       reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
       setTransfer((current) => current && current.operationId === operationId
         ? { ...current, status: "failed", cancelling: false, error: reason }
         : current);
+      return false;
     }
   };
 
-  const runDownload = async (f: FileEntry, local: string) => {
+  const runDownload = async (f: FileEntry, local: string): Promise<boolean> => {
     const operationId = createTransferId();
     const state: FileTransferState = {
       kind: "download",
+      recursive: f.isDir,
       operationId,
       target: f.path,
       label: f.name,
@@ -2068,7 +2418,7 @@ function Files({
     try {
       await listenerReady.current;
       const r = await DeviceService.downloadFileTracked(serial, f.path, local, operationId);
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       if (!r.success) {
         const reason = operationErrorMessage(r.stderr || r.stdout, t("detail.files.downloadFailed"));
         setStatusText(reason);
@@ -2076,7 +2426,7 @@ function Files({
         setTransfer((current) => current && current.operationId === operationId
           ? { ...current, status: "failed", cancelling: false, error: reason }
           : current);
-        return;
+        return false;
       }
       setStatusText(t("detail.files.downloadDone"));
       setTransfer((current) => current && current.operationId === operationId
@@ -2085,18 +2435,214 @@ function Files({
       if (await askConfirm(t("detail.files.confirmReveal"))) {
         await DeviceService.revealInFolder(local);
       }
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       setTransfer(null);
       transferRetry.current = null;
       activeTransferId.current = null;
+      return true;
     } catch (e) {
-      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return;
+      if (activeTransferId.current !== operationId || cancelledTransferIds.current.has(operationId)) return false;
       const reason = operationErrorMessage(e, t("detail.files.downloadFailed"));
       reportOperationError(e, t("detail.files.downloadFailed"), setStatusText);
       setTransfer((current) => current && current.operationId === operationId
         ? { ...current, status: "failed", cancelling: false, error: reason }
         : current);
+      return false;
     }
+  };
+
+  const runRemoteCommand = async (command: string, success: string, fallback: string) => {
+    try {
+      const result = await DeviceService.shell(serial, command);
+      if (!result.success) {
+        const reason = (result.stderr || result.stdout || fallback).trim();
+        setStatusText(reason);
+        void alert(reason);
+        return false;
+      }
+      setStatusText(success);
+      return true;
+    } catch (error) {
+      reportOperationError(error, fallback, setStatusText);
+      return false;
+    }
+  };
+
+  const selectedEntries = () => selectedPaths
+    .map((selectedPath) => files.find((entry) => entry.path === selectedPath))
+    .filter((entry): entry is FileEntry => Boolean(entry));
+
+  const setFileClipboard = (mode: FileClipboard["mode"]) => {
+    if (!selectedPaths.length) return;
+    setClipboard({ mode, paths: selectedPaths });
+    setStatusText(t(mode === "copy" ? "detail.files.copiedToClipboard" : "detail.files.cutToClipboard", { n: selectedPaths.length }));
+  };
+
+  const pasteClipboard = async () => {
+    if (!clipboard?.paths.length || transferBusy) return;
+    let successCount = 0;
+    for (const source of clipboard.paths) {
+      const target = remoteChildPath(path, remoteBaseName(source));
+      if (normalizeRemotePath(source) === target) {
+        successCount += 1;
+        continue;
+      }
+      const ok = await runRemoteCommand(
+        remoteFileCommand(clipboard.mode === "cut" ? "move" : "copy", source, target),
+        t("detail.files.pasted", { name: remoteBaseName(source) }),
+        t("detail.files.pasteFailed"),
+      );
+      if (ok) successCount += 1;
+    }
+    if (clipboard.mode === "cut" && successCount === clipboard.paths.length) setClipboard(null);
+    if (successCount > 0) {
+      setSelectedPaths([]);
+      await load();
+    }
+  };
+
+  const renameEntry = async (entry: FileEntry) => {
+    const name = prompt(t("detail.files.renamePrompt"), entry.name)?.trim();
+    if (!name || name === entry.name) return;
+    const target = remoteChildPath(path, name);
+    await runRemoteCommand(
+      remoteFileCommand("move", entry.path, target),
+      t("detail.files.renamed", { name }),
+      t("detail.files.renameFailed"),
+    );
+    await load();
+  };
+
+  const createFile = async () => {
+    const name = prompt(t("detail.files.fileNamePrompt"))?.trim();
+    if (!name) return;
+    const target = remoteChildPath(path, name);
+    const ok = await runRemoteCommand(
+      remoteFileCommand("touch", target),
+      t("detail.files.created", { name }),
+      t("detail.files.createFailed"),
+    );
+    if (ok) await load();
+  };
+
+  const openTextFile = async (entry: FileEntry, readOnly: boolean) => {
+    setEditor({ path: entry.path, name: entry.name, content: "", readOnly });
+    setEditorLoading(true);
+    try {
+      const result = await DeviceService.shell(serial, remoteFileCommand("read", entry.path));
+      if (!result.success) {
+        const reason = (result.stderr || result.stdout || t("detail.files.previewFailed")).trim();
+        setStatusText(reason);
+        setEditor(null);
+        void alert(reason);
+        return;
+      }
+      setEditor({ path: entry.path, name: entry.name, content: result.stdout, readOnly });
+    } catch (error) {
+      reportOperationError(error, t("detail.files.previewFailed"), setStatusText);
+      setEditor(null);
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const saveTextFile = async () => {
+    if (!editor || editor.readOnly || editorSaving) return;
+    setEditorSaving(true);
+    const ok = await runRemoteCommand(
+      remoteFileCommand("write", editor.path, undefined, encodeUtf8Base64(editor.content)),
+      t("detail.files.saved", { name: editor.name }),
+      t("detail.files.saveFailed"),
+    );
+    setEditorSaving(false);
+    if (ok) setEditor(null);
+  };
+
+  const uploadPaths = async (localPaths: string[]) => {
+    if (transferBusy || !localPaths.length) return;
+    const isBatch = localPaths.length > 1;
+    if (isBatch) setBatchTransfer({ kind: "upload", current: 0, total: localPaths.length, completed: 0, failed: 0 });
+    for (let index = 0; index < localPaths.length; index += 1) {
+      if (isBatch) setBatchTransfer((current) => current ? { ...current, current: index + 1 } : current);
+      const ok = await runUpload(localPaths[index]);
+      if (isBatch) {
+        setBatchTransfer((current) => current ? {
+          ...current,
+          current: index + 1,
+          completed: current.completed + (ok ? 1 : 0),
+          failed: current.failed + (ok ? 0 : 1),
+        } : current);
+      }
+    }
+    if (isBatch) setBatchTransfer(null);
+  };
+
+  const chooseUpload = async (directory: boolean) => {
+   try {
+      const picked = await open({ multiple: true, directory });
+     const localPaths = dialogPaths(picked);
+     if (directory && localPaths.length === 1) {
+       await runUpload(localPaths[0], undefined, true);
+     } else {
+       await uploadPaths(localPaths);
+     }
+   } catch (error) {
+      if (!isDialogCancellation(error)) reportOperationError(error, t("detail.files.uploadFailed"), setStatusText);
+    }
+  };
+
+  const downloadSelected = async () => {
+    const entries = selectedEntries();
+    if (!entries.length || transferBusy) return;
+    try {
+      const picked = await open({ directory: true, multiple: false });
+      const directory = dialogPaths(picked)[0];
+      if (!directory) return;
+      const isBatch = entries.length > 1;
+      if (isBatch) setBatchTransfer({ kind: "download", current: 0, total: entries.length, completed: 0, failed: 0 });
+      for (let index = 0; index < entries.length; index += 1) {
+        if (isBatch) setBatchTransfer((current) => current ? { ...current, current: index + 1 } : current);
+        const ok = await runDownload(entries[index], `${directory}/${entries[index].name}`);
+        if (isBatch) {
+          setBatchTransfer((current) => current ? {
+            ...current,
+            current: index + 1,
+            completed: current.completed + (ok ? 1 : 0),
+            failed: current.failed + (ok ? 0 : 1),
+          } : current);
+        }
+      }
+      if (isBatch) setBatchTransfer(null);
+      setSelectedPaths([]);
+    } catch (error) {
+      if (!isDialogCancellation(error)) reportOperationError(error, t("detail.files.downloadFailed"), setStatusText);
+    }
+  };
+
+  const deleteSelected = async () => {
+    const entries = selectedEntries();
+    if (!entries.length) return;
+    if (!(await askConfirm(t("detail.files.confirmDeleteMany", { n: entries.length })))) return;
+    let deleted = 0;
+    for (const entry of entries) {
+      const result = await DeviceService.deleteFile(serial, entry.path);
+      if (result.success) deleted += 1;
+      else setStatusText((result.stderr || result.stdout || t("detail.files.deleteFailed")).trim());
+    }
+    setStatusText(t("detail.files.deletedMany", { n: deleted }));
+    setSelectedPaths([]);
+    await load();
+  };
+
+  const onDropUpload = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragOver(false);
+    const localPaths = dialogPaths(Array.from(event.dataTransfer.files).map((file) => (file as File & { path?: string }).path));
+    if (!localPaths.length) {
+      setStatusText(t("detail.files.dropUnsupported"));
+      return;
+    }
+    await uploadPaths(localPaths);
   };
 
   const cancelTransfer = async () => {
@@ -2142,23 +2688,39 @@ function Files({
       (transfer.status === "queued" || transfer.status === "running"),
   );
   const transferBusy = Boolean(
-    transfer &&
-      !transfer.error &&
-      transfer.status !== "cancelled" &&
-      transfer.status !== "failed",
+    batchTransfer ||
+      (transfer &&
+        !transfer.error &&
+        transfer.status !== "cancelled" &&
+        transfer.status !== "failed"),
   );
   const transferLabel = transfer
-    ? transfer.kind === "upload"
-      ? t("detail.files.uploading")
-      : t("detail.files.downloading")
+    ? transfer.recursive
+      ? transfer.kind === "upload"
+        ? t("detail.files.recursiveUploading")
+        : t("detail.files.recursiveDownloading")
+      : transfer.kind === "upload"
+        ? t("detail.files.uploading")
+        : t("detail.files.downloading")
     : "";
 
   return (
-    <div className="stack">
+    <div
+      className="detail-files-workspace"
+      data-drop-active={dragOver ? "true" : undefined}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (!disabled) setDragOver(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget === event.target) setDragOver(false);
+      }}
+      onDrop={(event) => void onDropUpload(event)}
+    >
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
-        <div className="row-between" style={{ marginBottom: 12 }}>
-          <div className="row" style={{ flex: 1 }}>
+        <div className="file-location-strip">
+          <div className="row file-location-main">
             <Button size="sm" onClick={up}>
               {t("detail.files.up")}
             </Button>
@@ -2180,7 +2742,7 @@ function Files({
               {t("common.refresh")}
             </Button>
           </div>
-          <div className="row">
+          <div className="row file-command-rail">
             <Button
               size="sm"
               icon={<FolderPlus size={14} />}
@@ -2204,29 +2766,28 @@ function Files({
             >
               {t("detail.files.newFolder")}
             </Button>
+            <Button size="sm" icon={<FilePlus2 size={14} />} onClick={() => void createFile()}>
+              {t("detail.files.newFile")}
+            </Button>
             <Button
               size="sm"
               icon={<Upload size={14} />}
               loading={transferBusy && transfer?.kind === "upload"}
               disabled={transferBusy}
               onClick={async () => {
-                try {
-                  const local = await open({ multiple: false, directory: false });
-                  if (typeof local !== "string" || !local) return;
-                  await runUpload(local);
-                } catch (e) {
-                  if (!isDialogCancellation(e)) {
-                    reportOperationError(e, t("detail.files.uploadFailed"), setStatusText);
-                  }
-                }
+                await chooseUpload(false);
               }}
             >
               {t("detail.files.upload")}
             </Button>
+            <Button size="sm" variant="ghost" disabled={transferBusy} onClick={() => void chooseUpload(true)}>
+              {t("detail.files.uploadFolder")}
+            </Button>
           </div>
         </div>
-        {transfer && (
-          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12, flexWrap: "wrap" }}>
+        <div className="file-transfer-strip">
+          {transfer && (
+            <div className="row" role="status" aria-live="polite" style={{ fontSize: 12, flexWrap: "wrap" }}>
             <span className={transfer.error ? "error" : "muted"}>
               {transfer.error
                 ? `${transfer.error} · ${transfer.label}`
@@ -2257,9 +2818,20 @@ function Files({
                 {transfer.kind === "upload" ? t("detail.files.retryUpload") : t("detail.files.retryDownload")}
               </Button>
             )}
-          </div>
-        )}
-        <div className="row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 10, fontSize: 12 }}>
+            </div>
+          )}
+          {batchTransfer && (
+            <div className="file-transfer-batch" role="status" aria-live="polite">
+            <span>
+              {t(batchTransfer.kind === "upload" ? "detail.files.batchUpload" : "detail.files.batchDownload")} {batchTransfer.current}/{batchTransfer.total}
+            </span>
+            <span className="muted">
+              {t("detail.files.batchSummary", { completed: batchTransfer.completed, failed: batchTransfer.failed })}
+            </span>
+            </div>
+          )}
+        </div>
+        <div className="file-breadcrumb-rail row" style={{ flexWrap: "wrap", gap: 4 }}>
           <button type="button" className="muted" onClick={() => go("/")}>
             /
           </button>
@@ -2283,7 +2855,7 @@ function Files({
               );
             })}
         </div>
-        <div className="row" style={{ flexWrap: "wrap", marginBottom: 10 }}>
+        <div className="file-bookmark-rail row" style={{ flexWrap: "wrap" }}>
           {bookmarks.map((b) => (
             <span key={b} className="row" style={{ gap: 0 }}>
               <Button
@@ -2313,10 +2885,37 @@ function Files({
             {t("detail.files.bookmarkPath")}
           </Button>
         </div>
-        <div className="muted mono" style={{ fontSize: 12, marginBottom: 10, whiteSpace: "pre-wrap" }}>
-          {storage || t("detail.files.storagePlaceholder")}
+        <div className="file-manager-toolbar file-selection-rail" data-selected={selectedPaths.length ? "true" : "false"}>
+          <div className="row" style={{ flexWrap: "wrap", gap: 5 }}>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length} onClick={() => setFileClipboard("copy")} icon={<Copy size={13} />}>
+              {t("detail.files.copySelected")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length} onClick={() => setFileClipboard("cut")} icon={<Scissors size={13} />}>
+              {t("detail.files.cutSelected")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!clipboard?.paths.length || transferBusy} onClick={() => void pasteClipboard()} icon={<ClipboardPaste size={13} />}>
+              {t("detail.files.paste")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length || transferBusy} onClick={() => void downloadSelected()}>
+              {t("detail.files.downloadSelected")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={!selectedPaths.length || transferBusy} onClick={() => void deleteSelected()}>
+              {t("detail.files.deleteSelected")}
+            </Button>
+            {clipboard?.paths.length ? <span className="file-clipboard-hint">{t(clipboard.mode === "copy" ? "detail.files.copyReady" : "detail.files.cutReady", { n: clipboard.paths.length })}</span> : null}
+          </div>
+          <div className="file-path-history">
+            <span className="muted"><Clock3 size={12} />{t("detail.files.recentPaths")}</span>
+            {recentPaths.slice(0, 5).map((recent) => (
+              <button key={recent} type="button" className="file-path-chip" onClick={() => go(recent)} title={recent}>{recent}</button>
+            ))}
+          </div>
         </div>
-        <div className="row" style={{ marginBottom: 10 }}>
+        <div className="table-wrap detail-table-scroll">
+          <div className="file-storage-line muted mono">
+            {storage || t("detail.files.storagePlaceholder")}
+          </div>
+          <div className="file-filter-row row">
           <input
             style={{ flex: 1, minWidth: 160 }}
             placeholder={t("detail.files.filterPlaceholder")}
@@ -2331,22 +2930,33 @@ function Files({
           <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
             {fileQuery ? t("detail.files.matchCount", { m: visibleFiles.length, n: files.length }) : t("detail.files.totalCount", { n: files.length })}
           </span>
-        </div>
-        {loading ? (
+          </div>
+          {loading ? (
           <Skeleton count={6} height={28} />
-        ) : files.length === 0 ? (
+          ) : files.length === 0 ? (
           <div className="empty-state">{t("detail.files.empty")}</div>
-        ) : visibleFiles.length === 0 ? (
+          ) : visibleFiles.length === 0 ? (
           <div className="empty-state">
             {t("detail.files.noMatch")}
             <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => setFileQuery("")}>
               {t("detail.files.clearFilter")}
             </Button>
           </div>
-        ) : (
-          <table className="table">
+          ) : (
+          <table className="table file-manager-table">
             <thead>
               <tr>
+                <th className="file-select-col">
+                  <input
+                    type="checkbox"
+                    aria-label={t("detail.files.selectAll")}
+                    checked={visibleFiles.length > 0 && visibleFiles.every((entry) => selectedPaths.includes(entry.path))}
+                    onChange={(event) => {
+                      if (event.target.checked) setSelectedPaths((current) => [...new Set([...current, ...visibleFiles.map((entry) => entry.path)])]);
+                      else setSelectedPaths((current) => current.filter((selected) => !visibleFiles.some((entry) => entry.path === selected)));
+                    }}
+                  />
+                </th>
                 <th>
                   <button type="button" onClick={() => toggleSort("name")}>
                     {t("detail.files.colName")}{sortMark("name")}
@@ -2369,6 +2979,14 @@ function Files({
             <tbody>
               {visibleFiles.map((f) => (
                 <tr key={f.path}>
+                  <td className="file-select-col">
+                    <input
+                      type="checkbox"
+                      aria-label={t("detail.files.selectItem", { name: f.name })}
+                      checked={selectedPaths.includes(f.path)}
+                      onChange={(event) => setSelectedPaths((current) => event.target.checked ? [...new Set([...current, f.path])] : current.filter((selected) => selected !== f.path))}
+                    />
+                  </td>
                   <td>
                     <button onClick={() => openEntry(f)} style={{ fontWeight: f.isDir ? 600 : 400 }}>
                       {f.isDir ? "📁 " : "📄 "}
@@ -2393,6 +3011,13 @@ function Files({
                       >
                         {t("common.copy")}
                       </Button>
+                      {!f.isDir && (
+                        <>
+                          <Button size="sm" variant="ghost" icon={<Eye size={14} />} title={t("detail.files.preview")} onClick={() => void openTextFile(f, true)} />
+                          <Button size="sm" variant="ghost" icon={<Pencil size={14} />} title={t("detail.files.edit")} onClick={() => void openTextFile(f, false)} />
+                        </>
+                      )}
+                      <Button size="sm" variant="ghost" icon={<Pencil size={14} />} title={t("detail.files.rename")} onClick={() => void renameEntry(f)} />
                       {!f.isDir && (
                         <Button
                           size="sm"
@@ -2440,7 +3065,21 @@ function Files({
               ))}
             </tbody>
           </table>
-        )}
+          )}
+        </div>
+        {editor ? (
+          <div className="file-editor" role="dialog" aria-label={editor.readOnly ? t("detail.files.preview") : t("detail.files.edit")}>
+            <div className="file-editor-head">
+              <div className="row"><span className="file-editor-title">{editor.name}</span><span className="muted mono">{editor.path}</span></div>
+              <button type="button" className="icon-btn" title={t("detail.files.closeEditor")} onClick={() => setEditor(null)}><X size={15} /></button>
+            </div>
+            {editorLoading ? <div className="muted">{t("detail.files.loadingText")}</div> : <textarea value={editor.content} readOnly={editor.readOnly} onChange={(event) => setEditor((current) => current ? { ...current, content: event.target.value } : current)} />}
+            <div className="row" style={{ marginTop: 8 }}>
+              {!editor.readOnly ? <Button size="sm" variant="primary" loading={editorSaving} onClick={() => void saveTextFile()} icon={<SaveIcon size={13} />}>{t("detail.files.saveText")}</Button> : null}
+              <Button size="sm" variant="ghost" onClick={() => setEditor(null)}>{t("detail.files.closeEditor")}</Button>
+            </div>
+          </div>
+        ) : null}
       </Card>
       </fieldset>
     </div>
@@ -2476,6 +3115,7 @@ function Apps({
   const [detail, setDetail] = useState("");
   const [detailBusy, setDetailBusy] = useState<string | null>(null);
   const [appBusy, setAppBusy] = useState<string | null>(null);
+  const [displayId, setDisplayId] = useState("1");
   const [installing, setInstalling] = useState(false);
   const [installRetry, setInstallRetry] = useState<InstallRetry | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
@@ -2553,14 +3193,13 @@ function Apps({
   };
 
   return (
-    <div className="stack">
+    <div className="detail-apps-workspace stack app-workbench">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <Card>
-        <div className="row-between" style={{ marginBottom: 12 }}>
-          <div className="row" style={{ flex: 1 }}>
+        <div className="app-filter-strip">
+          <div className="app-filter-main row">
             <Search size={16} className="muted" />
             <input
-              style={{ flex: 1 }}
               placeholder={t("detail.apps.searchPlaceholder")}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
@@ -2577,9 +3216,28 @@ function Apps({
               <input type="checkbox" checked={includeSystem} onChange={(e) => setIncludeSystem(e.target.checked)} />
               {t("detail.apps.includeSystem")}
             </label>
+          </div>
+          <div className="app-filter-actions row">
             <Button size="sm" onClick={load}>
               {t("common.refresh")}
             </Button>
+          </div>
+        </div>
+        <div className="app-install-rail">
+            <label className="row muted" style={{ fontSize: 12 }}>
+              {t("detail.apps.displayId")}
+              <input
+                aria-label={t("detail.apps.displayId")}
+                type="number"
+                min={0}
+                max={100}
+                inputMode="numeric"
+                value={displayId}
+                onChange={(e) => setDisplayId(e.target.value)}
+                placeholder={t("detail.apps.displayIdHint")}
+                style={{ width: 74, height: 30, padding: "0 8px", borderRadius: 8 }}
+              />
+            </label>
             <Button
               size="sm"
               variant="primary"
@@ -2604,41 +3262,43 @@ function Apps({
             >
               {installing ? t("detail.apps.installingShort") : t("detail.apps.installApk")}
             </Button>
-          </div>
         </div>
-        {installing ? (
-          <div className="muted" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
-            {installRetry ? t("detail.apps.installing", { name: installRetry.name }) : t("detail.apps.installingShort")}
-          </div>
-        ) : installRetry?.error ? (
-          <div className="row" role="status" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
-            <span className="error">{installRetry.error}</span>
-            <Button size="sm" variant="ghost" onClick={() => void runInstall(installRetry.path)}>
-              {t("detail.apps.retryInstall")}
-            </Button>
-          </div>
-        ) : null}
+        <div className="app-install-status">
+          {installing ? (
+            <div className="muted" role="status" aria-live="polite">
+              {installRetry ? t("detail.apps.installing", { name: installRetry.name }) : t("detail.apps.installingShort")}
+            </div>
+          ) : installRetry?.error ? (
+            <div className="row" role="status" aria-live="polite">
+              <span className="error">{installRetry.error}</span>
+              <Button size="sm" variant="ghost" onClick={() => void runInstall(installRetry.path)}>
+                {t("detail.apps.retryInstall")}
+              </Button>
+            </div>
+          ) : null}
+        </div>
 
-        {loading ? (
-          <Skeleton count={8} height={28} />
-        ) : apps.length === 0 ? (
-          <div className="empty-state">
-            {t("detail.apps.empty")}
-            {!disabled && (
-              <span className="muted" style={{ marginLeft: 8 }}>
-                {t("detail.apps.emptyHint")}
-              </span>
-            )}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="empty-state">
-            {t("detail.apps.noMatch")}
-            <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => setKeyword("")}>
-              {t("detail.apps.clearSearch")}
-            </Button>
-          </div>
-        ) : (
-          <table className="table">
+        <div className="table-wrap detail-table-scroll">
+          {loading ? (
+            <Skeleton count={8} height={28} />
+          ) : apps.length === 0 ? (
+            <div className="empty-state">
+              {t("detail.apps.empty")}
+              {!disabled && (
+                <span className="muted" style={{ marginLeft: 8 }}>
+                  {t("detail.apps.emptyHint")}
+                </span>
+              )}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="empty-state">
+              {t("detail.apps.noMatch")}
+              <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => setKeyword("")}>
+                {t("detail.apps.clearSearch")}
+              </Button>
+            </div>
+          ) : (
+          <table className="table app-manager-table">
             <thead>
               <tr>
                 <th>{t("detail.apps.colApp")}</th>
@@ -2696,6 +3356,31 @@ function Apps({
                         }}
                       >
                         {t("detail.apps.startBtn")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={appBusy === `display:${a.packageName}`}
+                        disabled={appBusy !== null || !/^\d+$/.test(displayId) || Number(displayId) > 100}
+                        onClick={async () => {
+                          const targetDisplay = Number(displayId);
+                          setAppBusy(`display:${a.packageName}`);
+                          setStatusText(t("detail.apps.startingOnDisplay", { pkg: a.packageName, display: targetDisplay }));
+                          try {
+                            const r = await DeviceService.startAppOnDisplay(serial, a.packageName, targetDisplay);
+                            if (r.success) setStatusText(t("detail.apps.startedOnDisplay", { pkg: a.packageName, display: targetDisplay }));
+                            else {
+                              setStatusText(r.stderr || r.stdout || t("detail.apps.startOnDisplayFailed"));
+                              void alert(r.stderr || r.stdout || t("detail.apps.startOnDisplayFailed"));
+                            }
+                          } catch (e) {
+                            reportOperationError(e, t("detail.apps.startOnDisplayFailed"), setStatusText);
+                          } finally {
+                            setAppBusy(null);
+                          }
+                        }}
+                      >
+                        {t("detail.apps.startOnDisplay")}
                       </Button>
                       <Button
                         size="sm"
@@ -2804,10 +3489,12 @@ function Apps({
               ))}
             </tbody>
           </table>
-        )}
+          )}
+        </div>
       </Card>
       {detail && (
         <Card
+          className="app-detail-surface"
           title={t("detail.apps.detailTitle")}
           action={
             <div className="row">
@@ -2946,6 +3633,7 @@ function DeviceLogs({ serial, disabled = false }: { serial: string; disabled?: b
 
   return (
     <Card
+      className="detail-logs-workspace"
       title={t("detail.logs.title")}
       action={
         <div className="row">
@@ -3173,7 +3861,7 @@ function DeviceSettings({
   }, [serial]);
 
   return (
-    <fieldset disabled={offline} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+    <fieldset className="detail-settings-workspace" disabled={offline} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <Card title={t("detail.settings.title")}>
       <div className="form-grid">
         <div className="field">
@@ -3319,6 +4007,11 @@ function DeviceSettings({
         </div>
         <div className="field">
           <label>{t("detail.settings.scrcpyArgs")}</label>
+          <ScrcpyOptionsPanel
+            args={scrcpyArgs}
+            disabled={offline}
+            onChange={setScrcpyArgs}
+          />
           <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
             {(
               [

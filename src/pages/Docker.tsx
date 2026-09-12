@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Play, Square, RefreshCw, Trash2, Shield, FolderOpen, Smartphone, Database } from "lucide-react";
+import { Plus, Play, Square, RefreshCw, Trash2, Shield, FolderOpen, Smartphone, Database, ChevronDown, ChevronUp, LoaderCircle } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
@@ -28,6 +28,23 @@ function volumeNameOf(containerName: string): string {
   return n.endsWith("-data") ? n : `${n}-data`;
 }
 
+type CreatingInstanceTask = {
+  name: string;
+  containerName: string;
+  image: string;
+  adbPort: number;
+  stage: string;
+  cancelRequested: boolean;
+};
+
+function createContainerName(name: string): string {
+  const sanitized = Array.from(name)
+    .map((char) => (/^[A-Za-z0-9_-]$/.test(char) ? char : "-"))
+    .join("")
+    .toLowerCase();
+  return `rdc-${sanitized}`;
+}
+
 function readSession(key: string, fallback = "") {
   try {
     return sessionStorage.getItem(key) ?? fallback;
@@ -46,8 +63,12 @@ export function DockerPage() {
 
   const [info, setInfo] = useState<DockerInfo | null>(null);
   const [kernel, setKernel] = useState<WslKernelStatus | null>(null);
+  const [kernelExpanded, setKernelExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [creatingTask, setCreatingTask] = useState<CreatingInstanceTask | null>(null);
+  const [cancelCreateBusy, setCancelCreateBusy] = useState(false);
+  const createCancelRequestedRef = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [verifyOut, setVerifyOut] = useState<string>("");
   const [instQuery, setInstQuery] = useState(() => readSession("rdc.docker.instQuery"));
@@ -154,6 +175,7 @@ export function DockerPage() {
         .then((s) => {
           if (s) {
             setCreateStage(s);
+            setCreatingTask((task) => (task ? { ...task, stage: s } : task));
             setStatusText(s);
           }
         })
@@ -353,12 +375,48 @@ export function DockerPage() {
       ? t("docker.kernel.modeCustom")
       : kernel?.mode === "default"
         ? t("docker.kernel.modeDefault")
-        : kernel?.mode === "host"
-          ? t("docker.kernel.modeHost")
+      : kernel?.mode === "host"
+        ? t("docker.kernel.modeHost")
+        : kernel?.mode === "external-vm"
+          ? t("docker.kernel.externalVm")
           : t("docker.kernel.modeUnknown");
   const sizeMb = kernel?.customKernelSize ? (kernel.customKernelSize / 1024 / 1024).toFixed(1) : "—";
   const isWindowsWsl = kernel?.strategy === "wsl-prebuilt-or-build";
   const isLinuxHost = kernel?.strategy === "host-binder";
+  const isMacDockerHost = kernel?.strategy === "docker-desktop-vm";
+
+  const cancelCreatingInstance = async () => {
+    const task = creatingTask;
+    if (!task || task.cancelRequested || cancelCreateBusy) return;
+    if (!(await askConfirm(t("docker.cancelCreateConfirm", { name: task.name })))) return;
+
+    createCancelRequestedRef.current = true;
+    setCreatingTask((current) =>
+      current ? { ...current, cancelRequested: true, stage: t("docker.cancellingCreate") } : current,
+    );
+    setCancelCreateBusy(true);
+    try {
+      const result = await DeviceService.cancelCreateInstance(task.name);
+      if (!result.success) {
+        throw new Error(result.stderr || result.stdout || t("docker.cancelCreateFailed"));
+      }
+      setStatusText(t("docker.createCancelled"));
+      if (busy !== "create") {
+        await load();
+        setCreatingTask(null);
+      }
+    } catch (e) {
+      createCancelRequestedRef.current = false;
+      setCreatingTask((current) =>
+        current ? { ...current, cancelRequested: false, stage: createStage } : current,
+      );
+      const err = e instanceof Error ? e.message : String(e);
+      setStatusText(err);
+      void alert(err);
+    } finally {
+      setCancelCreateBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -374,7 +432,7 @@ export function DockerPage() {
           <Button
             variant="primary"
             icon={<Plus size={15} />}
-            disabled={tools !== null && !tools.docker.ok}
+            disabled={Boolean(creatingTask) || (tools !== null && !tools.docker.ok)}
             title={tools && !tools.docker.ok ? t("docker.dockerUnavailable", { text: tools.docker.text }) : undefined}
             onClick={async () => {
               try {
@@ -404,14 +462,32 @@ export function DockerPage() {
       </div>
 
       <Card
+        className={`kernel-card ${kernelExpanded ? "is-expanded" : "is-collapsed"}`}
         title={t("docker.kernelCard.title")}
         action={
-          <Button size="sm" icon={<RefreshCw size={13} />} onClick={load}>
-            {t("docker.refreshStatus")}
-          </Button>
+          <div className="row kernel-actions">
+            {!kernelExpanded && kernel && (
+              <span className="kernel-summary muted">
+                {kernelModeLabel} · Binder {isMacDockerHost ? t("docker.kernel.externalVm") : kernel.binderEnabled ? t("docker.enabled") : t("docker.disabled")}
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={kernelExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              aria-expanded={kernelExpanded}
+              title={kernelExpanded ? t("docker.kernel.collapse") : t("docker.kernel.expand")}
+              onClick={() => setKernelExpanded((expanded) => !expanded)}
+            >
+              {kernelExpanded ? t("docker.kernel.collapse") : t("docker.kernel.expand")}
+            </Button>
+            <Button size="sm" icon={<RefreshCw size={13} />} onClick={load}>
+              {t("docker.refreshStatus")}
+            </Button>
+          </div>
         }
       >
-        {loading && !kernel ? (
+        {!kernelExpanded ? null : loading && !kernel ? (
           <Skeleton height={80} />
         ) : (
           <div className="stack" style={{ gap: 12 }}>
@@ -425,7 +501,7 @@ export function DockerPage() {
               <div>
                 <div className="muted">{t("docker.kernel.strategy")}</div>
                 <div style={{ fontWeight: 650, fontSize: 13 }}>
-                  {isWindowsWsl ? t("docker.kernel.strategyWsl") : isLinuxHost ? t("docker.kernel.strategyHost") : t("docker.kernel.unsupported")}
+                  {isWindowsWsl ? t("docker.kernel.strategyWsl") : isLinuxHost ? t("docker.kernel.strategyHost") : isMacDockerHost ? t("docker.kernel.strategyMac") : t("docker.kernel.unsupported")}
                 </div>
               </div>
               <div>
@@ -441,7 +517,7 @@ export function DockerPage() {
               <div>
                 <div className="muted">Binder</div>
                 <div style={{ fontWeight: 700, fontSize: 16, color: kernel?.binderEnabled ? "var(--success, #16a34a)" : "var(--danger, #dc2626)" }}>
-                  {kernel?.binderEnabled ? t("docker.enabled") : t("docker.disabled")}
+                  {isMacDockerHost ? t("docker.kernel.externalVm") : kernel?.binderEnabled ? t("docker.enabled") : t("docker.disabled")}
                 </div>
               </div>
               <div>
@@ -542,15 +618,13 @@ export function DockerPage() {
             </div>
             {verifyOut ? (
               <pre
-                className="mono"
+                className="mono kernel-verify-output"
                 style={{
                   margin: 0,
                   padding: 10,
                   fontSize: 11,
-                  maxHeight: 180,
-                  overflow: "auto",
                   borderRadius: 10,
-                  background: "var(--bg-hover)",
+                  background: "var(--surface-tint)",
                 }}
               >
                 {verifyOut}
@@ -593,8 +667,36 @@ export function DockerPage() {
       </div>
 
       {showCreate && (
-        <div ref={createFormRef}>
-        <Card title={t("docker.createForm.title")} action={<Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>{t("common.close")}</Button>}>
+        <div className="create-modal-layer" role="presentation">
+          <div
+            ref={createFormRef}
+            className="create-modal-shell"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("docker.createForm.title")}
+          >
+        <Card
+          className="create-modal"
+          title={t("docker.createForm.title")}
+          action={
+            <div className="row create-modal-actions">
+              {creatingTask && (
+                <span className="create-modal-status">
+                  <LoaderCircle size={12} className="create-spinner" />
+                  {t("docker.creating")}
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<ChevronDown size={13} />}
+                onClick={() => setShowCreate(false)}
+              >
+                {t("docker.createCollapse")}
+              </Button>
+            </div>
+          }
+        >
           {createStage && (
             <div
               className="notice"
@@ -1182,6 +1284,15 @@ export function DockerPage() {
                     return;
                   }
                 }
+                createCancelRequestedRef.current = false;
+                setCreatingTask({
+                  name: form.name.trim(),
+                  containerName: createContainerName(form.name),
+                  image: form.image,
+                  adbPort: form.adbPort,
+                  stage: t("docker.probingDocker"),
+                  cancelRequested: false,
+                });
                 setBusy("create");
                 setStatusText(t("docker.probingDocker"));
                 const dockerHit = await probeTool("docker", settings?.dockerPath);
@@ -1190,7 +1301,14 @@ export function DockerPage() {
                   void alert(
                     t("docker.dockerUnavailableAlert", { text: dockerHit.text }),
                   );
+                  setCreatingTask(null);
                   setBusy(null);
+                  return;
+                }
+                if (createCancelRequestedRef.current) {
+                  setCreatingTask(null);
+                  setBusy(null);
+                  setStatusText(t("docker.createCancelled"));
                   return;
                 }
                 let waitAdb = waitAdbPref;
@@ -1204,9 +1322,16 @@ export function DockerPage() {
                       t("docker.adbUnavailableConfirm", { text: adbHit.text }),
                     ))
                   ) {
+                    setCreatingTask(null);
                     setBusy(null);
                     return;
                   }
+                }
+                if (createCancelRequestedRef.current) {
+                  setCreatingTask(null);
+                  setBusy(null);
+                  setStatusText(t("docker.createCancelled"));
+                  return;
                 }
                 setStatusText(
                   form.installGapps
@@ -1222,6 +1347,25 @@ export function DockerPage() {
                     hidePackages,
                     waitAdb,
                   });
+                  if (createCancelRequestedRef.current || r.exitCode === -2) {
+                    // The backend normally cleans up as soon as it observes the
+                    // cancellation flag.  A cancel request can, however, arrive
+                    // just after the final backend checkpoint and before this
+                    // promise resolves.  Repeat the idempotent cleanup here so a
+                    // late cancellation cannot leave a just-created container.
+                    if (createCancelRequestedRef.current && r.exitCode !== -2) {
+                      const cleanup = await DeviceService.cancelCreateInstance(form.name);
+                      if (!cleanup.success) {
+                        throw new Error(
+                          cleanup.stderr || cleanup.stdout || t("docker.cancelCreateFailed"),
+                        );
+                      }
+                    }
+                    await load();
+                    setCreatingTask(null);
+                    setStatusText(t("docker.createCancelled"));
+                    return;
+                  }
                   await load();
                   const serial = `127.0.0.1:${form.adbPort}`;
                   const created = r.success || (await DeviceService.checkInstanceName(form.name));
@@ -1268,7 +1412,6 @@ export function DockerPage() {
                   };
                   const scrollCreateForm = () => {
                     window.requestAnimationFrame(() => {
-                      createFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                       const nameInput = createFormRef.current?.querySelector<HTMLInputElement>(
                         'input[data-create-name="1"]',
                       );
@@ -1282,6 +1425,7 @@ export function DockerPage() {
                     setCreateStage(t("docker.createIncomplete", { reason: reason.split("\n")[0] }));
                     setStatusText(r.stderr || t("docker.adbNotReady"));
                     void alert(r.stderr || r.stdout || t("docker.createFailed"));
+                    setCreatingTask(null);
                     if (created) {
                       await offerAutoStart();
                       await bumpCreateDefaults();
@@ -1304,6 +1448,7 @@ export function DockerPage() {
                   setLastCreatedSerial(serial);
                   setCreatedFlash(true);
                   window.setTimeout(() => setCreatedFlash(false), 1600);
+                  setCreatingTask(null);
                   if (!stayToCreate) {
                     setShowCreate(false);
                     openDevice(serial);
@@ -1314,6 +1459,7 @@ export function DockerPage() {
                   const err = e instanceof Error ? e.message : String(e);
                   setFailedSerial("");
                   setCreateStage(t("docker.createIncomplete", { reason: err.split("\n")[0] }));
+                  setCreatingTask(null);
                   setStatusText(err);
                   void alert(err);
                 } finally {
@@ -1340,6 +1486,7 @@ export function DockerPage() {
             </Button>
           </div>
         </Card>
+          </div>
         </div>
       )}
 
@@ -1366,9 +1513,9 @@ export function DockerPage() {
             </div>
           }
         >
-          {loading ? (
+          {loading && !info ? (
             <Skeleton count={4} height={40} />
-          ) : redroids.length === 0 ? (
+          ) : redroids.length === 0 && !creatingTask ? (
             <div className="empty-state">
               {redroidsAll.length === 0 ? (
                 <>
@@ -1396,6 +1543,15 @@ export function DockerPage() {
             </div>
           ) : (
             <div className="stack">
+              {creatingTask && (
+                <CreatingInstanceRow
+                  task={creatingTask}
+                  dialogOpen={showCreate}
+                  cancelBusy={cancelCreateBusy}
+                  onContinue={() => setShowCreate(true)}
+                  onCancel={() => void cancelCreatingInstance()}
+                />
+              )}
               {redroids.map((c) => (
                 <InstanceRow
                   key={c.id}
@@ -1581,6 +1737,59 @@ export function DockerPage() {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+function CreatingInstanceRow({
+  task,
+  dialogOpen,
+  cancelBusy,
+  onContinue,
+  onCancel,
+}: {
+  task: CreatingInstanceTask;
+  dialogOpen: boolean;
+  cancelBusy: boolean;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const serial = `127.0.0.1:${task.adbPort}`;
+
+  return (
+    <div className="instance-row creating-instance-row" aria-busy="true">
+      <div className="creating-instance-copy">
+        <div className="row creating-instance-title">
+          <LoaderCircle size={14} className="create-spinner" />
+          <strong>{task.name}</strong>
+          <span className="badge info">{t("docker.creating")}</span>
+        </div>
+        <div className="muted mono">{task.containerName} · ADB {serial}</div>
+        <div className="creating-instance-stage">{task.stage || t("common.loading")}</div>
+        <div className="muted mono">{task.image}</div>
+      </div>
+      <div className="row creating-instance-actions">
+        {!dialogOpen && !task.cancelRequested && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<ChevronUp size={13} />}
+            onClick={onContinue}
+          >
+            {t("docker.createExpand")}
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="danger"
+          icon={<Trash2 size={13} />}
+          loading={cancelBusy || task.cancelRequested}
+          onClick={onCancel}
+        >
+          {task.cancelRequested ? t("docker.cancellingCreate") : t("docker.cancelCreate")}
+        </Button>
+      </div>
     </div>
   );
 }

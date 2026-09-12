@@ -42,4 +42,8 @@ export default defineConfig(async () => ({
       },
     },
   },
+  optimizeDeps: {
+    entries: ["index.html"],
+    exclude: ["@xterm/xterm", "@xterm/addon-fit", "@element-plus/icons-vue"],
+  },
 }));

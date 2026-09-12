@@ -73,6 +73,16 @@ switch ($platform) {
     $strategy = "host-binder"
     $needsWslKernel = $false
   }
+  "darwin-x64" {
+    $supported = $true
+    $strategy = "docker-desktop-vm"
+    $needsWslKernel = $false
+  }
+  "darwin-arm64" {
+    $supported = $true
+    $strategy = "docker-desktop-vm"
+    $needsWslKernel = $false
+  }
   default {
     $supported = $false
     $strategy = "unsupported"

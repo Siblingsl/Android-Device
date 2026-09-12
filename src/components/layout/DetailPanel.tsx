@@ -1,6 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, ChevronLeft } from "lucide-react";
-import { copyText } from "../../lib/clipboard";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useAppStore } from "../../stores/appStore";
 import { StatusDot } from "../ui/StatusDot";
 import { Button } from "../ui/Button";
@@ -18,18 +17,22 @@ export function DetailPanel() {
 
   if (!open) {
     return (
-      <button className="detail-toggle closed" onClick={() => setOpen(true)} title={t("common.panel.expand")}>
-        <ChevronLeft size={16} />
+      <button className="detail-toggle closed" onClick={() => setOpen(true)} title={t("common.panel.expand")} aria-label={t("common.panel.expand")}>
+        <ChevronUp size={16} />
       </button>
     );
   }
 
   return (
-    <aside className="detail">
+    <aside className="detail detail-drawer" aria-label={t("common.detailPanel")}>
+      <div className="detail-handle" aria-hidden="true" />
       <div className="detail-head">
-        <div className="detail-title">{t("common.detailPanel")}</div>
-        <button className="detail-toggle" onClick={() => setOpen(false)}>
-          <ChevronRight size={16} />
+        <div>
+      <div className="detail-kicker">Quick look</div>
+          <div className="detail-title">{t("common.detailPanel")}</div>
+        </div>
+        <button className="detail-toggle" onClick={() => setOpen(false)} aria-label={t("common.panel.collapse")}>
+          <ChevronDown size={16} />
         </button>
       </div>
 
@@ -66,7 +69,7 @@ export function DetailPanel() {
                 onClick={
                   device.serial
                     ? () => {
-                        void copyText(device.serial).then(
+                        void navigator.clipboard.writeText(device.serial).then(
                           () => useAppStore.getState().setStatusText(t("common.panel.copied", { value: device.serial })),
                           () => useAppStore.getState().setStatusText(t("common.panel.copyFailed")),
                         );

@@ -8,7 +8,7 @@
 | `windows-arm64` | Windows | ARM64 | WSL 自定义内核 | ✅ 另编 `…-windows-arm64-…`（**不能**用 x64 包） |
 | `linux-x64` | Linux | x86_64 | 主机 binder | ❌ 不需要 |
 | `linux-arm64` | Linux | aarch64 | 主机 binder | ❌ 不需要 |
-| 其它 / macOS | — | — | 不支持 | — |
+| macOS x64/arm64 | Docker Desktop Linux VM / QEMU / 远程 Linux | — | 支持宿主工具 | 不使用 WSL bzImage；binder 必须在 Linux 运行环境中提供 |
 
 检测本机：
 

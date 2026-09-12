@@ -7,23 +7,29 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build:release": "node scripts/tauri-release-build.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.2",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.539.0",
+    "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router-dom": "7.18.3",
+    "react-router-dom": "^7.8.0",
     "zustand": "^5.0.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^24.2.1",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

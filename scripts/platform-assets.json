@@ -1,5 +1,5 @@
 {
-  "description": "Prebuilt WSL binder kernel Release assets (Windows only). Linux uses host binder — no bzImage.",
+  "description": "Prebuilt WSL binder kernel Release assets for Windows. Linux uses host binder; macOS uses Docker Desktop Linux VM, QEMU, or remote Linux — no macOS bzImage.",
   "github": {
     "owner": "YOUR_GITHUB_ORG",
     "repo": "Android-Device",
@@ -64,16 +64,18 @@
     "darwin-x64": {
       "os": "darwin",
       "arch": "x64",
-      "supported": false,
+      "supported": true,
       "needsWslKernel": false,
-      "notes": "macOS not supported for this product line."
+      "strategy": "docker-desktop-vm",
+      "notes": "macOS host tools are supported; Redroid binder must be provided by Docker Desktop Linux VM, QEMU, or remote Linux."
     },
     "darwin-arm64": {
       "os": "darwin",
       "arch": "arm64",
-      "supported": false,
+      "supported": true,
       "needsWslKernel": false,
-      "notes": "macOS not supported for this product line."
+      "strategy": "docker-desktop-vm",
+      "notes": "Apple Silicon host tools are supported; use an arm64-compatible Redroid image and provide binder inside Docker Desktop Linux VM, QEMU, or remote Linux."
     }
   },
   "releaseChecklist": [

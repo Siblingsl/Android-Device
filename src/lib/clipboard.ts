@@ -42,3 +42,8 @@ export async function copyText(text: string): Promise<void> {
   if (nativeError instanceof Error) throw nativeError;
   throw new Error("Clipboard copy unavailable");
 }
+
+/** Remove only the newline added by the ADB clipboard transport. */
+export function normalizeClipboardText(value: string) {
+  return value.replace(/\r?\n$/, "");
+}

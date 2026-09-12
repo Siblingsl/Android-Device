@@ -1,6 +1,6 @@
 // Cross-page common strings (sidebar, status bar, shared actions)
 export const commonZh: Record<string, string> = {
-  "common.appName": "Redroid Device Center",
+  "common.appName": "Just Run",
   "common.nav.dashboard": "仪表盘",
   "common.nav.devices": "设备中心",
   "common.nav.monitor": "监控告警",
@@ -31,7 +31,7 @@ export const commonZh: Record<string, string> = {
   "common.offline": "离线",
   "common.searchPlaceholder": "搜索",
   "common.backendUnavailable":
-    "桌面后端不可用：请在 Redroid Device Center 桌面应用中操作（浏览器预览模式没有 Tauri 后端）",
+    "桌面后端不可用：请在 Just Run 桌面应用中操作（浏览器预览模式没有 Tauri 后端）",
   "common.status.dockerNotRunning": "Docker 未运行 · 点击处理",
   "common.status.startDocker": "一键启动 Docker Desktop",
   "common.status.startingDocker": "Docker Desktop 启动中…",
@@ -69,7 +69,7 @@ export const commonZh: Record<string, string> = {
 };
 
 export const commonEn: Record<string, string> = {
-  "common.appName": "Redroid Device Center",
+  "common.appName": "Just Run",
   "common.nav.dashboard": "Dashboard",
   "common.nav.devices": "Devices",
   "common.nav.monitor": "Monitor alerts",
@@ -100,7 +100,7 @@ export const commonEn: Record<string, string> = {
   "common.offline": "Offline",
   "common.searchPlaceholder": "Search",
   "common.backendUnavailable":
-    "Desktop backend unavailable: please use the Redroid Device Center desktop app (browser preview has no Tauri backend)",
+    "Desktop backend unavailable: please use the Just Run desktop app (browser preview has no Tauri backend)",
   "common.status.dockerNotRunning": "Docker not running · Click to fix",
   "common.status.startDocker": "Start Docker Desktop",
   "common.status.startingDocker": "Starting Docker Desktop…",
@@ -151,6 +151,7 @@ Object.assign(commonZh, {
   "common.status.openSystemLogs": "打开系统日志",
   "common.sidebar.adbReady": "{n} 台 ADB 就绪",
   "common.panel.expand": "展开详情",
+  "common.panel.collapse": "收起详情",
   "common.panel.resolution": "分辨率",
   "common.panel.volume": "数据卷",
   "common.panel.openDetail": "打开详情页",
@@ -172,6 +173,7 @@ Object.assign(commonEn, {
   "common.status.openSystemLogs": "Open system logs",
   "common.sidebar.adbReady": "{n} ADB ready",
   "common.panel.expand": "Expand details",
+  "common.panel.collapse": "Collapse details",
   "common.panel.resolution": "Resolution",
   "common.panel.volume": "Volume",
   "common.panel.openDetail": "Open details",

@@ -8,13 +8,43 @@ import {
   Play,
   RefreshCw,
   Download,
+  Upload,
+  LayoutGrid,
+  List,
+  Pencil,
+  Check,
+  X,
+  History,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
 import { askConfirm } from "../lib/dialogs";
 import { createRequestSequence } from "../lib/requestSequence";
+import { batchFileName, batchRemotePath } from "../lib/batchOperations";
+import {
+  readDeviceNotes,
+  persistDeviceNotes,
+  updateDeviceNote,
+  readOfflineDeviceHistory,
+  persistOfflineDeviceHistory,
+  rememberDevices,
+  removeOfflineDevice,
+  type DeviceNoteMap,
+  type OfflineDeviceHistoryEntry,
+} from "../lib/deviceMetadata";
+import {
+  DEFAULT_SCRCPY_LAYOUT,
+  normalizeScrcpyLayout,
+  scrcpyWindowPlacement,
+  type ScrcpyLayoutConfig,
+} from "../lib/scrcpyWindowLayout";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
+import { DeviceBroadcastInput } from "../components/device/DeviceBroadcastInput";
+import { DeviceHoverCard } from "../components/device/DeviceHoverCard";
+import { QuickAppLauncher } from "../components/device/QuickAppLauncher";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
@@ -25,9 +55,42 @@ import type { DeviceInfo } from "../types";
 const FILTER_KEY = "rdc.devices.filter";
 const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
+const VIEW_KEY = "rdc.devices.view";
 const BATCH_HISTORY_KEY = "rdc.devices.batchHistory";
+const SCRCPY_LAYOUT_KEY = "rdc.devices.scrcpyLayout";
 const MAX_BATCH_HISTORY = 10;
 const BATCH_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+type DevicesView = "table" | "cards";
+type HoverPlacement = "bottom-left" | "bottom-right" | "top-left" | "top-right";
+
+function getDeviceHoverPlacement(rect: DOMRect, viewportWidth: number, viewportHeight: number): HoverPlacement {
+  const cardWidth = 300;
+  const cardHeight = 310;
+  const edgeGap = 14;
+  const vertical = rect.bottom + cardHeight + edgeGap > viewportHeight && rect.top > cardHeight + edgeGap ? "top" : "bottom";
+  const horizontal = rect.left + cardWidth + edgeGap > viewportWidth && rect.right - cardWidth > edgeGap ? "right" : "left";
+  return `${vertical}-${horizontal}` as HoverPlacement;
+}
+
+function readDevicesView(): DevicesView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "cards" ? "cards" : "table";
+  } catch {
+    return "table";
+  }
+}
+
+function readScrcpyLayout(): ScrcpyLayoutConfig {
+  try {
+    const raw = localStorage.getItem(SCRCPY_LAYOUT_KEY);
+    if (!raw) return DEFAULT_SCRCPY_LAYOUT;
+    const parsed = JSON.parse(raw) as Partial<ScrcpyLayoutConfig>;
+    return normalizeScrcpyLayout(parsed);
+  } catch {
+    return DEFAULT_SCRCPY_LAYOUT;
+  }
+}
 
 type BatchAction = (device: DeviceInfo) => Promise<unknown>;
 type BatchReportItem = { id: string; name: string; ok: boolean; detail: string };
@@ -103,6 +166,70 @@ function readBatchHistory(): BatchHistoryItem[] {
   }
 }
 
+function DeviceNoteEditor({
+  deviceName,
+  value,
+  onSave,
+}: {
+  deviceName: string;
+  value?: string;
+  onSave: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+
+  const startEditing = () => {
+    setDraft(value ?? "");
+    setEditing(true);
+  };
+
+  if (editing) {
+    return (
+      <form
+        className="device-note-editor"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(draft);
+          setEditing(false);
+        }}
+      >
+        <input
+          autoFocus
+          value={draft}
+          maxLength={80}
+          aria-label={`${t("devices.note.input")} ${deviceName}`}
+          placeholder={t("devices.note.placeholder")}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <Button type="submit" size="sm" variant="primary" icon={<Check size={12} />} aria-label={t("devices.note.save")} />
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={<X size={12} />}
+          aria-label={t("devices.note.cancel")}
+          onClick={() => setEditing(false)}
+        />
+      </form>
+    );
+  }
+
+  return (
+    <div className="device-note-line">
+      {value ? <span className="device-note-value" title={value}>{value}</span> : <span className="device-note-empty">{t("devices.note.empty")}</span>}
+      <button
+        type="button"
+        className="device-note-edit"
+        aria-label={`${t("devices.note.edit")} ${deviceName}`}
+        title={t("devices.note.edit")}
+        onClick={startEditing}
+      >
+        <Pencil size={11} />
+      </button>
+    </div>
+  );
+}
+
 function persistBatchHistory(history: BatchHistoryItem[]) {
   try {
     localStorage.setItem(BATCH_HISTORY_KEY, JSON.stringify(history.slice(0, MAX_BATCH_HISTORY)));
@@ -169,6 +296,9 @@ export function Devices() {
     }
   });
   const [filter, setFilter] = useState<"all" | "online" | "offline">(readFilter);
+  const [devicesView, setDevicesView] = useState<DevicesView>(readDevicesView);
+  const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
+  const [hoverPlacement, setHoverPlacement] = useState<HoverPlacement>("bottom-left");
   const [query, setQuery] = useState(() => {
     try {
       return sessionStorage.getItem(QUERY_KEY) ?? "";
@@ -181,6 +311,9 @@ export function Devices() {
   const [batchFilter, setBatchFilter] = useState<BatchResultFilter>("all");
   const [batchReasonFilter, setBatchReasonFilter] = useState<BatchReasonFilter>("all");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [deviceNotes, setDeviceNotes] = useState<DeviceNoteMap>(readDeviceNotes);
+  const [offlineHistory, setOfflineHistory] = useState<OfflineDeviceHistoryEntry[]>(readOfflineDeviceHistory);
+  const [offlineHistoryOpen, setOfflineHistoryOpen] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{
     label: string;
     current: number;
@@ -193,11 +326,24 @@ export function Devices() {
   const setStatusText = useAppStore((s) => s.setStatusText);
   const refreshDevices = useAppStore((s) => s.refreshDevices);
   const screenshotDir = useAppStore((s) => s.settings?.screenshotPath);
+  const [scrcpyLayout, setScrcpyLayout] = useState<ScrcpyLayoutConfig>(readScrcpyLayout);
   const { t } = useI18n();
   const loadSequence = useRef(createRequestSequence()).current;
   const localLoadActive = useRef(false);
   const loadingRequest = useRef<number | null>(null);
   const batchCancelRequested = useRef(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SCRCPY_LAYOUT_KEY, JSON.stringify(scrcpyLayout));
+    } catch {
+      /* ignore unavailable or full local storage */
+    }
+  }, [scrcpyLayout]);
+
+  const updateScrcpyLayout = (key: keyof ScrcpyLayoutConfig, value: string) => {
+    setScrcpyLayout((current) => normalizeScrcpyLayout({ ...current, [key]: Number(value) }));
+  };
 
   const load = async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent ?? false;
@@ -211,6 +357,9 @@ export function Devices() {
       const list = await DeviceService.listDevices();
       if (!loadSequence.isCurrent(token)) return;
       setDevices(list);
+      const nextOfflineHistory = rememberDevices(readOfflineDeviceHistory(), list);
+      setOfflineHistory(nextOfflineHistory);
+      persistOfflineDeviceHistory(nextOfflineHistory);
       const ids = new Set(list.map((d) => d.id));
       setPicked((prev) => prev.filter((id) => ids.has(id)));
       await refreshDevices();
@@ -258,8 +407,24 @@ export function Devices() {
   }, [filter, query, picked]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_KEY, devicesView);
+    } catch {
+      /* ignore unavailable storage */
+    }
+  }, [devicesView]);
+
+  useEffect(() => {
     persistBatchHistory(batchHistory);
   }, [batchHistory]);
+
+  useEffect(() => {
+    persistDeviceNotes(deviceNotes);
+  }, [deviceNotes]);
+
+  useEffect(() => {
+    persistOfflineDeviceHistory(offlineHistory);
+  }, [offlineHistory]);
 
   const run = async (
     id: string,
@@ -357,10 +522,10 @@ export function Devices() {
     fn: BatchAction,
     kind = "",
     targetDevices = selectedDevices,
-  ) => {
+  ): Promise<boolean> => {
     if (targetDevices.length === 0) {
       setStatusText(t("devices.pickFirst"));
-      return;
+      return false;
     }
     batchCancelRequested.current = false;
     setBusy("batch");
@@ -440,6 +605,7 @@ export function Devices() {
           total: items.length,
         }),
       );
+      return okCount === items.length;
     } finally {
       setBusy(null);
       setBatchProgress(null);
@@ -591,15 +757,39 @@ export function Devices() {
     failedBatchItems.filter((item) => classifyBatchFailure(item.detail) === reason).length;
   const selectedReasonFailedCount =
     batchReasonFilter === "all" ? 0 : batchFailureReasonCount(batchReasonFilter);
+  const historicalOffline = offlineHistory
+    .filter((entry) => !devices.some((device) => device.id === entry.device.id))
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const saveDeviceNote = (id: string, value: string) => {
+    setDeviceNotes((current) => updateDeviceNote(current, id, value));
+  };
+  const removeOfflineHistory = (id: string) => {
+    setOfflineHistory((current) => removeOfflineDevice(current, id));
+  };
+  const clearOfflineHistory = async () => {
+    if (!(await askConfirm(t("devices.offlineHistory.confirmClear")))) return;
+    setOfflineHistory([]);
+    setOfflineHistoryOpen(false);
+  };
 
   return (
-    <div>
-      <div className="page-header">
+    <div className="devices-workbench">
+      <div className="page-header devices-header-rail">
         <div>
           <div className="page-title">{t("devices.page.title")}</div>
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
-        <div className="row">
+        <div className="row devices-header-actions">
+          {historicalOffline.length > 0 && (
+            <Button
+              variant="ghost"
+              icon={<History size={15} />}
+              aria-expanded={offlineHistoryOpen}
+              onClick={() => setOfflineHistoryOpen((open) => !open)}
+            >
+              {t("devices.offlineHistory.button", { n: historicalOffline.length })}
+            </Button>
+          )}
           {batchHistory.length > 0 && (
             <Button
               variant="ghost"
@@ -619,6 +809,74 @@ export function Devices() {
           </Button>
         </div>
       </div>
+
+      <div className="devices-history-stack">
+      {offlineHistoryOpen && historicalOffline.length > 0 && (
+        <Card
+          className="offline-device-history-card"
+          title={t("devices.offlineHistory.title")}
+          action={
+            <div className="row">
+              <Button size="sm" variant="danger" onClick={() => void clearOfflineHistory()}>
+                {t("devices.offlineHistory.clear")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setOfflineHistoryOpen(false)}>
+                {t("common.close")}
+              </Button>
+            </div>
+          }
+        >
+          <div className="offline-device-history-list">
+            {historicalOffline.map((entry) => {
+              const historicalDevice = entry.device;
+              const historicalBusy = busy === historicalDevice.id;
+              return (
+                <div className="offline-device-history-item" key={historicalDevice.id}>
+                  <div className="offline-device-history-identity">
+                    <div className="offline-device-history-name">{historicalDevice.name}</div>
+                    <div className="muted mono">{historicalDevice.serial || "—"}</div>
+                    <div className="muted offline-device-history-time">
+                      {t("devices.offlineHistory.lastSeen", { time: new Date(entry.lastSeenAt).toLocaleString() })}
+                    </div>
+                    {deviceNotes[historicalDevice.id] ? (
+                      <div className="device-note-history">{deviceNotes[historicalDevice.id]}</div>
+                    ) : null}
+                  </div>
+                  <div className="offline-device-history-actions">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<RotateCcw size={12} />}
+                      loading={historicalBusy}
+                      disabled={!historicalDevice.serial}
+                      title={!historicalDevice.serial ? t("devices.offlineHistory.noSerial") : undefined}
+                      onClick={() =>
+                        void run(
+                          historicalDevice.id,
+                          () => DeviceService.connect(historicalDevice.serial),
+                          t("devices.status.connecting", { name: historicalDevice.name }),
+                          t("devices.status.adbReady"),
+                        )
+                      }
+                    >
+                      {t("devices.offlineHistory.reconnect")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={<Trash2 size={12} />}
+                      aria-label={`${t("devices.offlineHistory.remove")} ${historicalDevice.name}`}
+                      onClick={() => removeOfflineHistory(historicalDevice.id)}
+                    >
+                      {t("devices.offlineHistory.remove")}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {historyOpen && (
         <Card
@@ -673,9 +931,12 @@ export function Devices() {
           </div>
         </Card>
       )}
+      </div>
 
       {devices.length > 0 && (
-        <div className="row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+        <div className="devices-toolbar devices-query-action-deck">
+          <div className="devices-toolbar-main devices-query-rail">
+          <div className="devices-toolbar-view">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -691,6 +952,28 @@ export function Devices() {
             <option value="online">{t("devices.filter.online", { n: devices.filter(isOnline).length })}</option>
             <option value="offline">{t("devices.filter.offline", { n: devices.filter((d) => !isOnline(d)).length })}</option>
           </select>
+          <div className="devices-view-toggle" role="group" aria-label={t("devices.view.label")}>
+            <Button
+              size="sm"
+              variant={devicesView === "table" ? "primary" : "ghost"}
+              icon={<List size={13} />}
+              aria-pressed={devicesView === "table"}
+              onClick={() => setDevicesView("table")}
+            >
+              {t("devices.view.table")}
+            </Button>
+            <Button
+              size="sm"
+              variant={devicesView === "cards" ? "primary" : "ghost"}
+              icon={<LayoutGrid size={13} />}
+              aria-pressed={devicesView === "cards"}
+              onClick={() => setDevicesView("cards")}
+            >
+              {t("devices.view.cards")}
+            </Button>
+          </div>
+          </div>
+          <div className="devices-toolbar-selection">
           <Button
             size="sm"
             variant="ghost"
@@ -721,12 +1004,284 @@ export function Devices() {
           >
             {allOnlineVisiblePicked ? t("devices.unselectOnline") : t("devices.selectAllOnline")}
           </Button>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {t("devices.selectedCount", { n: picked.length })}
-          </span>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
-          </span>
+          <div className="devices-toolbar-selection-summary">
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("devices.selectedCount", { n: picked.length })}
+            </span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("devices.visibleSelectedCount", { n: selectedDevices.length })}
+            </span>
+          </div>
+          </div>
+          <div className="devices-toolbar-advanced">
+          <details className="batch-layout-details">
+            <summary>{t("devices.layout.title")}</summary>
+            <div className="batch-layout-fields">
+              <label>
+                {t("devices.layout.columns")}
+                <input
+                  aria-label={t("devices.layout.columns")}
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={scrcpyLayout.columns}
+                  onChange={(event) => updateScrcpyLayout("columns", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.width")}
+                <input
+                  aria-label={t("devices.layout.width")}
+                  type="number"
+                  min={240}
+                  max={1600}
+                  value={scrcpyLayout.width}
+                  onChange={(event) => updateScrcpyLayout("width", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.height")}
+                <input
+                  aria-label={t("devices.layout.height")}
+                  type="number"
+                  min={240}
+                  max={1600}
+                  value={scrcpyLayout.height}
+                  onChange={(event) => updateScrcpyLayout("height", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.gap")}
+                <input
+                  aria-label={t("devices.layout.gap")}
+                  type="number"
+                  min={0}
+                  max={120}
+                  value={scrcpyLayout.gap}
+                  onChange={(event) => updateScrcpyLayout("gap", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.originX")}
+                <input
+                  aria-label={t("devices.layout.originX")}
+                  type="number"
+                  min={-10000}
+                  max={10000}
+                  value={scrcpyLayout.originX}
+                  onChange={(event) => updateScrcpyLayout("originX", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <label>
+                {t("devices.layout.originY")}
+                <input
+                  aria-label={t("devices.layout.originY")}
+                  type="number"
+                  min={-10000}
+                  max={10000}
+                  value={scrcpyLayout.originY}
+                  onChange={(event) => updateScrcpyLayout("originY", event.target.value)}
+                  disabled={busy === "batch"}
+                />
+              </label>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy === "batch"}
+                onClick={() => setScrcpyLayout(DEFAULT_SCRCPY_LAYOUT)}
+              >
+                {t("devices.layout.reset")}
+              </Button>
+            </div>
+            <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
+          </details>
+          </div>
+          </div>
+          <div className="device-list-bulk-actions">
+          <div className="devices-toolbar-batch devices-toolbar-batch-rail devices-action-deck">
+          <div className="devices-toolbar-batch-supporting">
+          <DeviceBroadcastInput
+            disabled={selectedDevices.length === 0}
+            busy={busy}
+            onText={(text) =>
+              batch(
+                t("devices.broadcast.textAction"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  return DeviceService.text(d.serial, text);
+                },
+                "broadcast-text",
+              )
+            }
+            onKey={(code) =>
+              batch(
+                t("devices.broadcast.keyAction"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  return DeviceService.keyevent(d.serial, code);
+                },
+                "broadcast-key",
+              )
+            }
+          />
+          </div>
+          <div className="devices-toolbar-batch-primary">
+          <Button
+            size="sm"
+            loading={busy === "batch"}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={() =>
+              void batch(t("devices.batch.connect"), (d) => DeviceService.connect(d.serial))
+            }
+          >
+            {t("devices.batch.connectShort")}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<Monitor size={13} />}
+            loading={busy === "batch"}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={() =>
+              void batch(
+                t("devices.batch.mirror"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  return DeviceService.scrcpyStart(d.serial);
+                },
+                "scrcpy",
+              )
+            }
+          >
+            {t("devices.batch.mirrorShort")}
+          </Button>
+          </div>
+          <div className="devices-toolbar-batch-supporting">
+          <Button
+            size="sm"
+            icon={<LayoutGrid size={13} />}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={() => {
+              const layoutDevices = selectedDevices;
+              void batch(
+                t("devices.batch.layoutMirror"),
+                async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  const index = layoutDevices.findIndex((item) => item.id === d.id);
+                  return DeviceService.scrcpyStartLayout(
+                    d.serial,
+                    scrcpyWindowPlacement(index, scrcpyLayout),
+                  );
+                },
+                "scrcpy-layout",
+                layoutDevices,
+              );
+            }}
+          >
+            {t("devices.batch.layoutMirrorShort")}
+          </Button>
+          <Button
+            size="sm"
+            icon={<Upload size={13} />}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={async () => {
+              try {
+                const pickedFiles = await open({ multiple: true, directory: false });
+                const files = (Array.isArray(pickedFiles) ? pickedFiles : pickedFiles ? [pickedFiles] : [])
+                  .filter((path): path is string => typeof path === "string" && path.length > 0);
+                if (files.length === 0) return;
+                const target = prompt(t("devices.batch.pushPathPrompt"), "/sdcard/Download");
+                if (target === null) return;
+                const remoteDirectory = target.trim() || "/sdcard/Download";
+                if (!(await askConfirm(t("devices.batch.confirmPush", {
+                  n: files.length,
+                  target: remoteDirectory,
+                  devices: selectedDevices.length,
+                })))) return;
+                await batch(
+                  t("devices.batch.pushMany", { n: files.length }),
+                  async (d) => {
+                    const miss = await ensureOnline(d);
+                    if (miss) return miss;
+                    for (const file of files) {
+                      const result = await DeviceService.uploadFile(
+                        d.serial,
+                        file,
+                        batchRemotePath(remoteDirectory, file),
+                      );
+                      if (!result.success) return result;
+                    }
+                    return {
+                      success: true,
+                      stdout: t("devices.batch.pushedCount", { n: files.length }),
+                      stderr: "",
+                    };
+                  },
+                  "upload",
+                );
+              } catch {
+                /* cancelled */
+              }
+            }}
+          >
+            {t("devices.batch.pushShort")}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Package size={13} />}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            onClick={async () => {
+              try {
+                const apk = await open({
+                  multiple: true,
+                  directory: false,
+                  filters: [{ name: "APK", extensions: ["apk"] }],
+                });
+                const apks = (Array.isArray(apk) ? apk : apk ? [apk] : [])
+                  .filter((path): path is string => typeof path === "string" && path.toLowerCase().endsWith(".apk"));
+                if (apks.length === 0) return;
+                const name = batchFileName(apks[0]);
+                const label = apks.length === 1
+                  ? t("devices.batch.installWith", { name })
+                  : t("devices.batch.installMany", { n: apks.length });
+                const confirmMessage = apks.length === 1
+                  ? t("devices.confirmInstall", { name, n: selectedDevices.length })
+                  : t("devices.batch.confirmInstallMany", { n: apks.length, devices: selectedDevices.length });
+                if (!(await askConfirm(confirmMessage))) return;
+                await batch(label, async (d) => {
+                  const miss = await ensureOnline(d);
+                  if (miss) return miss;
+                  for (const path of apks) {
+                    setStatusText(t("devices.installing", { name: d.name }));
+                    const result = await DeviceService.installApk(d.serial, path, true);
+                    if (!result.success) return result;
+                  }
+                  return {
+                    success: true,
+                    stdout: t("devices.batch.installedCount", { n: apks.length }),
+                    stderr: "",
+                  };
+                });
+              } catch {
+                /* cancelled */
+              }
+            }}
+          >
+            {t("devices.batch.installApk")}
+          </Button>
+          </div>
+          <div className="devices-toolbar-batch-utility">
+          <QuickAppLauncher devices={devices} selectedDevices={selectedDevices} setStatusText={setStatusText} />
           <Button
             size="sm"
             variant="ghost"
@@ -747,45 +1302,6 @@ export function Devices() {
             }}
           >
             {t("devices.copySerials")}
-          </Button>
-          <Button
-            size="sm"
-            loading={busy === "batch"}
-            disabled={busy === "batch" || selectedDevices.length === 0}
-            onClick={() =>
-              void batch(t("devices.batch.connect"), (d) => DeviceService.connect(d.serial))
-            }
-          >
-            {t("devices.batch.connectShort")}
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            icon={<Package size={13} />}
-            loading={busy === "batch"}
-            disabled={busy === "batch" || selectedDevices.length === 0}
-            onClick={async () => {
-              try {
-                const apk = await open({
-                  multiple: false,
-                  directory: false,
-                  filters: [{ name: "APK", extensions: ["apk"] }],
-                });
-                if (typeof apk !== "string" || !apk) return;
-                const name = apk.split(/[/\\]/).pop() || apk;
-                if (!(await askConfirm(t("devices.confirmInstall", { name, n: selectedDevices.length })))) return;
-                await batch(t("devices.batch.installWith", { name }), async (d) => {
-                  const miss = await ensureOnline(d);
-                  if (miss) return miss;
-                  setStatusText(t("devices.installing", { name: d.name }));
-                  return DeviceService.installApk(d.serial, apk, true);
-                });
-              } catch {
-                /* cancelled */
-              }
-            }}
-          >
-            {t("devices.batch.installApk")}
           </Button>
           <Button
             size="sm"
@@ -812,6 +1328,7 @@ export function Devices() {
             {t("devices.batch.screenshot")}
           </Button>
           <select
+            aria-label={t("devices.moreActions")}
             disabled={busy === "batch" || selectedDevices.length === 0}
             defaultValue=""
             style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
@@ -868,9 +1385,13 @@ export function Devices() {
             <option value="back">{t("devices.batch.back")}</option>
             <option value="recent">{t("devices.batch.recent")}</option>
           </select>
+          </div>
+          </div>
+          </div>
         </div>
       )}
 
+      <div className="devices-feedback-stack">
       {batchProgress && (
         <div
           className="row"
@@ -1103,7 +1624,9 @@ export function Devices() {
           </table>
         </Card>
       )}
+      </div>
 
+      <div className="devices-results-surface">
       {loading ? (
         <div className="device-grid">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -1144,6 +1667,287 @@ export function Devices() {
           </div>
         </Card>
       ) : (
+        devicesView === "table" ? (
+          <div className="devices-table-shell devices-table-responsive device-list-module device-list-scroll">
+            <table className="table devices-table">
+              <thead>
+                <tr className="device-list-table-head">
+                  <th className="devices-table-check-head" aria-label={t("devices.table.select")} />
+                  <th className="devices-table-identity-head">{t("devices.table.device")}</th>
+                  <th className="devices-table-status-head">{t("devices.table.status")}</th>
+                  <th className="devices-table-services-head">{t("devices.table.services")}</th>
+                  <th className="devices-table-runtime-head">{t("devices.table.runtime")}</th>
+                  <th className="devices-table-action-head devices-table-action-cell">{t("devices.table.actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((d) => {
+                  const online = d.online && d.adbStatus === "device";
+                  const offline = !online;
+                  const scrcpyOn = d.scrcpyStatus === "running";
+                  const hasContainer = Boolean(d.containerId) && d.dockerStatus !== "n/a";
+                  const rowActionBusy = busy === d.id || busy === `${d.id}-screen` || pendingConfirmation === d.id;
+                  const rowBusy = busy === "batch" || rowActionBusy;
+                  const canConnect = offline && Boolean(d.serial) && !rowBusy;
+                  const canScreen = online && !rowBusy;
+                  const canDisconnect = online && !rowBusy;
+                  const canRestart = offline && hasContainer && !rowBusy;
+                  const canStop = offline && hasContainer && !rowBusy;
+                  const canDetail = !rowBusy;
+                  const statusTone = online ? "online" : d.adbStatus === "unauthorized" ? "unauthorized" : "offline";
+                  const dockerRunning = d.dockerStatus === "running";
+
+                  return (
+                    <tr key={d.id} className="devices-table-row">
+                      <td className="devices-table-check devices-table-check-cell">
+                        <input
+                          type="checkbox"
+                          aria-label={`${t("devices.table.select")} ${d.name}`}
+                          checked={picked.includes(d.id)}
+                          onChange={() => togglePick(d.id)}
+                        />
+                      </td>
+                      <td className="devices-table-identity-cell">
+                        <div
+                          className="devices-table-identity devices-table-hover-anchor"
+                          data-hover-placement={hoveredDeviceId === d.id ? hoverPlacement : undefined}
+                          onMouseEnter={(event) => {
+                            setHoveredDeviceId(d.id);
+                            setHoverPlacement(getDeviceHoverPlacement(event.currentTarget.getBoundingClientRect(), window.innerWidth, window.innerHeight));
+                          }}
+                          onMouseLeave={() => setHoveredDeviceId(null)}
+                          onFocus={(event) => {
+                            setHoveredDeviceId(d.id);
+                            setHoverPlacement(getDeviceHoverPlacement(event.currentTarget.getBoundingClientRect(), window.innerWidth, window.innerHeight));
+                          }}
+                          onBlur={(event) => {
+                            const next = event.relatedTarget;
+                            if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+                              setHoveredDeviceId(null);
+                            }
+                          }}
+                        >
+                          <div className="devices-table-primary">
+                            <button
+                              type="button"
+                              className="devices-table-name"
+                              title={t("devices.openDetail")}
+                              onClick={() => {
+                                setSelected(d.id);
+                                navigate(`/devices/${encodeURIComponent(d.id)}`);
+                              }}
+                            >
+                              {d.name}
+                            </button>
+                          </div>
+                          <div className="devices-table-note">
+                            <DeviceNoteEditor
+                              deviceName={d.name}
+                              value={deviceNotes[d.id]}
+                              onSave={(value) => saveDeviceNote(d.id, value)}
+                            />
+                          </div>
+                          <div className="devices-table-identifiers devices-table-secondary">
+                            <span className="devices-table-serial mono">
+                              {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
+                            </span>
+                          </div>
+                          <div className="devices-table-supporting">
+                            <span className="devices-table-meta">
+                              Android {d.androidVersion || "—"} · {d.cpu || "—"} CPU · {d.ram || "—"} RAM
+                            </span>
+                            {d.dataVolume ? (
+                              <button
+                                type="button"
+                                className="devices-table-link mono"
+                                title={t("devices.card.openVolumes")}
+                                onClick={() => {
+                                  try {
+                                    sessionStorage.setItem("rdc.volumes.query", d.dataVolume || "");
+                                  } catch {
+                                    /* ignore */
+                                  }
+                                  navigate("/volumes");
+                                }}
+                              >
+                                {t("devices.card.volumePrefix", { name: d.dataVolume })}
+                              </button>
+                            ) : null}
+                            {hasContainer && !d.serial ? (
+                              <span className="badge warn devices-table-warning" title={t("devices.card.noAdbMappingHint")}>
+                                {t("devices.card.noAdbMapping")}
+                              </span>
+                            ) : null}
+                          </div>
+                          {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
+                        </div>
+                      </td>
+                      <td className="devices-table-status-cell">
+                        <span className="device-list-row-status" aria-hidden="true" />
+                        <div className={`devices-table-status devices-table-status-${statusTone}`} data-device-status={statusTone}>
+                          <div className="devices-table-status-main devices-table-status-line">
+                            <StatusDot online={online} />
+                            <span className="muted mono">{d.adbStatus}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="devices-table-services-cell">
+                        <div className="devices-table-services devices-table-services-inline">
+                          <span className={`devices-table-service ${scrcpyOn ? "active" : "idle"}`} data-service="scrcpy">
+                            <span className="devices-table-service-name">scrcpy</span>
+                            <span className="devices-table-service-state">· {d.scrcpyStatus}</span>
+                          </span>
+                          <span className={`devices-table-service ${dockerRunning ? "active" : "idle"}`} data-service="docker">
+                            <span className="devices-table-service-name">Docker</span>
+                            <span className="devices-table-service-state">· {d.dockerStatus || "—"}</span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="devices-table-runtime-cell">
+                        <div className="devices-table-runtime devices-table-runtime-inline">
+                          <span className="devices-table-runtime-main mono">{d.ip || "—"}</span>
+                          <span className="devices-table-runtime-secondary">
+                            <span className="muted">{d.resolution || "—"}</span>
+                            <span className="muted">{d.uptime || "—"}</span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="devices-table-action-cell">
+                        <div className="devices-table-actions devices-table-actions-compact" aria-busy={rowActionBusy}>
+                          <Button
+                            size="sm"
+                            variant={online && !scrcpyOn ? "primary" : "secondary"}
+                            className="device-row-action"
+                            icon={<Monitor size={13} />}
+                            loading={busy === `${d.id}-screen`}
+                            disabled={!canScreen}
+                            title={
+                              offline
+                                ? t("devices.title.connectFirst")
+                                : scrcpyOn
+                                  ? t("devices.title.stopScrcpy")
+                                  : t("devices.title.startScrcpy")
+                            }
+                            onClick={() =>
+                              void run(
+                                `${d.id}-screen`,
+                                async () => {
+                                  const result = scrcpyOn
+                                    ? await DeviceService.scrcpyStop(d.serial)
+                                    : await DeviceService.scrcpyStart(d.serial);
+                                  if (!result.success) {
+                                    throw new Error(result.stderr || result.stdout || t(scrcpyOn ? "devices.err.stopMirror" : "devices.err.startScrcpy"));
+                                  }
+                                },
+                                scrcpyOn ? t("devices.status.mirrorOff", { name: d.name }) : t("devices.status.mirrorOn", { name: d.name }),
+                                scrcpyOn ? t("devices.status.mirroringOff") : t("devices.status.mirroringOn"),
+                              )
+                            }
+                          >
+                            <span className="device-action-label">{scrcpyOn ? t("devices.card.stopMirror") : t("devices.card.mirror")}</span>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={offline ? "primary" : "secondary"}
+                            className="device-row-action"
+                            icon={<Play size={13} />}
+                            loading={busy === d.id && offline}
+                            disabled={!canConnect}
+                            title={online ? t("devices.title.alreadyOnline") : "ADB connect"}
+                            onClick={() =>
+                              void run(
+                                d.id,
+                                async () => {
+                                  const result = await DeviceService.connect(d.serial);
+                                  if (!result.success) {
+                                    throw new Error(result.stderr || result.stdout || t("devices.err.adbConnect"));
+                                  }
+                                },
+                                t("devices.status.waitBoot", { name: d.name }),
+                                t("devices.status.adbReady"),
+                              )
+                            }
+                          >
+                            <span className="device-action-label">{t("devices.card.adbConnect")}</span>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="device-row-action"
+                            icon={<MoreHorizontal size={13} />}
+                            disabled={!canDetail}
+                            title={t("devices.card.detail")}
+                            onClick={() => {
+                              setSelected(d.id);
+                              navigate(`/devices/${encodeURIComponent(d.id)}`);
+                            }}
+                          >
+                            <span className="device-action-label">{t("devices.card.detail")}</span>
+                          </Button>
+                          <select
+                            aria-label={t("devices.table.actions")}
+                            className="device-row-action-more"
+                            disabled={rowBusy}
+                            defaultValue=""
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              e.target.value = "";
+                              if (value === "disconnect" && canDisconnect) {
+                                void confirmAndRun(
+                                  d.id,
+                                  t("devices.confirmDisconnectOne", { name: d.name }),
+                                  () => DeviceService.disconnect(d.serial),
+                                  t("devices.status.disconnect", { name: d.name }),
+                                );
+                              }
+                              if (value === "restart" && canRestart) {
+                                void confirmAndRun(
+                                  d.id,
+                                  t("devices.confirmRestartOne", { name: d.name }),
+                                  () => DeviceService.restart(d.id),
+                                  t("devices.status.restart", { name: d.name }),
+                                );
+                              }
+                              if (value === "stop" && canStop) {
+                                void confirmAndRun(
+                                  d.id,
+                                  t("devices.confirmStopOne", { name: d.name }),
+                                  () => DeviceService.stop(d.id),
+                                  t("devices.status.stop", { name: d.name }),
+                                );
+                              }
+                              if (value === "copy" && d.serial) {
+                                void copyText(d.serial).then(
+                                  () => setStatusText(t("common.panel.copied", { value: d.serial })),
+                                  () => {
+                                    const error = t("common.panel.copyFailed");
+                                    setStatusText(error);
+                                    void alert(error);
+                                  },
+                                );
+                              }
+                            }}
+                          >
+                            <option value="" disabled>{t("devices.card.more")}</option>
+                            <option value="disconnect" disabled={!canDisconnect}>{t("devices.card.disconnect")}</option>
+                            <option value="restart" disabled={!canRestart}>{t("devices.card.restart")}</option>
+                            <option value="stop" disabled={!canStop}>{t("devices.card.stop")}</option>
+                            <option value="copy" disabled={!d.serial}>{t("devices.card.copySerial")}</option>
+                          </select>
+                          {rowActionBusy ? (
+                            <span className="muted" role="status" aria-live="polite" style={{ fontSize: 11 }}>
+                              {t("devices.card.operationInProgress")}
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
         <div className="device-grid">
           {visible.map((d) => {
             const online = d.online && d.adbStatus === "device";
@@ -1179,6 +1983,11 @@ export function Devices() {
                   </label>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 16 }}>{d.name}</div>
+                    <DeviceNoteEditor
+                      deviceName={d.name}
+                      value={deviceNotes[d.id]}
+                      onSave={(value) => saveDeviceNote(d.id, value)}
+                    />
                     <div className="muted mono" style={{ fontSize: 12, marginTop: 2 }}>
                       {d.serial || "—"}
                       {d.adbPort ? ` · ADB :${d.adbPort}` : ""}
@@ -1390,8 +2199,10 @@ export function Devices() {
             );
           })}
         </div>
+        )
       )}
 
+      </div>
     </div>
   );
 }

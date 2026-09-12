@@ -9,10 +9,14 @@ import { ApkPage } from "./pages/Apk";
 import { VolumesPage } from "./pages/Volumes";
 import { LogsPage } from "./pages/Logs";
 import { SettingsPage } from "./pages/Settings";
-import { MonitorAlertsPage } from "./pages/MonitorAlerts";
+import { DeviceWindowPage } from "./pages/DeviceWindow";
 import { I18nProvider } from "./i18n";
 
 export default function App() {
+  const windowMode = new URLSearchParams(window.location.search).get("window");
+  if (windowMode === "device") {
+    return <I18nProvider><DeviceWindowPage /></I18nProvider>;
+  }
   return (
     <I18nProvider>
       <HashRouter>
@@ -27,7 +31,6 @@ export default function App() {
             <Route path="volumes" element={<VolumesPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="monitor" element={<MonitorAlertsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

@@ -34,7 +34,7 @@ pub fn version_cached() -> String {
 pub fn server_status() -> bool {
     // Do NOT call start-server here — it blocks and freezes UI polls
     let r = util::run_command_timeout(&adb_bin(), &["devices"], Duration::from_secs(3));
-    r.success || !r.stdout.is_empty()
+    r.success
 }
 
 pub fn start_server() -> ShellResult {
@@ -122,7 +122,8 @@ fn connect_output_failed(stdout: &str, stderr: &str) -> bool {
 
 pub fn connect(address: &str) -> ShellResult {
     log::info("ADB", &format!("Connecting to {}", address));
-    let mut r = util::run_command_timeout(&adb_bin(), &["connect", address], Duration::from_secs(8));
+    let mut r =
+        util::run_command_timeout(&adb_bin(), &["connect", address], Duration::from_secs(8));
     cache::invalidate_adb();
     if connect_output_failed(&r.stdout, &r.stderr) {
         r.success = false;
@@ -164,12 +165,15 @@ fn tcp_port_open(serial: &str, timeout_ms: u64) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
 }
 
-fn localhost_port_never_opens(serial: &str) -> bool {
+fn localhost_port_never_opens<F: Fn() -> bool>(serial: &str, should_cancel: &F) -> bool {
     // adbd starts listening within a few seconds of container start; if the
     // port stays closed for ~8s the wait can never succeed (container without
     // a -p mapping, or not started) — retrying for the full timeout only
     // burns 90 failed connects and misleads the user.
     for _ in 0..6 {
+        if should_cancel() {
+            return false;
+        }
         if tcp_port_open(serial, 400) {
             return false;
         }
@@ -193,6 +197,15 @@ impl Drop for WaitGuard {
 pub fn wait_ready_with(
     serial: &str,
     timeout: Duration,
+    on_tick: impl FnMut(u64, &str, &str),
+) -> ShellResult {
+    wait_ready_with_cancel(serial, timeout, || false, on_tick)
+}
+
+pub fn wait_ready_with_cancel(
+    serial: &str,
+    timeout: Duration,
+    should_cancel: impl Fn() -> bool,
     mut on_tick: impl FnMut(u64, &str, &str),
 ) -> ShellResult {
     if !WAITING.lock().insert(serial.to_string()) {
@@ -213,7 +226,7 @@ pub fn wait_ready_with(
     let mut attempt: u32 = 0;
     let mut last_connect = String::new();
 
-    if serial.contains(':') && localhost_port_never_opens(serial) {
+    if serial.contains(':') && localhost_port_never_opens(serial, &should_cancel) {
         let msg = format!(
             "无法连接 {serial}：端口没有程序监听。可能原因：容器未映射 ADB 端口（docker run 缺少 -p <端口>:5555），或容器未启动。"
         );
@@ -227,6 +240,14 @@ pub fn wait_ready_with(
     }
 
     while started.elapsed() < timeout {
+        if should_cancel() {
+            return ShellResult {
+                success: false,
+                stdout: String::new(),
+                stderr: "创建已取消".into(),
+                exit_code: -2,
+            };
+        }
         attempt += 1;
         if serial.contains(':') && (attempt == 1 || last_state != "device") {
             if last_state == "offline" || last_state == "unauthorized" {
@@ -347,7 +368,10 @@ pub fn install(serial: &str, apk_path: &str, replace: bool) -> ShellResult {
             Duration::from_secs(120),
         );
         if !push.success {
-            log::error("ADB", &format!("Install push failed: {} {}", push.stdout, push.stderr));
+            log::error(
+                "ADB",
+                &format!("Install push failed: {} {}", push.stdout, push.stderr),
+            );
             return push;
         }
         let flag = if replace { " -r" } else { "" };
@@ -361,7 +385,7 @@ pub fn install(serial: &str, apk_path: &str, replace: bool) -> ShellResult {
             &["-s", serial, "shell", &format!("rm -f {remote}")],
             Duration::from_secs(15),
         );
-        if r.success || r.stdout.contains("Success") {
+        if r.success {
             log::info("ADB", "APK installed successfully");
         } else {
             log::error("ADB", &format!("Install failed: {} {}", r.stdout, r.stderr));
@@ -374,7 +398,7 @@ pub fn install(serial: &str, apk_path: &str, replace: bool) -> ShellResult {
     }
     args.push(apk_path);
     let r = util::run_command_timeout(&adb_bin(), &args, Duration::from_secs(180));
-    if r.success || r.stdout.contains("Success") {
+    if r.success {
         log::info("ADB", "APK installed successfully");
     } else {
         log::error("ADB", &format!("Install failed: {} {}", r.stdout, r.stderr));
@@ -502,7 +526,6 @@ pub fn auto_fix() -> ShellResult {
     }
 }
 
-
 // ---- LAN scan (ADB over TCP discovery) ----
 
 /// Best-effort detection of the host's primary LAN /24, via the default-route
@@ -560,7 +583,12 @@ pub fn lan_scan(subnet: &str, port: u16, auto_connect: bool) -> LanScanResult {
     result.scanned = addrs.len() as u32;
     log::info(
         "ADB",
-        &format!("LAN scan {} ({} hosts, port {})", result.subnet, addrs.len(), port),
+        &format!(
+            "LAN scan {} ({} hosts, port {})",
+            result.subnet,
+            addrs.len(),
+            port
+        ),
     );
 
     let open: Vec<String> = std::thread::scope(|scope| {
@@ -683,5 +711,13 @@ mod tests {
         assert!(parse_lan_hosts("hello", 5555).is_err());
         assert!(parse_lan_hosts("1.2.3.4.5/24", 5555).is_err());
         assert!(parse_lan_hosts("999.1.1.0/24", 5555).is_err());
+    }
+
+    #[test]
+    fn wait_ready_with_cancel_stops_before_network_work() {
+        let r =
+            wait_ready_with_cancel("127.0.0.1:1", Duration::from_secs(1), || true, |_, _, _| {});
+        assert_eq!(r.exit_code, -2);
+        assert_eq!(r.stderr, "创建已取消");
     }
 }

@@ -9,7 +9,7 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 export async function askConfirm(text: string): Promise<boolean> {
   try {
     return await ask(text, {
-      title: "Redroid Device Center",
+      title: "Just Run",
       kind: "warning",
     });
   } catch {
@@ -20,7 +20,7 @@ export async function askConfirm(text: string): Promise<boolean> {
 export async function alertMsg(text: string): Promise<void> {
   try {
     await message(text, {
-      title: "Redroid Device Center",
+      title: "Just Run",
       kind: "error",
     });
   } catch {

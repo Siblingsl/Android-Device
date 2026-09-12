@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -25,16 +24,6 @@ pub struct DeviceInfo {
     pub online: bool,
     pub cpu: String,
     pub ram: String,
-    #[serde(default)]
-    pub cpu_usage: f64,
-    #[serde(default)]
-    pub memory_usage: f64,
-    #[serde(default)]
-    pub memory_total_mb: u64,
-    #[serde(default)]
-    pub memory_used_mb: u64,
-    #[serde(default)]
-    pub resource_source: String,
     pub fps: f64,
     pub adb_status: String,
     pub scrcpy_status: String,
@@ -90,6 +79,14 @@ pub struct CreateInstanceRequest {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_gnirehtet_path() -> String {
+    "gnirehtet".into()
+}
+
+fn default_update_channel() -> String {
+    "stable".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -216,23 +213,66 @@ pub struct ScreenshotResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct DeviceMonitorRule {
-    #[serde(default)]
-    pub preset: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alert_threshold: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refresh_interval_secs: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alerts_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warning_alerts_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub critical_alerts_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quiet_start: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quiet_end: Option<String>,
+pub struct StreamSession {
+    pub serial: String,
+    pub status: String,
+    pub url: String,
+    pub port: u16,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalSession {
+    pub id: String,
+    pub kind: String,
+    pub serial: String,
+    pub status: String,
+    pub output: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WirelessDiscovery {
+    pub status: String,
+    pub services: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingSession {
+    pub serial: String,
+    pub mode: String,
+    pub status: String,
+    pub output_path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GnirehtetSession {
+    pub serial: String,
+    pub status: String,
+    pub message: String,
+    pub relay: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceTelemetry {
+    pub serial: String,
+    pub battery_level: i32,
+    pub battery_temperature: String,
+    pub power_state: String,
+    pub voltage: String,
+    pub updated_at: String,
+    pub status: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +288,22 @@ pub struct AppSettings {
     pub docker_path: String,
     pub adb_path: String,
     pub scrcpy_path: String,
+    #[serde(default = "default_gnirehtet_path")]
+    pub gnirehtet_path: String,
+    #[serde(default)]
+    pub recording_path: String,
+    #[serde(default)]
+    pub close_to_tray: bool,
+    #[serde(default)]
+    pub launch_at_login: bool,
+    #[serde(default)]
+    pub edge_hide: bool,
+    #[serde(default)]
+    pub desktop_shortcut: bool,
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
+    #[serde(default)]
+    pub skipped_update_version: String,
     /// Local OpenGApps / MindTheGapps zip (user-supplied, never bundled).
     #[serde(default)]
     pub gapps_zip_path: String,
@@ -273,20 +329,6 @@ pub struct AppSettings {
     /// Default for create form: wait until ADB boot_completed.
     #[serde(default = "default_true")]
     pub create_wait_adb: bool,
-    #[serde(default = "default_resource_alert_threshold")]
-    pub resource_alert_threshold: f64,
-    #[serde(default = "default_device_refresh_interval_secs")]
-    pub device_refresh_interval_secs: u64,
-    #[serde(default)]
-    pub device_monitor_rules: BTreeMap<String, DeviceMonitorRule>,
-}
-
-fn default_resource_alert_threshold() -> f64 {
-    80.0
-}
-
-fn default_device_refresh_interval_secs() -> u64 {
-    10
 }
 
 impl Default for AppSettings {
@@ -304,6 +346,14 @@ impl Default for AppSettings {
             docker_path: "docker".into(),
             adb_path: "adb".into(),
             scrcpy_path: "scrcpy".into(),
+            gnirehtet_path: "gnirehtet".into(),
+            recording_path: base.join("recordings").to_string_lossy().into(),
+            close_to_tray: false,
+            launch_at_login: false,
+            edge_hide: false,
+            desktop_shortcut: false,
+            update_channel: "stable".into(),
+            skipped_update_version: String::new(),
             gapps_zip_path: String::new(),
             install_gapps: true,
             last_cpu: "2".into(),
@@ -315,9 +365,6 @@ impl Default for AppSettings {
             create_auto_start: false,
             create_stay_on_form: false,
             create_wait_adb: true,
-            resource_alert_threshold: default_resource_alert_threshold(),
-            device_refresh_interval_secs: default_device_refresh_interval_secs(),
-            device_monitor_rules: BTreeMap::new(),
         }
     }
 }
@@ -450,7 +497,7 @@ pub struct LanScanResult {
 #[serde(rename_all = "camelCase")]
 pub struct WslKernelStatus {
     pub wsl_available: bool,
-    /// "custom" | "default" | "unknown"
+    /// "custom" | "default" | "host" | "external-vm" | "unknown"
     pub mode: String,
     pub configured_kernel: String,
     pub custom_kernel_path: String,
@@ -466,80 +513,11 @@ pub struct WslKernelStatus {
     pub platform: String,
     pub os: String,
     pub arch: String,
-    /// wsl-prebuilt-or-build | host-binder | unsupported
+    /// wsl-prebuilt-or-build | host-binder | docker-desktop-vm | unsupported
     pub strategy: String,
     pub platform_supported: bool,
     pub needs_wsl_kernel: bool,
     /// GitHub Release asset filename for this arch (if any)
     pub release_asset_bz_image: String,
     pub release_asset_config: String,
-}
-
-#[cfg(test)]
-mod app_settings_tests {
-    use super::{AppSettings, DeviceMonitorRule};
-
-    #[test]
-    fn app_settings_without_device_monitor_rules_remain_compatible() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .remove("deviceMonitorRules");
-
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        assert!(settings.device_monitor_rules.is_empty());
-    }
-
-    #[test]
-    fn app_settings_round_trip_device_monitor_rules() {
-        let mut settings = AppSettings::default();
-        settings.device_monitor_rules.insert(
-            "device-a".into(),
-            DeviceMonitorRule {
-                preset: "custom".into(),
-                alert_threshold: Some(73.0),
-                refresh_interval_secs: Some(12),
-                alerts_enabled: Some(false),
-                warning_alerts_enabled: Some(true),
-                critical_alerts_enabled: Some(false),
-                quiet_start: Some("22:00".into()),
-                quiet_end: Some("06:30".into()),
-            },
-        );
-
-        let encoded = serde_json::to_string(&settings).unwrap();
-        let decoded: AppSettings = serde_json::from_str(&encoded).unwrap();
-
-        let rule = decoded.device_monitor_rules.get("device-a").unwrap();
-        assert_eq!(rule.preset, "custom");
-        assert_eq!(rule.alert_threshold, Some(73.0));
-        assert_eq!(rule.refresh_interval_secs, Some(12));
-        assert_eq!(rule.alerts_enabled, Some(false));
-        assert_eq!(rule.warning_alerts_enabled, Some(true));
-        assert_eq!(rule.critical_alerts_enabled, Some(false));
-        assert_eq!(rule.quiet_start.as_deref(), Some("22:00"));
-        assert_eq!(rule.quiet_end.as_deref(), Some("06:30"));
-    }
-
-    #[test]
-    fn incomplete_device_monitor_rule_does_not_reject_all_settings() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value["deviceMonitorRules"] = serde_json::json!({
-            "device-a": {}
-        });
-
-        let settings: AppSettings = serde_json::from_value(value).unwrap();
-
-        let rule = settings.device_monitor_rules.get("device-a").unwrap();
-        assert_eq!(rule.preset, "");
-        assert_eq!(rule.alert_threshold, None);
-        assert_eq!(rule.refresh_interval_secs, None);
-        assert_eq!(rule.alerts_enabled, None);
-        assert_eq!(rule.warning_alerts_enabled, None);
-        assert_eq!(rule.critical_alerts_enabled, None);
-        assert_eq!(rule.quiet_start, None);
-        assert_eq!(rule.quiet_end, None);
-    }
 }

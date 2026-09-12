@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { DeviceService } from "../services/deviceService";
 import { tStatic } from "../i18n";
 
-export type ToolKind = "docker" | "adb" | "scrcpy";
+export type ToolKind = "docker" | "adb" | "scrcpy" | "gnirehtet";
 
 export type ProbeHit = { ok: boolean; text: string };
 

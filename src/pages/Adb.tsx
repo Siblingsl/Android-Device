@@ -13,6 +13,7 @@ import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type { AdbInfo, LanScanResult } from "../types";
+import { WirelessPairingPanel } from "../components/adb/WirelessPairingPanel";
 
 export function AdbPage() {
   const [info, setInfo] = useState<AdbInfo | null>(null);
@@ -157,7 +158,7 @@ export function AdbPage() {
         </Button>
       </div>
 
-      <div className="row" style={{ marginBottom: 14, flexWrap: "wrap", gap: 16 }}>
+      <div className="row" style={{ flexWrap: "wrap", gap: 16 }}>
         <ToolStatus kind="adb" hit={tools.adb} />
         <ToolStatus kind="docker" hit={tools.docker} />
       </div>
@@ -280,6 +281,8 @@ export function AdbPage() {
           </>
         )}
       </Card>
+
+      <WirelessPairingPanel adbOk={adbOk} devices={info?.devices ?? []} setStatusText={setStatusText} onRefresh={load} />
 
       <div className="grid-2">
         <Card title={t("adb.connectManager")}>

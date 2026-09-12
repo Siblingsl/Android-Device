@@ -38,6 +38,11 @@ export interface DeviceInfo {
   adbPort: number;
   scrcpyPort: number;
   dataVolume?: string;
+  batteryLevel?: number;
+  batteryCharging?: boolean;
+  batteryTemperatureC?: number;
+  batteryVoltageV?: number;
+  batteryPowerSource?: string;
 }
 
 export interface CreateInstanceRequest {
@@ -223,6 +228,115 @@ export interface ScreenshotResult {
   error?: string;
 }
 
+export type AutomationStepKind =
+  | "tap"
+  | "swipe"
+  | "longPress"
+  | "text"
+  | "key"
+  | "shell"
+  | "wait"
+  | "screenshot"
+  | "record"
+  | "launch"
+  | "install"
+  | "imageMatch"
+  | "if"
+  | "loop";
+
+export type AutomationStepValue = string | number | boolean | string[];
+
+export interface AutomationStep {
+  id: string;
+  kind: AutomationStepKind;
+  label: string;
+  enabled: boolean;
+  continueOnError?: boolean;
+  beforeDelayMs?: number;
+  afterDelayMs?: number;
+  params: Record<string, AutomationStepValue>;
+}
+
+export interface AutomationScript {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  enabled: boolean;
+  tags: string[];
+  variables: Record<string, string>;
+  steps: AutomationStep[];
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;
+}
+
+export type AutomationRunStatus = "completed" | "failed" | "cancelled";
+
+export interface AutomationRunLog {
+  stepId: string;
+  label: string;
+  status: "completed" | "failed" | "skipped";
+  message?: string;
+  startedAt: string;
+  finishedAt: string;
+}
+
+export interface AutomationRunResult {
+  status: AutomationRunStatus;
+  completedSteps: number;
+  logs: AutomationRunLog[];
+}
+
+export interface AutomationBatchDeviceResult {
+  serial: string;
+  result: AutomationRunResult;
+}
+
+export interface AutomationBatchResult {
+  status: AutomationRunStatus;
+  results: AutomationBatchDeviceResult[];
+}
+
+export type ScrcpyRecordingFormat = "mp4" | "mkv";
+export type ScrcpyVideoSource = "display" | "camera";
+export type ScrcpyCameraFacing = "front" | "back" | "external";
+
+export interface ScrcpyCameraOptions {
+  cameraId: string;
+  cameraSize: string;
+  cameraAr: string;
+  cameraFps: number;
+  cameraFacing: ScrcpyCameraFacing;
+  cameraTorch: boolean;
+  cameraZoom: number;
+}
+
+export type ScrcpyInputMode = "uhid" | "otg";
+
+export interface ScrcpyInputOptions {
+  keyboard: boolean;
+  mouse: boolean;
+  gamepad: boolean;
+}
+
+export interface ScrcpyWindowPlacement {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ScrcpyRecordingOptions extends ScrcpyCameraOptions {
+  outputPath: string;
+  format: ScrcpyRecordingFormat;
+  audio: boolean;
+  audioOnly: boolean;
+  audioSource: "output" | "playback" | "mic";
+  videoSource: ScrcpyVideoSource;
+  timeLimitSecs: number;
+}
+
 export type DeviceMonitorPreset = "inherit" | "sensitive" | "balanced" | "relaxed" | "custom";
 export type MonitorAlertSeverity = "warning" | "critical";
 
@@ -242,6 +356,52 @@ export interface DeviceMonitorRule {
   quietEnd?: string;
 }
 
+export interface DeviceTelemetry {
+  serial: string;
+  batteryLevel: number;
+  batteryTemperature: string;
+  powerState: string;
+  voltage: string;
+  updatedAt: string;
+  status: string;
+  message: string;
+}
+
+export interface StreamSession {
+  serial: string;
+  status: "running" | "stopped" | "error";
+  url: string;
+  port: number;
+  message: string;
+}
+
+export interface TerminalSession {
+  id: string;
+  kind: "device" | "local" | string;
+  serial: string;
+  status: "running" | "stopped" | "error";
+  output: string;
+  cols: number;
+  rows: number;
+  message: string;
+}
+
+export interface RecordingSession {
+  serial: string;
+  mode: string;
+  status: "running" | "stopped" | "error";
+  outputPath: string;
+  message: string;
+}
+
+export interface GnirehtetSession {
+  serial: string;
+  status: "running" | "stopped" | "error";
+  message: string;
+  relay: string;
+  installed: boolean;
+}
+
 export interface AppSettings {
   theme: string;
   language: string;
@@ -253,6 +413,14 @@ export interface AppSettings {
   dockerPath: string;
   adbPath: string;
   scrcpyPath: string;
+  gnirehtetPath?: string;
+  recordingPath?: string;
+  closeToTray?: boolean;
+  launchAtLogin?: boolean;
+  edgeHide?: boolean;
+  desktopShortcut?: boolean;
+  updateChannel?: "stable" | "beta";
+  skippedUpdateVersion?: string;
   gappsZipPath?: string;
   installGapps?: boolean;
   lastCpu?: string;
@@ -330,4 +498,27 @@ export interface LanScanResult {
   connectedCount: number;
   durationMs: number;
   message: string;
+}
+
+export interface WirelessDiscovery {
+  status: string;
+  services: string[];
+  message: string;
+}
+
+export type QueueItemStatus = "fulfilled" | "rejected" | "cancelled";
+
+export type QueueItemResult<TItem, TValue> =
+  | { item: TItem; status: "fulfilled"; value: TValue }
+  | { item: TItem; status: "rejected"; reason: string }
+  | { item: TItem; status: "cancelled" };
+
+export interface QueueResult<TItem, TValue> {
+  results: Array<QueueItemResult<TItem, TValue>>;
+  cancelled: boolean;
+}
+
+export interface QueueHandle<TItem, TValue> {
+  done: Promise<QueueResult<TItem, TValue>>;
+  cancel: () => void;
 }

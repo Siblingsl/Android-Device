@@ -1,5 +1,5 @@
-use parking_lot::Mutex;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use std::path::PathBuf;
 
 use crate::models::AppSettings;
@@ -37,6 +37,9 @@ fn ensure_dirs(s: &AppSettings) {
     ensure_dir(&s.log_path);
     ensure_dir(&s.screenshot_path);
     ensure_dir(&s.apk_path);
+    if !s.recording_path.trim().is_empty() {
+        ensure_dir(&s.recording_path);
+    }
 }
 
 fn save_to_disk(s: &AppSettings) -> Result<(), String> {
@@ -50,6 +53,8 @@ pub fn get() -> AppSettings {
 }
 
 pub fn update(settings: AppSettings) -> Result<AppSettings, String> {
+    crate::services::launch::apply(settings.launch_at_login)?;
+    crate::services::launch::apply_desktop_shortcut(settings.desktop_shortcut)?;
     ensure_dirs(&settings);
     save_to_disk(&settings)?;
     set_runtime_proxy(&settings.proxy);
@@ -69,6 +74,10 @@ pub fn scrcpy_path() -> String {
     SETTINGS.lock().scrcpy_path.clone()
 }
 
+pub fn gnirehtet_path() -> String {
+    SETTINGS.lock().gnirehtet_path.clone()
+}
+
 pub fn screenshot_path() -> String {
     SETTINGS.lock().screenshot_path.clone()
 }
@@ -83,4 +92,8 @@ pub fn log_path() -> String {
 
 pub fn gapps_zip_path() -> String {
     SETTINGS.lock().gapps_zip_path.clone()
+}
+
+pub fn recording_path() -> String {
+    SETTINGS.lock().recording_path.clone()
 }
