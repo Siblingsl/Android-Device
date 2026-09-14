@@ -14,7 +14,10 @@ import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../lib/disp
 import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
-import type { CreateInstanceRequest, DockerContainer, DockerInfo, MagiskAssets, WslKernelStatus } from "../types";
+import type { CreateInstanceRequest, DockerContainer, DockerInfo, MagiskAssets, SpoofProfileSummary, SpoofProfileUsage, WslKernelStatus } from "../types";
+
+/** Above this many containers sharing one spoof profile, warn on the create form. */
+const SPOOF_USAGE_WARN_THRESHOLD = 5;
 
 function adbSerialFromPorts(ports?: string): string | null {
   const m = ports?.match(/:(\d+)->5555/);
@@ -81,6 +84,8 @@ export function DockerPage() {
   const [magiskAssets, setMagiskAssets] = useState<MagiskAssets | null>(null);
   const [hidePackagesText, setHidePackagesText] = useState("");
   const [spoofExists, setSpoofExists] = useState<boolean | null>(null);
+  const [spoofProfiles, setSpoofProfiles] = useState<SpoofProfileSummary[]>([]);
+  const [spoofUsage, setSpoofUsage] = useState<SpoofProfileUsage[]>([]);
   const hidePackageList = hidePackagesText
     .split(/[\n,;，；]/)
     .map((s) => s.trim())
@@ -143,6 +148,11 @@ export function DockerPage() {
     installLsposed: true,
     installShamiko: true,
     spoofProfile: "",
+    spoofProfileId: settings?.lastSpoofProfileId || "redmi-k40-alioth",
+    spoofAbilist: false,
+    installCloak: false,
+    cleanTraces: true,
+    gpuPassthrough: false,
   });
 
   useEffect(() => {
@@ -318,12 +328,35 @@ export function DockerPage() {
             (settings?.lastImage || f.image).replace(/^.*:/, "") || f.androidVersion,
           installGapps: settings?.installGapps !== false,
           gappsZip: f.gappsZip || settings?.gappsZipPath || p || "",
+          spoofProfileId: settings?.lastSpoofProfileId || f.spoofProfileId,
         }));
       })
       .catch(() => {
         /* ignore */
       });
     return () => loadSequence.invalidate();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void DeviceService.listSpoofProfiles()
+      .then((profiles) => {
+        if (!cancelled) setSpoofProfiles(profiles);
+      })
+      .catch(() => {
+        /* profile list is best-effort for the create form */
+      });
+    // Diversity census (docker labels) — best-effort, hidden when Docker is down.
+    void DeviceService.spoofProfileUsage()
+      .then((usage) => {
+        if (!cancelled) setSpoofUsage(usage);
+      })
+      .catch(() => {
+        /* usage census is best-effort */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const run = async (id: string, fn: () => Promise<unknown>, msg: string) => {
@@ -384,6 +417,16 @@ export function DockerPage() {
   const isWindowsWsl = kernel?.strategy === "wsl-prebuilt-or-build";
   const isLinuxHost = kernel?.strategy === "host-binder";
   const isMacDockerHost = kernel?.strategy === "docker-desktop-vm";
+
+  const spoofBrands = [...new Set(spoofProfiles.map((p) => p.brand))];
+  const selectedSpoofProfile = spoofProfiles.find((p) => p.id === form.spoofProfileId) ?? null;
+  const selectedProfileUsage = selectedSpoofProfile
+    ? spoofUsage.find((u) => u.profileId === selectedSpoofProfile.id)?.count ?? 0
+    : 0;
+  const selectedSpoofBrand = selectedSpoofProfile?.brand ?? spoofBrands[0] ?? "";
+  const spoofModelsForBrand = spoofProfiles.filter((p) => p.brand === selectedSpoofBrand);
+  const spoofBuiltinForBrand = spoofModelsForBrand.filter((p) => p.source !== "captured");
+  const spoofCapturedForBrand = spoofModelsForBrand.filter((p) => p.source === "captured");
 
   const cancelCreatingInstance = async () => {
     const task = creatingTask;
@@ -783,6 +826,28 @@ export function DockerPage() {
             />
             {t("docker.waitAdb")}
           </label>
+          <label className="row" style={{ marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={form.cleanTraces !== false}
+              onChange={(e) => setForm((f) => ({ ...f, cleanTraces: e.target.checked }))}
+            />
+            {t("docker.cleanTraces")}
+          </label>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 12, maxWidth: 560 }}>
+            {t("docker.cleanTracesHint")}
+          </div>
+          <label className="row" style={{ marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={form.gpuPassthrough === true}
+              onChange={(e) => setForm((f) => ({ ...f, gpuPassthrough: e.target.checked }))}
+            />
+            {t("docker.gpuPassthrough")}
+          </label>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 12, maxWidth: 560 }}>
+            {t("docker.gpuPassthroughHint")}
+          </div>
           <fieldset disabled={busy === "create"} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="form-grid">
             {(
@@ -1113,6 +1178,23 @@ export function DockerPage() {
                     {t("docker.shamiko")}
                     {magiskAssets && !magiskAssets.shamikoOk ? t("docker.missingZip") : ""}
                   </label>
+                  {!!form.installLsposed && (
+                    <>
+                      <label className="row" style={{ marginBottom: 8, marginLeft: 20 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!form.installCloak}
+                          onChange={(e) => setForm({ ...form, installCloak: e.target.checked })}
+                        />
+                        {t("docker.cloakDeepSpoof")}
+                      </label>
+                      {form.installCloak && (
+                        <div className="muted" style={{ fontSize: 11, marginLeft: 20, marginBottom: 8 }}>
+                          {t("docker.cloakNote")}
+                        </div>
+                      )}
+                    </>
+                  )}
                   <div className="row" style={{ marginBottom: 8 }}>
                     <input
                       style={{ flex: 1 }}
@@ -1126,46 +1208,130 @@ export function DockerPage() {
                       {t("docker.invalidPackages", { list: invalidPackages.join("、") })}
                     </div>
                   )}
-                  <div className="row" style={{ marginBottom: 8 }}>
-                    <input
-                      style={{ flex: 1 }}
-                      value={form.spoofProfile || ""}
-                      onChange={(e) => setForm({ ...form, spoofProfile: e.target.value })}
-                      placeholder={t("docker.spoofPlaceholder")}
-                    />
-                    <Button
-                      size="sm"
-                      icon={<FolderOpen size={13} />}
-                      onClick={async () => {
-                        try {
-                          const picked = await open({
-                            multiple: false,
-                            directory: false,
-                            filters: [{ name: "spoof profile", extensions: ["conf", "txt", "ini"] }],
-                          });
-                          if (typeof picked === "string" && picked) {
-                            setForm((f) => ({ ...f, spoofProfile: picked }));
-                          }
-                        } catch {
-                          /* dialog cancelled */
-                        }
-                      }}
-                    >
-                      {t("docker.browse")}
-                    </Button>
-                  </div>
-                  {(form.spoofProfile || "").trim() && (
-                    <div
-                      className={spoofExists ? "ok" : "bad"}
-                      style={{ fontSize: 12, marginBottom: 8 }}
-                    >
-                      {spoofExists === null
-                        ? t("docker.checkingSpoof")
-                        : spoofExists
-                          ? t("docker.pathFound", { path: form.spoofProfile || "" })
-                          : t("docker.spoofMissing")}
+                  <div style={{ marginBottom: 8 }}>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                      {t("docker.spoofSectionTitle")}
                     </div>
-                  )}
+                    <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 140 }}>
+                        <span className="muted" style={{ fontSize: 10 }}>{t("docker.spoofBrand")}</span>
+                        <select
+                          value={selectedSpoofBrand}
+                          onChange={(e) => {
+                            const brand = e.target.value;
+                            const first = spoofProfiles.find((p) => p.brand === brand);
+                            setForm((f) => ({ ...f, spoofProfileId: first?.id ?? "" }));
+                          }}
+                        >
+                          {spoofBrands.map((brand) => (
+                            <option key={brand} value={brand}>{brand}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 200 }}>
+                        <span className="muted" style={{ fontSize: 10 }}>{t("docker.spoofModel")}</span>
+                        <select
+                          value={form.spoofProfileId || ""}
+                          onChange={(e) => setForm((f) => ({ ...f, spoofProfileId: e.target.value }))}
+                        >
+                          <option value="">{t("docker.spoofCustomConf")}</option>
+                          {spoofBuiltinForBrand.length > 0 && (
+                            <optgroup label={t("docker.spoofGroupBuiltin")}>
+                              {spoofBuiltinForBrand.map((p) => (
+                                <option key={p.id} value={p.id}>{p.model} · {p.marketName}</option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {spoofCapturedForBrand.length > 0 && (
+                            <optgroup label={t("docker.spoofGroupCaptured")}>
+                              {spoofCapturedForBrand.map((p) => (
+                                <option key={p.id} value={p.id}>{p.model} · {p.marketName}</option>
+                              ))}
+                            </optgroup>
+                          )}
+                        </select>
+                      </label>
+                    </div>
+                    {selectedSpoofProfile ? (
+                      <div className="mono muted" style={{ fontSize: 11, lineHeight: 1.6, wordBreak: "break-all" }}>
+                        <div>{selectedSpoofProfile.marketName}</div>
+                        <div>{selectedSpoofProfile.model} · Android {selectedSpoofProfile.androidVersion} · {selectedSpoofProfile.securityPatch}</div>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={selectedSpoofProfile.fingerprint}>
+                          {selectedSpoofProfile.fingerprint}
+                        </div>
+                        <div style={{ marginTop: 2 }}>{t("docker.spoofUsageCount", { n: selectedProfileUsage })}</div>
+                        {selectedProfileUsage >= SPOOF_USAGE_WARN_THRESHOLD && (
+                          <div style={{ color: "var(--warning)", fontSize: 11, marginTop: 2 }}>
+                            {t("docker.spoofUsageWarn", { n: selectedProfileUsage })}
+                          </div>
+                        )}
+                        {selectedSpoofProfile.notes?.includes("构造") ? (
+                          <div className="bad" style={{ fontSize: 11, marginTop: 2 }}>
+                            {t("docker.spoofConstructedHint")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="row" style={{ marginBottom: 8 }}>
+                          <input
+                            style={{ flex: 1 }}
+                            value={form.spoofProfile || ""}
+                            onChange={(e) => setForm({ ...form, spoofProfile: e.target.value })}
+                            placeholder={t("docker.spoofPlaceholder")}
+                          />
+                          <Button
+                            size="sm"
+                            icon={<FolderOpen size={13} />}
+                            onClick={async () => {
+                              try {
+                                const picked = await open({
+                                  multiple: false,
+                                  directory: false,
+                                  filters: [{ name: "spoof profile", extensions: ["conf", "txt", "ini"] }],
+                                });
+                                if (typeof picked === "string" && picked) {
+                                  setForm((f) => ({ ...f, spoofProfile: picked }));
+                                }
+                              } catch {
+                                /* dialog cancelled */
+                              }
+                            }}
+                          >
+                            {t("docker.browse")}
+                          </Button>
+                        </div>
+                        {(form.spoofProfile || "").trim() && (
+                          <div
+                            className={spoofExists ? "ok" : "bad"}
+                            style={{ fontSize: 12, marginBottom: 8 }}
+                          >
+                            {spoofExists === null
+                              ? t("docker.checkingSpoof")
+                              : spoofExists
+                                ? t("docker.pathFound", { path: form.spoofProfile || "" })
+                                : t("docker.spoofMissing")}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <label className="row" style={{ marginTop: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!form.spoofAbilist}
+                        onChange={(e) => setForm((f) => ({ ...f, spoofAbilist: e.target.checked }))}
+                      />
+                      {t("docker.spoofAbilist")}
+                    </label>
+                    {form.spoofAbilist && (
+                      <div className="bad" style={{ fontSize: 11, marginTop: 4 }}>
+                        {t("docker.spoofAbilistWarning")}
+                      </div>
+                    )}
+                    <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                      {t("docker.spoofBoundary")}
+                    </div>
+                  </div>
                 </>
               )}
               {form.installMagisk && (
@@ -1380,6 +1546,7 @@ export function DockerPage() {
                         lastResolution: form.resolution,
                         lastDpi: form.dpi,
                         lastImage: form.image,
+                        lastSpoofProfileId: form.spoofProfileId,
                         createAutoStart: autoStartAfterCreate,
                         createWaitAdb: waitAdb,
                       });

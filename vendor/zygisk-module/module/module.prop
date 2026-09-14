@@ -1,0 +1,6 @@
+id=rdc_nativecloak
+name=RDC NativeCloak
+version=v0.1.0
+versionCode=1
+author=Redroid Device Center
+description=Native-layer container trace cleansing for Redroid Device Center. PLT-hooks openat to sanitize /proc/self/cgroup, /proc/self/mountinfo and /proc/mounts (docker remnants removed), and serves profile-matched eglQueryString/glGetString strings from /data/local/tmp/rdc-cloak.json. Companion of the DeviceCloak LSPosed module (framework APIs), not a replacement.

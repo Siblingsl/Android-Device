@@ -42,6 +42,25 @@ vi.mock("../services/deviceService", () => ({
     getRootStatus: vi.fn(),
     getLsposedScope: vi.fn(),
     getSuPolicies: vi.fn(),
+    getSpoofIdentity: vi.fn(),
+    listSpoofProfiles: vi.fn(),
+    applySpoofProfile: vi.fn(),
+    magiskApplySpoof: vi.fn(),
+    getCloakStatus: vi.fn(),
+    installCloakModule: vi.fn(),
+    pushCloakConfig: vi.fn(),
+    installNativeCloak: vi.fn(),
+    seedUsageBaseline: vi.fn(),
+    geoConsistencyCheck: vi.fn(),
+    getBatteryState: vi.fn(),
+    applyBatteryPolicy: vi.fn(),
+    adversarialAudit: vi.fn(),
+    shell: vi.fn(),
+    getDeviceProxyStatus: vi.fn(),
+    applyDeviceProxy: vi.fn(),
+    clearDeviceProxy: vi.fn(),
+    applyTransparentProxy: vi.fn(),
+    stopTransparentProxy: vi.fn(),
     listFiles: vi.fn(),
     storageInfo: vi.fn(),
     listApps: vi.fn(),
@@ -131,6 +150,38 @@ const rootStatus = (version: string): RootStatus => ({
   props: {},
   presetLogTail: "",
 });
+
+const spoofIdentityFixture = {
+  brand: "Xiaomi",
+  model: "2210132C",
+  marketName: "Redmi K40",
+  fingerprint: "Xiaomi/alioth/alioth:13/TKQ1.220829.002/V14.0.6.0.TKHCNXM:user/release-keys",
+  device: "alioth",
+  matchedProfileId: "redmi-k40-alioth",
+};
+
+const spoofProfilesFixture = [
+  {
+    id: "redmi-k40-alioth",
+    brand: "Xiaomi",
+    manufacturer: "Xiaomi",
+    model: "2210132C",
+    marketName: "Redmi K40",
+    androidVersion: "13",
+    securityPatch: "2023-11-01",
+    fingerprint: "Xiaomi/alioth/alioth:13/TKQ1.220829.002/V14.0.6.0.TKHCNXM:user/release-keys",
+  },
+  {
+    id: "samsung-galaxy-s23",
+    brand: "samsung",
+    manufacturer: "samsung",
+    model: "SM-S9110",
+    marketName: "Galaxy S23",
+    androidVersion: "14",
+    securityPatch: "2023-12-01",
+    fingerprint: "samsung/dm1qzc/dm1qzc:14/UP1A.231005.007/S9110ZCU1BWL1:user/release-keys",
+  },
+];
 
 const file = (name: string): FileEntry => ({
   name,
@@ -1124,5 +1175,449 @@ describe("DeviceDetail refresh ordering", () => {
     expect(DeviceService.installApk).toHaveBeenCalledTimes(2);
     expect(open).toHaveBeenCalledTimes(1);
     expect(DeviceService.installApk).toHaveBeenLastCalledWith("device-1-serial", "C:/app.apk", true);
+  });
+});
+
+describe("DeviceDetail spoof card", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([]);
+    vi.mocked(DeviceService.getRootStatus).mockResolvedValue(rootStatus("Root"));
+    vi.mocked(DeviceService.getLsposedScope).mockResolvedValue({ modules: [] });
+    vi.mocked(DeviceService.getSuPolicies).mockResolvedValue([]);
+    vi.mocked(DeviceService.getSpoofIdentity).mockResolvedValue(spoofIdentityFixture);
+    vi.mocked(DeviceService.listSpoofProfiles).mockResolvedValue(spoofProfilesFixture);
+    vi.mocked(DeviceService.applySpoofProfile).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.magiskApplySpoof).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.getCloakStatus).mockResolvedValue({ installed: false, enabled: false, scopeCount: 0 });
+    vi.mocked(DeviceService.installCloakModule).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.pushCloakConfig).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.installNativeCloak).mockResolvedValue({ success: true, stdout: "installed-via-unzip", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.seedUsageBaseline).mockResolvedValue({ success: true, stdout: "包名清单已写入 /data/local/tmp/rdc-cloak/usage-pkg-list（46 个包）", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.geoConsistencyCheck).mockResolvedValue({
+      profileId: "redmi-k40-alioth",
+      deviceTimezone: "Asia/Shanghai",
+      deviceLocale: "zh-CN",
+      issues: [],
+      consistent: true,
+    });
+    vi.mocked(DeviceService.getBatteryState).mockResolvedValue({ level: 87, status: 3, charging: false });
+    vi.mocked(DeviceService.applyBatteryPolicy).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.adversarialAudit).mockResolvedValue({
+      serial: "device-1-serial",
+      profileId: null,
+      ranAt: "2026-09-14T00:00:00Z",
+      message: "",
+      checks: [
+        { id: "cgroup", category: "cgroup", verdict: "fail", detail: "shell 进程 cgroup 含 docker：/docker/abc" },
+        { id: "qemu", category: "props", verdict: "pass", detail: "ro.kernel.qemu / ro.boot.qemu 均为空" },
+      ],
+    });
+    vi.mocked(DeviceService.shell).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.getDeviceProxyStatus).mockResolvedValue({
+      httpProxy: "",
+      original: "",
+      transparentRunning: false,
+    });
+    vi.mocked(DeviceService.applyDeviceProxy).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.clearDeviceProxy).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.applyTransparentProxy).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.stopTransparentProxy).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.stubGlobal("alert", vi.fn());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("disables the spoof card when the device is offline", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue({ ...device("device-1"), online: false, adbStatus: "offline" });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const applyButton = screen.getByRole("button", { name: "切换档案" });
+    expect((applyButton as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows a restart suggestion after applying a profile", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const modelSelect = screen.getByLabelText("选择档案…") as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: "samsung-galaxy-s23" } });
+    fireEvent.click(screen.getByRole("button", { name: "切换档案" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.applySpoofProfile).toHaveBeenCalledWith("device-1-serial", "samsung-galaxy-s23");
+    expect(screen.getByText("立即重启")).toBeTruthy();
+  });
+
+  it("renders the deep-spoofing section and disabled buttons when offline", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue({ ...device("device-1"), online: false, adbStatus: "offline" });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("深度伪装（DeviceCloak）")).toBeTruthy();
+    const installButton = screen.getByRole("button", { name: "安装模块" }) as HTMLButtonElement;
+    expect(installButton.disabled).toBe(true);
+  });
+
+  it("shows the enabled status and scoped package count", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.getCloakStatus).mockResolvedValue({
+      installed: true,
+      enabled: true,
+      scopeCount: 3,
+      configPushed: true,
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("已启用")).toBeTruthy();
+    expect(screen.getByText("启用作用域 3 个包")).toBeTruthy();
+    expect(screen.getByText("配置已推送")).toBeTruthy();
+  });
+
+  it("applies a socks5 proxy through the egress command and shows the tun2socks hint", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const input = screen.getByPlaceholderText("http://host:port 或 socks5://user:pass@host:port");
+    fireEvent.change(input, { target: { value: "socks5://user:pass@10.0.0.2:1080" } });
+    // SOCKS5 entered: hint about Android's http-only global proxy shows up.
+    expect(screen.getByText(/SOCKS5 地址写入 Android 全局代理/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "应用代理" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.applyDeviceProxy).toHaveBeenCalledWith(
+      "device-1-serial",
+      "socks5://user:pass@10.0.0.2:1080",
+    );
+  });
+
+  it("clears the proxy through the egress command", async () => {
+    vi.useRealTimers(); // findByText polling needs real timers
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.getDeviceProxyStatus).mockResolvedValue({
+      httpProxy: "10.0.0.2:1080",
+      original: "socks5://10.0.0.2:1080",
+      transparentRunning: false,
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // Adjacent JSX expressions share one text node — match with a regex.
+    expect(await screen.findByText(/当前代理：10\.0\.0\.2:1080/)).toBeTruthy();
+    expect(screen.getByText(/记录 socks5:\/\/10\.0\.0\.2:1080/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "清除代理" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.clearDeviceProxy).toHaveBeenCalledWith("device-1-serial");
+  });
+
+  it("shows the transparent-takeover fallback hint when tun2socks is not configured", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The mocked app settings carry no tun2socksPath — the section must
+    // degrade to a hint instead of a takeover button.
+    expect(screen.getByText(/透明接管不可用：未在设置中配置 tun2socks 路径/)).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "启动透明接管" }),
+    ).toBeNull();
+  });
+
+  it("renders the battery spoofing section, persists the toggle and applies on demand", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("电池伪装")).toBeTruthy();
+    const toggle = screen.getByRole("checkbox", { name: "按模拟曲线伪装电池" }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(screen.getByText(/87%/)).toBeTruthy();
+    expect(screen.getByText(/放电中/)).toBeTruthy();
+
+    // Toggle persists into the shared per-device session draft.
+    fireEvent.click(toggle);
+    const draft = JSON.parse(
+      sessionStorage.getItem("rdc.settings.draft.device-1-serial") ?? "{}",
+    ) as Record<string, string>;
+    expect(draft.batterySpoof).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "立即应用" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.applyBatteryPolicy).toHaveBeenCalledWith("device-1-serial");
+  });
+
+  it("applies the battery curve automatically every 5 minutes while enabled", async () => {
+    // This describe's beforeEach seeds mocks without resetting call history.
+    vi.mocked(DeviceService.applyBatteryPolicy).mockClear();
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    sessionStorage.clear();
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.applyBatteryPolicy).not.toHaveBeenCalled();
+
+    // Enable the per-device switch (draft), then cross one refresh tick.
+    fireEvent.click(screen.getByRole("checkbox", { name: "按模拟曲线伪装电池" }));
+    await act(async () => {
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.applyBatteryPolicy).toHaveBeenCalledWith("device-1-serial");
+  });
+
+  it("disables battery apply and the audit run when the device is offline", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue({
+      ...device("device-1"),
+      online: false,
+      adbStatus: "offline",
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect((screen.getByRole("button", { name: "立即应用" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "运行审计" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("runs the adversarial audit and renders verdict rows", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("尚未运行审计。")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "运行审计" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.adversarialAudit).toHaveBeenCalledWith("device-1-serial", undefined);
+    expect(screen.getByText("未通过")).toBeTruthy();
+    expect(screen.getByText("通过")).toBeTruthy();
+    expect(screen.getByText(/含 docker/)).toBeTruthy();
+    expect(screen.getByText("容器 cgroup")).toBeTruthy();
+    expect(screen.getByText(/shell 层证据/)).toBeTruthy();
+  });
+
+  it("links the selected spoof profile into the audit call", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const profileSelect = screen.getByLabelText("关联伪装档案") as HTMLSelectElement;
+    fireEvent.change(profileSelect, { target: { value: "samsung-galaxy-s23" } });
+    fireEvent.click(screen.getByRole("button", { name: "运行审计" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.adversarialAudit).toHaveBeenCalledWith(
+      "device-1-serial",
+      "samsung-galaxy-s23",
+    );
+  });
+
+  it("renders the expanded 12-item audit checklist with network and telephony rows", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.adversarialAudit).mockResolvedValue({
+      serial: "device-1-serial",
+      profileId: null,
+      ranAt: "2026-09-14T00:00:00Z",
+      message: "",
+      checks: [
+        { id: "cgroup", category: "cgroup", verdict: "fail", detail: "shell 进程 cgroup 含 docker" },
+        { id: "cpuinfo", category: "cpu", verdict: "pass", detail: "cpuinfo 显示 ARM 架构" },
+        { id: "mac", category: "attestation", verdict: "fail", detail: "无 wlan0，仅 eth0" },
+        { id: "dns", category: "network", verdict: "pass", detail: "net.dns1=1.1.1.1" },
+        {
+          id: "hostname",
+          category: "network",
+          verdict: "fail",
+          detail: "net.hostname = 3f2b1a4c9d7e —— 12 位 hex 是 Docker 容器短 ID 特征",
+        },
+        {
+          id: "telephony",
+          category: "telephony",
+          verdict: "unknown",
+          detail: "信令态：mCallState=0；Java 层已盖 API 读取 —— 已知缺口",
+        },
+      ],
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "运行审计" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // New check rows (stable ids → i18n labels).
+    expect(screen.getByText("net.hostname")).toBeTruthy();
+    expect(screen.getByText("DNS 配置")).toBeTruthy();
+    expect(screen.getByText("信令态（telephony.registry）")).toBeTruthy();
+    // New categories render too (network covers hostname + dns).
+    expect(screen.getAllByText("网络").length).toBe(2);
+    expect(screen.getByText("信令")).toBeTruthy();
+    // The unknown verdict keeps its own badge style/label.
+    expect(screen.getByText("不确定")).toBeTruthy();
+    expect(screen.getAllByText("未通过").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("checks geo consistency and renders the issue list", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.geoConsistencyCheck).mockResolvedValue({
+      profileId: "samsung-galaxy-s23",
+      deviceTimezone: "Asia/Shanghai",
+      deviceLocale: "zh-CN",
+      consistent: false,
+      issues: [
+        {
+          code: "proxyCountryMismatch",
+          message: "代理出口国别 US 与档案 country KR 不一致（proxyCountry 为用户声明值，应用内不做 GeoIP 查询）",
+        },
+      ],
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "检查地理一致性" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.geoConsistencyCheck).toHaveBeenCalledWith(
+      "device-1-serial",
+      "redmi-k40-alioth",
+    );
+    expect(screen.getByText(/代理出口国别 US 与档案 country KR 不一致/)).toBeTruthy();
+    expect(screen.getByText(/设备时区 Asia\/Shanghai/)).toBeTruthy();
+  });
+
+  it("shows the consistent geo verdict when no issues are found", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "检查地理一致性" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("地理一致")).toBeTruthy();
+  });
+
+  it("installs the native cloak module and seeds the usage baseline", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "安装 NativeCloak" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.installNativeCloak).toHaveBeenCalledWith("device-1-serial");
+
+    fireEvent.click(screen.getByRole("button", { name: "播种使用基线" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.seedUsageBaseline).toHaveBeenCalledWith(
+      "device-1-serial",
+      "redmi-k40-alioth",
+    );
+  });
+
+  it("marks the native cloak present once the status reports it installed", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.getCloakStatus).mockResolvedValue({
+      installed: true,
+      enabled: true,
+      scopeCount: 1,
+      configPushed: true,
+      nativeInstalled: true,
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("NativeCloak 已安装")).toBeTruthy();
+  });
+
+  it("disables the new deep-spoofing buttons when the device is offline", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue({
+      ...device("device-1"),
+      online: false,
+      adbStatus: "offline",
+    });
+    renderDetail("settings");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      (screen.getByRole("button", { name: "安装 NativeCloak" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "播种使用基线" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "检查地理一致性" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

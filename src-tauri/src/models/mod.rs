@@ -40,6 +40,10 @@ pub struct DeviceInfo {
     pub scrcpy_port: u16,
     #[serde(default)]
     pub data_volume: String,
+    /// Effective spoofed model reported by `ro.product.model` (may differ from
+    /// the container name when a spoof profile is active).
+    #[serde(default)]
+    pub spoofed_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,12 +73,35 @@ pub struct CreateInstanceRequest {
     /// Optional spoof.conf profile path; empty = bundled default profile.
     #[serde(default)]
     pub spoof_profile: String,
+    /// Built-in spoof profile id to render into the image at build time.
+    /// Takes precedence over `spoof_profile` when non-empty.
+    #[serde(default)]
+    pub spoof_profile_id: Option<String>,
+    /// When true, also spoof `ro.product.cpu.abilist*` to arm64-v8a (unsafe on
+    /// x86_64 images without libhoudini/libndk — see UI warning).
+    #[serde(default)]
+    pub spoof_abilist: Option<bool>,
     /// Packages to add to the Magisk denylist (hidden from these apps).
     #[serde(default)]
     pub hide_packages: Vec<String>,
+    /// When true, bind-mount fake /proc/cpuinfo + /proc/version for the spoof
+    /// profile and run the container under `--cgroup-parent system.slice`.
+    #[serde(default)]
+    pub clean_traces: Option<bool>,
     /// When false, skip adb wait_ready after docker run.
     #[serde(default = "default_true")]
     pub wait_adb: bool,
+    /// Install the DeviceCloak LSPosed module (deep spoofing) after first boot
+    /// and push the matching rdc-cloak.json. Requires an existing built APK at
+    /// vendor/lsposed-module/dist/RDC-DeviceCloak.apk; missing APK only warns.
+    #[serde(default)]
+    pub install_cloak: bool,
+    /// GPU passthrough (`androidboot.redroid_gpu_mode=host` + `--device
+    /// /dev/dri`). Requires the host to actually expose GPU nodes (Linux
+    /// /dev/dri or a WSL2 kernel with GPU-PV paravirtualization); when the
+    /// host has none, `docker run` itself fails — surfaced verbatim.
+    #[serde(default)]
+    pub gpu_passthrough: Option<bool>,
 }
 
 fn default_true() -> bool {
@@ -87,6 +114,14 @@ fn default_gnirehtet_path() -> String {
 
 fn default_update_channel() -> String {
     "stable".into()
+}
+
+fn default_build_tags() -> String {
+    "release-keys".into()
+}
+
+fn default_build_type() -> String {
+    "user".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -319,6 +354,9 @@ pub struct AppSettings {
     pub last_dpi: String,
     #[serde(default)]
     pub last_image: String,
+    /// Last built-in spoof profile id selected in the create form.
+    #[serde(default)]
+    pub last_spoof_profile_id: String,
     /// Device ids that should docker-start + adb connect on app launch.
     #[serde(default)]
     pub auto_start_device_ids: Vec<String>,
@@ -329,6 +367,14 @@ pub struct AppSettings {
     /// Default for create form: wait until ADB boot_completed.
     #[serde(default = "default_true")]
     pub create_wait_adb: bool,
+    /// Local tun2socks binary enabling per-instance transparent proxying.
+    /// Empty = transparent takeover disabled (global http_proxy still works).
+    #[serde(default)]
+    pub tun2socks_path: String,
+    /// Apply the simulated battery curve to every open detail page. None is
+    /// treated as true (the default keeps curves fresh).
+    #[serde(default)]
+    pub battery_auto_refresh: Option<bool>,
 }
 
 impl Default for AppSettings {
@@ -361,10 +407,13 @@ impl Default for AppSettings {
             last_resolution: "1080x1920".into(),
             last_dpi: "320".into(),
             last_image: "redroid/redroid:13.0.0-latest".into(),
+            last_spoof_profile_id: "redmi-k40-alioth".into(),
             auto_start_device_ids: Vec::new(),
             create_auto_start: false,
             create_stay_on_form: false,
             create_wait_adb: true,
+            tun2socks_path: String::new(),
+            battery_auto_refresh: Some(true),
         }
     }
 }
@@ -490,6 +539,212 @@ pub struct LanScanResult {
     pub duration_ms: u64,
     #[serde(default)]
     pub message: String,
+}
+
+/// A device spoof profile ("设备伪装档案"). The renderer turns this into the
+/// `set|key|value` / `del|key` lines that `rdc_apply_spoof.sh` applies on boot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpoofProfile {
+    /// Snake-case unique id, e.g. "redmi-k40-alioth".
+    pub id: String,
+    pub brand: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub market_name: String,
+    pub device: String,
+    pub product: String,
+    pub android_version: String,
+    pub build_fingerprint: String,
+    pub build_description: String,
+    pub build_display_id: String,
+    pub build_incremental: String,
+    pub security_patch: String,
+    #[serde(default = "default_build_tags")]
+    pub build_tags: String,
+    #[serde(default = "default_build_type")]
+    pub build_type: String,
+    /// "key=value" props appended as `set|key|value` lines.
+    #[serde(default)]
+    pub extra_props: Vec<String>,
+    /// Property names appended as `del|key` lines.
+    #[serde(default)]
+    pub remove_props: Vec<String>,
+    /// Human-readable notes shown in the UI (Chinese).
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// Optional geographic identity block for the geo-consistency check
+    /// (`services/geo.rs`). Absent (`None`) → the check reports "no geo data".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<ProfileGeo>,
+}
+
+/// Optional geo block on a `SpoofProfile`. `proxy_country` is user-supplied
+/// (the app never does GeoIP lookups on its own) — set it when the instance's
+/// egress proxy is known to exit in a specific country.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileGeo {
+    /// ISO 3166-1 alpha-2 country code, e.g. "CN".
+    #[serde(default)]
+    pub country: String,
+    /// IANA timezone id the profile claims, e.g. "Asia/Shanghai".
+    #[serde(default)]
+    pub timezone: String,
+    /// BCP-47 locale the profile claims, e.g. "zh-CN".
+    #[serde(default)]
+    pub locale: String,
+    /// Optional: the egress proxy's country code (user-declared).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_country: Option<String>,
+}
+
+/// Lightweight spoof profile row for the picker list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpoofProfileSummary {
+    pub id: String,
+    pub brand: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub market_name: String,
+    pub android_version: String,
+    pub security_patch: String,
+    pub fingerprint: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// "builtin" | "captured" — origin of the profile.
+    #[serde(default = "default_profile_source")]
+    pub source: String,
+}
+
+fn default_profile_source() -> String {
+    "builtin".into()
+}
+
+/// Effective spoofed identity read from a running device.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpoofIdentity {
+    pub brand: String,
+    pub model: String,
+    pub market_name: String,
+    pub fingerprint: String,
+    pub device: String,
+    /// Built-in profile id when brand+model+fingerprint all match exactly.
+    #[serde(default)]
+    pub matched_profile_id: Option<String>,
+}
+
+/// Deep-spoofing (DeviceCloak LSPosed module) state on a running device.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CloakStatus {
+    /// Whether the module APK (dev.rdc.devicecloak) is installed.
+    pub installed: bool,
+    /// Module enabled in LSPosed (parasitic "enabled" flag from scope db).
+    pub enabled: bool,
+    /// Number of apps the module is scoped to hook.
+    pub scope_count: usize,
+    /// Whether /data/local/tmp/rdc-cloak.json exists on-device.
+    #[serde(default)]
+    pub config_pushed: bool,
+    /// Whether the native Zygisk module (rdc_nativecloak) is installed under
+    /// /data/adb/modules — checked via the root channel, so physical devices
+    /// without root report false.
+    #[serde(default)]
+    pub native_installed: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// Per-instance network egress state ("每实例住宅代理分流").
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceProxyStatus {
+    /// Effective `settings get global http_proxy` value ("" = direct).
+    pub http_proxy: String,
+    /// Original user-entered proxy string recorded in persist.sys.rdc.proxy.
+    pub original: String,
+    /// Whether a transparent tun2socks takeover is running in the container.
+    pub transparent_running: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// One row of the spoof-profile usage census (label `rdc.spoof-profile`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpoofProfileUsage {
+    pub profile_id: String,
+    pub count: u32,
+}
+
+/// Simulated battery state (BatteryManager semantics for `status`:
+/// 2=charging, 3=discharging, 4=not charging, 5=full).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BatteryState {
+    pub level: u32,
+    pub status: u32,
+    pub charging: bool,
+}
+
+/// One row of the adversarial self-audit checklist.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditCheck {
+    /// Stable check id (cgroup / qemu / cpuinfo / version / gl / sensors /
+    /// fingerprint / securityPatch / mac / hostname / dns / telephony).
+    pub id: String,
+    /// Coarse grouping for the UI table (also stable, English).
+    pub category: String,
+    /// "pass" | "fail" | "unknown"
+    pub verdict: String,
+    /// Human-readable evidence summary (Chinese, includes measured values).
+    pub detail: String,
+}
+
+/// One inconsistency found by the geo-consistency check.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoIssue {
+    /// Stable issue code: "timezoneMismatch" | "localeMismatch" |
+    /// "proxyCountryMismatch" | "noGeoData".
+    pub code: String,
+    /// Human-readable explanation (Chinese, includes the measured values).
+    pub message: String,
+}
+
+/// Result of the geo-consistency check for one device + profile.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoCheck {
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Device timezone read via `getprop persist.sys.timezone` (raw value).
+    #[serde(default)]
+    pub device_timezone: String,
+    /// Device locale read via `getprop ro.product.locale` (raw value).
+    #[serde(default)]
+    pub device_locale: String,
+    pub issues: Vec<GeoIssue>,
+    /// Convenience flag for the UI: `issues` is empty.
+    pub consistent: bool,
+}
+
+/// Result of the adversarial self-audit for one device.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AdversarialAudit {
+    pub serial: String,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    pub ran_at: String,
+    /// Non-empty when the whole probe failed (device unreachable).
+    #[serde(default)]
+    pub message: String,
+    pub checks: Vec<AuditCheck>,
 }
 
 /// WSL2 custom binder kernel status for Redroid + Docker Desktop.

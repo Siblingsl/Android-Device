@@ -116,7 +116,7 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus, on
 
   return (
     <Card
-      title="ADB Shell"
+      title={t("terminal.title")}
       action={
         onOpenTerminal && (
           <Button
@@ -166,7 +166,7 @@ export function DeviceShell({ serial, disabled = false, diagnostic, onStatus, on
               }
               if (event.key === "Enter") void runShell();
             }}
-            placeholder="shell command..."
+            placeholder={t("detail.control.shellPlaceholder")}
             disabled={disabled || busy}
           />
           <Button variant="primary" loading={busy} disabled={disabled || !shellCmd.trim()} onClick={() => void runShell()}>

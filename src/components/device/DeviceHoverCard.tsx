@@ -71,6 +71,9 @@ export function DeviceHoverCard({ device }: { device: DeviceInfo }) {
         <div>
           <div className="device-hover-title">{detail.name}</div>
           <div className="device-hover-serial mono">{detail.serial || "—"}</div>
+          {detail.spoofedModel ? (
+            <div className="muted" style={{ fontSize: 11 }}>{t("dashboard.board.spoofed", { model: detail.spoofedModel })}</div>
+          ) : null}
         </div>
         <div className={`device-hover-status ${isOnline ? "online" : "offline"}`}>
           <span className="device-hover-status-dot" />

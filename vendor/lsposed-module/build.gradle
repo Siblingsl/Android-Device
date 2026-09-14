@@ -1,0 +1,4 @@
+// Top-level build file. No application plugins here — the app module declares them.
+plugins {
+    id "com.android.application" version "8.5.2" apply false
+}

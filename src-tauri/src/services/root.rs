@@ -32,18 +32,33 @@ enum RootExec {
     Adb { serial: String },
 }
 
-fn root_exec(serial: &str) -> RootExec {
-    let container = device::list_devices()
+/// Resolve a device serial (or id / container id) to its container id.
+/// This is the canonical serial→container mapping shared by the root channel
+/// and the spoof hot-swap command.
+pub fn container_id_for(serial: &str) -> Option<String> {
+    device::list_devices()
         .into_iter()
         .find(|d| d.serial == serial || d.id == serial || d.container_id == serial)
         .map(|d| d.container_id)
-        .filter(|c| !c.is_empty());
-    match container {
+        .filter(|c| !c.is_empty())
+}
+
+fn root_exec(serial: &str) -> RootExec {
+    match container_id_for(serial) {
         Some(id) => RootExec::Container { id },
         None => RootExec::Adb {
             serial: serial.to_string(),
         },
     }
+}
+
+/// Public privileged command channel: `docker exec` for container-backed
+/// instances (guaranteed root — /data/adb is root-only and the spoofed user
+/// build keeps `adb root` unavailable), `adb root` + shell for physical
+/// devices. Used by the cloak/usage services for files the shell user cannot
+/// reach (module dirs, /data/adb listings).
+pub fn privileged_shell(serial: &str, command: &str, timeout: Duration) -> ShellResult {
+    root_exec(serial).run(command, timeout)
 }
 
 impl RootExec {

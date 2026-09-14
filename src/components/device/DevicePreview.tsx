@@ -193,7 +193,7 @@ export function DevicePreview({
             </Button>
           )}
           <div style={{ marginTop: 12 }} className="badge info">
-            scrcpy: {scrcpyStatus}
+            {t("detail.control.scrcpyStatus", { status: scrcpyStatus })}
           </div>
           {preview.path && (
             <div style={{ marginTop: 12 }}>

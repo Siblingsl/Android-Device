@@ -1,0 +1,8 @@
+# 构建产物（不进 Git，模式同 vendor/magisk）
+dist/
+app/build/
+build/
+.gradle/
+local.properties
+*.iml
+.idea/

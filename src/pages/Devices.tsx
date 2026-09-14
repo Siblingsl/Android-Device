@@ -17,6 +17,7 @@ import {
   History,
   Trash2,
   RotateCcw,
+  Shield,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { copyText } from "../lib/clipboard";
@@ -50,9 +51,10 @@ import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
-import type { DeviceInfo } from "../types";
+import type { DeviceInfo, SpoofProfileSummary, SpoofProfileUsage } from "../types";
 
 const FILTER_KEY = "rdc.devices.filter";
+const KIND_KEY = "rdc.devices.kindFilter";
 const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
 const VIEW_KEY = "rdc.devices.view";
@@ -94,6 +96,20 @@ function readScrcpyLayout(): ScrcpyLayoutConfig {
 
 type BatchAction = (device: DeviceInfo) => Promise<unknown>;
 type BatchReportItem = { id: string; name: string; ok: boolean; detail: string };
+
+/**
+ * Rotate distinct profile ids across `count` targets: one different profile
+ * per device, looping from the start when there are more devices than
+ * profiles (order is stable so tests and confirm previews are deterministic).
+ */
+export function rotateProfileIds(profileIds: string[], count: number): string[] {
+  if (profileIds.length === 0) return Array.from({ length: count }, () => "");
+  return Array.from({ length: count }, (_, i) => profileIds[i % profileIds.length]);
+}
+
+/** Shared warning threshold for spoof-profile reuse (same as the create form). */
+export const SPOOF_USAGE_WARN_THRESHOLD = 5;
+
 type BatchHistoryItem = {
   id: string;
   title: string;
@@ -280,6 +296,18 @@ function readFilter(): "all" | "online" | "offline" {
   return "all";
 }
 
+type KindFilter = "all" | "cloud" | "real";
+
+function readKindFilter(): KindFilter {
+  try {
+    const v = sessionStorage.getItem(KIND_KEY);
+    if (v === "cloud" || v === "real" || v === "all") return v;
+  } catch {
+    /* ignore */
+  }
+  return "all";
+}
+
 export function Devices() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -296,7 +324,9 @@ export function Devices() {
     }
   });
   const [filter, setFilter] = useState<"all" | "online" | "offline">(readFilter);
+  const [kindFilter, setKindFilter] = useState<KindFilter>(readKindFilter);
   const [devicesView, setDevicesView] = useState<DevicesView>(readDevicesView);
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
   const [hoverPlacement, setHoverPlacement] = useState<HoverPlacement>("bottom-left");
   const [query, setQuery] = useState(() => {
@@ -321,6 +351,11 @@ export function Devices() {
     name: string;
     stopping: boolean;
   } | null>(null);
+  const [spoofProfiles, setSpoofProfiles] = useState<SpoofProfileSummary[]>([]);
+  const [spoofUsage, setSpoofUsage] = useState<SpoofProfileUsage[]>([]);
+  const [batchSpoofOpen, setBatchSpoofOpen] = useState(false);
+  const [spoofProfileId, setSpoofProfileId] = useState("");
+  const [rotateSpoof, setRotateSpoof] = useState(false);
   const navigate = useNavigate();
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
@@ -399,12 +434,13 @@ export function Devices() {
   useEffect(() => {
     try {
       sessionStorage.setItem(FILTER_KEY, filter);
+      sessionStorage.setItem(KIND_KEY, kindFilter);
       sessionStorage.setItem(QUERY_KEY, query);
       sessionStorage.setItem(PICKED_KEY, JSON.stringify(picked));
     } catch {
       /* ignore */
     }
-  }, [filter, query, picked]);
+  }, [filter, kindFilter, query, picked]);
 
   useEffect(() => {
     try {
@@ -425,6 +461,27 @@ export function Devices() {
   useEffect(() => {
     persistOfflineDeviceHistory(offlineHistory);
   }, [offlineHistory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void DeviceService.listSpoofProfiles()
+      .then((profiles) => {
+        if (!cancelled) setSpoofProfiles(profiles);
+      })
+      .catch(() => {
+        /* profile list is best-effort for the batch spoof picker */
+      });
+    void DeviceService.spoofProfileUsage()
+      .then((usage) => {
+        if (!cancelled) setSpoofUsage(usage);
+      })
+      .catch(() => {
+        /* diversity census is best-effort */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const run = async (
     id: string,
@@ -480,9 +537,13 @@ export function Devices() {
 
   const isOnline = (d: DeviceInfo) => d.online && d.adbStatus === "device";
   const q = query.trim().toLowerCase();
+  // Cloud instances carry a container id; real / LAN devices never do.
+  const isCloud = (d: DeviceInfo) => Boolean(d.containerId);
   const visible = devices.filter((d) => {
     if (filter === "online" && !isOnline(d)) return false;
     if (filter === "offline" && isOnline(d)) return false;
+    if (kindFilter === "cloud" && !isCloud(d)) return false;
+    if (kindFilter === "real" && isCloud(d)) return false;
     if (!q) return true;
     return (
       d.name.toLowerCase().includes(q) ||
@@ -496,6 +557,9 @@ export function Devices() {
   const onlineVisible = visible.filter(isOnline);
   const allOnlineVisiblePicked =
     onlineVisible.length > 0 && onlineVisible.every((d) => picked.includes(d.id));
+  const spoofBuiltinProfiles = spoofProfiles.filter((p) => p.source !== "captured");
+  const spoofCapturedProfiles = spoofProfiles.filter((p) => p.source === "captured");
+  const selectedSpoofProfile = spoofProfiles.find((p) => p.id === spoofProfileId) ?? null;
 
   const ensureOnline = async (d: DeviceInfo) => {
     if (d.online && d.adbStatus === "device") return null;
@@ -704,6 +768,79 @@ export function Devices() {
     if (!(await askConfirm(t("devices.batch.confirmClear")))) return;
     setBatchHistory([]);
     setHistoryOpen(false);
+  };
+
+  const runBatchSpoof = async () => {
+    if (selectedDevices.length === 0) {
+      setStatusText(t("devices.pickFirst"));
+      return;
+    }
+    // serial → profile id, resolved before the batch starts so the preview and
+    // the executed calls are identical.
+    const assignments = new Map<string, string>();
+    if (rotateSpoof) {
+      if (spoofProfiles.length === 0) {
+        setStatusText(t("devices.batch.spoofSelect"));
+        return;
+      }
+      const ids = spoofProfiles.map((p) => p.id);
+      const rotated = rotateProfileIds(ids, selectedDevices.length);
+      selectedDevices.forEach((d, i) => assignments.set(d.serial, rotated[i]));
+      const preview = selectedDevices
+        .slice(0, 3)
+        .map((d, i) => `${d.name} → ${rotated[i]}`)
+        .join("; ");
+      // Looping note: more devices than profiles means ids repeat.
+      const loopNote =
+        selectedDevices.length > ids.length
+          ? "\n" + t("devices.batch.spoofRotateLoop", { m: ids.length })
+          : "";
+      if (
+        !(await askConfirm(
+          t("devices.batch.spoofRotateConfirm", {
+            n: selectedDevices.length,
+            m: ids.length,
+            preview,
+          }) + loopNote,
+        ))
+      ) {
+        return;
+      }
+    } else {
+      if (!selectedSpoofProfile || !spoofProfileId) {
+        setStatusText(t("devices.batch.spoofSelect"));
+        return;
+      }
+      const usage =
+        spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0;
+      const warn =
+        usage >= SPOOF_USAGE_WARN_THRESHOLD
+          ? "\n" + t("devices.batch.spoofUsageWarn", { n: usage })
+          : "";
+      if (
+        !(await askConfirm(
+          t("devices.batch.spoofConfirm", {
+            n: selectedDevices.length,
+            profile: `${selectedSpoofProfile.marketName} (${selectedSpoofProfile.id})`,
+          }) + warn,
+        ))
+      ) {
+        return;
+      }
+      selectedDevices.forEach((d) => assignments.set(d.serial, spoofProfileId));
+    }
+    setBatchSpoofOpen(false);
+    setSpoofProfileId("");
+    setRotateSpoof(false);
+    void batch(
+      t("devices.batch.spoof"),
+      async (d) => {
+        const miss = await ensureOnline(d);
+        if (miss) return miss;
+        return DeviceService.applySpoofProfile(d.serial, assignments.get(d.serial) ?? "");
+      },
+      "spoof",
+    );
   };
 
   const cancelBatch = () => {
@@ -951,6 +1088,16 @@ export function Devices() {
             <option value="all">{t("devices.filter.all", { n: devices.length })}</option>
             <option value="online">{t("devices.filter.online", { n: devices.filter(isOnline).length })}</option>
             <option value="offline">{t("devices.filter.offline", { n: devices.filter((d) => !isOnline(d)).length })}</option>
+          </select>
+          <select
+            value={kindFilter}
+            aria-label={t("devices.kind.label")}
+            onChange={(e) => setKindFilter(e.target.value as KindFilter)}
+            style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
+          >
+            <option value="all">{t("devices.kind.all", { n: devices.length })}</option>
+            <option value="cloud">{t("devices.kind.cloud", { n: devices.filter(isCloud).length })}</option>
+            <option value="real">{t("devices.kind.real", { n: devices.filter((d) => !isCloud(d)).length })}</option>
           </select>
           <div className="devices-view-toggle" role="group" aria-label={t("devices.view.label")}>
             <Button
@@ -1327,6 +1474,19 @@ export function Devices() {
           >
             {t("devices.batch.screenshot")}
           </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Shield size={13} />}
+            disabled={busy === "batch" || selectedDevices.length === 0}
+            aria-expanded={batchSpoofOpen}
+            onClick={() => {
+              setBatchSpoofOpen((open) => !open);
+              setSpoofProfileId("");
+            }}
+          >
+            {t("devices.batch.spoof")}
+          </Button>
           <select
             aria-label={t("devices.moreActions")}
             disabled={busy === "batch" || selectedDevices.length === 0}
@@ -1385,6 +1545,67 @@ export function Devices() {
             <option value="back">{t("devices.batch.back")}</option>
             <option value="recent">{t("devices.batch.recent")}</option>
           </select>
+          {batchSpoofOpen && (
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                aria-label={t("devices.batch.spoofSelect")}
+                value={spoofProfileId}
+                disabled={rotateSpoof}
+                onChange={(e) => setSpoofProfileId(e.target.value)}
+                style={{ height: 30, minWidth: 200, padding: "0 8px", borderRadius: 8 }}
+              >
+                <option value="">{t("devices.batch.spoofSelect")}</option>
+                {spoofBuiltinProfiles.length > 0 && (
+                  <optgroup label={t("devices.batch.spoofGroupBuiltin")}>
+                    {spoofBuiltinProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.marketName} · {p.model}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {spoofCapturedProfiles.length > 0 && (
+                  <optgroup label={t("devices.batch.spoofGroupCaptured")}>
+                    {spoofCapturedProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.marketName} · {p.model}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <label className="row" style={{ gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={rotateSpoof}
+                  onChange={(e) => setRotateSpoof(e.target.checked)}
+                  aria-label={t("devices.batch.spoofRotate")}
+                />
+                {t("devices.batch.spoofRotate")}
+              </label>
+              {!rotateSpoof &&
+                spoofProfileId &&
+                (spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0) >=
+                  SPOOF_USAGE_WARN_THRESHOLD && (
+                  <span style={{ color: "var(--warning)", fontSize: 11 }}>
+                    {t("devices.batch.spoofUsageWarn", {
+                      n: spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0,
+                    })}
+                  </span>
+                )}
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={!rotateSpoof && !spoofProfileId}
+                onClick={() => void runBatchSpoof()}
+              >
+                {t("common.confirm")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setBatchSpoofOpen(false)}>
+                {t("common.close")}
+              </Button>
+            </div>
+          )}
           </div>
           </div>
           </div>
@@ -1668,19 +1889,9 @@ export function Devices() {
         </Card>
       ) : (
         devicesView === "table" ? (
-          <div className="devices-table-shell devices-table-responsive device-list-module device-list-scroll">
-            <table className="table devices-table">
-              <thead>
-                <tr className="device-list-table-head">
-                  <th className="devices-table-check-head" aria-label={t("devices.table.select")} />
-                  <th className="devices-table-identity-head">{t("devices.table.device")}</th>
-                  <th className="devices-table-status-head">{t("devices.table.status")}</th>
-                  <th className="devices-table-services-head">{t("devices.table.services")}</th>
-                  <th className="devices-table-runtime-head">{t("devices.table.runtime")}</th>
-                  <th className="devices-table-action-head devices-table-action-cell">{t("devices.table.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div className="device-session-strip">
+            <div className="device-session-scroll">
+              <div className="device-session-list">
                 {visible.map((d) => {
                   const online = d.online && d.adbStatus === "device";
                   const offline = !online;
@@ -1697,17 +1908,24 @@ export function Devices() {
                   const statusTone = online ? "online" : d.adbStatus === "unauthorized" ? "unauthorized" : "offline";
                   const dockerRunning = d.dockerStatus === "running";
 
+                  const rowExpanded = expandedDeviceId === d.id;
+
                   return (
-                    <tr key={d.id} className="devices-table-row">
-                      <td className="devices-table-check devices-table-check-cell">
+                    <div
+                      key={d.id}
+                      className={`device-session-row ${rowExpanded ? "is-expanded" : ""}`}
+                      data-device-state={statusTone}
+                    >
+                      <div className="device-session-main">
+                      <div className="device-session-check">
                         <input
                           type="checkbox"
                           aria-label={`${t("devices.table.select")} ${d.name}`}
                           checked={picked.includes(d.id)}
                           onChange={() => togglePick(d.id)}
                         />
-                      </td>
-                      <td className="devices-table-identity-cell">
+                      </div>
+                      <div className="device-session-identity devices-table-identity-cell">
                         <div
                           className="devices-table-identity devices-table-hover-anchor"
                           data-hover-placement={hoveredDeviceId === d.id ? hoverPlacement : undefined}
@@ -1751,6 +1969,11 @@ export function Devices() {
                             <span className="devices-table-serial mono">
                               {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
                             </span>
+                            {d.spoofedModel ? (
+                              <span className="devices-table-meta muted" title={t("devices.card.spoofed", { model: d.spoofedModel })}>
+                                {t("devices.card.spoofed", { model: d.spoofedModel })}
+                              </span>
+                            ) : null}
                           </div>
                           <div className="devices-table-supporting">
                             <span className="devices-table-meta">
@@ -1781,38 +2004,42 @@ export function Devices() {
                           </div>
                           {hoveredDeviceId === d.id ? <DeviceHoverCard device={d} /> : null}
                         </div>
-                      </td>
-                      <td className="devices-table-status-cell">
-                        <span className="device-list-row-status" aria-hidden="true" />
-                        <div className={`devices-table-status devices-table-status-${statusTone}`} data-device-status={statusTone}>
-                          <div className="devices-table-status-main devices-table-status-line">
-                            <StatusDot online={online} />
-                            <span className="muted mono">{d.adbStatus}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="devices-table-services-cell">
-                        <div className="devices-table-services devices-table-services-inline">
-                          <span className={`devices-table-service ${scrcpyOn ? "active" : "idle"}`} data-service="scrcpy">
-                            <span className="devices-table-service-name">scrcpy</span>
-                            <span className="devices-table-service-state">· {d.scrcpyStatus}</span>
-                          </span>
-                          <span className={`devices-table-service ${dockerRunning ? "active" : "idle"}`} data-service="docker">
-                            <span className="devices-table-service-name">Docker</span>
-                            <span className="devices-table-service-state">· {d.dockerStatus || "—"}</span>
-                          </span>
-                        </div>
-                      </td>
-                      <td className="devices-table-runtime-cell">
-                        <div className="devices-table-runtime devices-table-runtime-inline">
-                          <span className="devices-table-runtime-main mono">{d.ip || "—"}</span>
-                          <span className="devices-table-runtime-secondary">
-                            <span className="muted">{d.resolution || "—"}</span>
-                            <span className="muted">{d.uptime || "—"}</span>
-                          </span>
-                        </div>
-                      </td>
-                      <td className="devices-table-action-cell">
+                      </div>
+                      <div className="device-session-pulse device-runtime-rail-status">
+                        <span className={`device-session-node ${online ? "active" : "idle"}`}>
+                          <span className="device-session-node-dot" aria-hidden="true" />
+                          <span className="device-session-node-name">ADB</span>
+                          <span className="device-session-node-state mono">{d.adbStatus}</span>
+                        </span>
+                        <span className={`device-session-node ${dockerRunning ? "active" : "idle"}`}>
+                          <span className="device-session-node-dot" aria-hidden="true" />
+                          <span className="device-session-node-name">Docker</span>
+                          <span className="device-session-node-state mono">{d.dockerStatus || "—"}</span>
+                        </span>
+                        <span className={`device-session-node ${scrcpyOn ? "active" : "idle"}`}>
+                          <span className="device-session-node-dot" aria-hidden="true" />
+                          <span className="device-session-node-name">scrcpy</span>
+                          <span className="device-session-node-state mono">{d.scrcpyStatus}</span>
+                        </span>
+                      </div>
+                      <div className="device-session-endpoint">
+                        <span className="device-session-endpoint-main mono">{d.ip || "—"}</span>
+                        <span className="device-session-endpoint-meta">
+                          <span>{d.resolution || "—"}</span>
+                          <span>{d.uptime || "—"}</span>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="device-session-expand"
+                        aria-expanded={rowExpanded}
+                        aria-label={t(rowExpanded ? "devices.table.collapse" : "devices.table.expand")}
+                        title={t(rowExpanded ? "devices.table.collapse" : "devices.table.expand")}
+                        onClick={() => setExpandedDeviceId((current) => current === d.id ? null : d.id)}
+                      >
+                        <span aria-hidden="true">⌄</span>
+                      </button>
+                      <div className="device-session-actions device-runtime-rail-actions">
                         <div className="devices-table-actions devices-table-actions-compact" aria-busy={rowActionBusy}>
                           <Button
                             size="sm"
@@ -1940,12 +2167,41 @@ export function Devices() {
                             </span>
                           ) : null}
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                      </div>
+                      {rowExpanded ? (
+                        <div className="device-session-details">
+                          <div className="device-session-detail-item">
+                            <span className="device-session-detail-label">Android</span>
+                            <span className="device-session-detail-value">{d.androidVersion || "—"}</span>
+                          </div>
+                          <div className="device-session-detail-item">
+                            <span className="device-session-detail-label">CPU</span>
+                            <span className="device-session-detail-value">{d.cpu || "—"}</span>
+                          </div>
+                          <div className="device-session-detail-item">
+                            <span className="device-session-detail-label">RAM</span>
+                            <span className="device-session-detail-value">{d.ram || "—"}</span>
+                          </div>
+                          <div className="device-session-detail-item">
+                            <span className="device-session-detail-label">容器</span>
+                            <span className="device-session-detail-value mono">{d.containerId || "—"}</span>
+                          </div>
+                          <div className="device-session-detail-item">
+                            <span className="device-session-detail-label">镜像</span>
+                            <span className="device-session-detail-value mono">{d.image || "—"}</span>
+                          </div>
+                          <div className="device-session-detail-item">
+                            <span className="device-session-detail-label">数据卷</span>
+                            <span className="device-session-detail-value mono">{d.dataVolume || "—"}</span>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
         ) : (
         <div className="device-grid">

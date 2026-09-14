@@ -99,7 +99,14 @@ export function ScrcpyControlBar({ scrcpyStatus, disabled = false, busy = null, 
       <div className="scrcpy-control-items">
         {order.map((id) => {
           const actionBusy = busy === id || (id === "start" && busy === "start") || (id === "stop" && busy === "stop") || (id === "restart" && busy === "restart");
-          const actionDisabled = disabled || Boolean(busy) || (id === "stop" || id === "restart" ? scrcpyStatus !== "running" : false);
+          const actionDisabled =
+            disabled ||
+            Boolean(busy) ||
+            (id === "stop" || id === "restart"
+              ? scrcpyStatus !== "running"
+              : id === "start"
+                ? scrcpyStatus === "running"
+                : false);
           return (
             <div
               key={id}

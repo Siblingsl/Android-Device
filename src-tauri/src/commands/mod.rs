@@ -1,7 +1,7 @@
 use crate::models::*;
 use crate::services::{
-    adb, config, device, docker, gnirehtet, log, recording, root, scrcpy, settings, terminal,
-    transfer, wireless, wsl_kernel,
+    adb, audit, battery, cloak, config, device, docker, geo, gnirehtet, log, proxy, recording,
+    root, scrcpy, settings, spoof, terminal, transfer, usage, wireless, wsl_kernel,
 };
 use base64::Engine;
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -532,6 +532,151 @@ pub async fn magisk_denylist_remove(serial: String, package: String) -> ShellRes
 #[tauri::command]
 pub async fn magisk_apply_spoof(serial: String) -> ShellResult {
     blocking(move || root::apply_spoof(&serial)).await
+}
+
+#[tauri::command]
+pub async fn list_spoof_profiles() -> Vec<crate::models::SpoofProfileSummary> {
+    blocking(spoof::list_summaries).await
+}
+
+#[tauri::command]
+pub async fn get_spoof_identity(serial: String) -> crate::models::SpoofIdentity {
+    blocking(move || spoof::get_spoof_identity(&serial)).await
+}
+
+#[tauri::command]
+pub async fn apply_spoof_profile(serial: String, profile_id: String) -> ShellResult {
+    blocking(move || spoof::apply_spoof_profile(&serial, &profile_id)).await
+}
+
+#[tauri::command]
+pub async fn capture_spoof_profile(
+    serial: String,
+    id_hint: String,
+) -> Result<crate::models::SpoofProfileSummary, String> {
+    blocking_res(move || spoof::capture_spoof_profile(&serial, &id_hint)).await
+}
+
+#[tauri::command]
+pub async fn delete_custom_profile(id: String) -> Result<(), String> {
+    blocking_res(move || spoof::delete_custom_profile(&id)).await
+}
+
+#[tauri::command]
+pub async fn install_cloak_module(serial: String) -> ShellResult {
+    blocking(move || cloak::install_cloak_module(&serial)).await
+}
+
+#[tauri::command]
+pub async fn push_cloak_config(serial: String, profile_id: String) -> ShellResult {
+    blocking(move || {
+        let id = profile_id.trim();
+        match spoof::profile_by_id(id) {
+            Some(profile) => cloak::push_cloak_config(&serial, &profile),
+            None => ShellResult {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("伪装档案 id 无效: {id}"),
+                exit_code: -1,
+            },
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_cloak_status(serial: String) -> crate::models::CloakStatus {
+    blocking(move || cloak::get_cloak_status(&serial)).await
+}
+
+#[tauri::command]
+pub async fn install_native_cloak(serial: String, zip_path: Option<String>) -> ShellResult {
+    blocking(move || cloak::install_native_cloak(&serial, zip_path)).await
+}
+
+// ---- Usage baseline seeding ----
+
+#[tauri::command]
+pub async fn seed_usage_baseline(serial: String, profile_id: String) -> ShellResult {
+    blocking(move || {
+        let id = profile_id.trim();
+        match spoof::profile_by_id(id) {
+            Some(profile) => usage::seed_usage_baseline(&serial, &profile),
+            None => ShellResult {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("伪装档案 id 无效: {id}"),
+                exit_code: -1,
+            },
+        }
+    })
+    .await
+}
+
+// ---- Geographic consistency ----
+
+#[tauri::command]
+pub async fn geo_consistency_check(
+    serial: String,
+    profile_id: String,
+) -> crate::models::GeoCheck {
+    blocking(move || geo::geo_consistency_check(&serial, &profile_id)).await
+}
+
+// ---- Battery spoofing curve ----
+
+#[tauri::command]
+pub async fn get_battery_state(serial: String) -> crate::models::BatteryState {
+    blocking(move || battery::battery_state_for(&serial, battery::now_secs())).await
+}
+
+#[tauri::command]
+pub async fn apply_battery_policy(serial: String) -> ShellResult {
+    blocking(move || battery::apply_battery_policy(&serial)).await
+}
+
+// ---- Adversarial self-audit ----
+
+#[tauri::command]
+pub async fn adversarial_audit(
+    serial: String,
+    profile_id: Option<String>,
+) -> crate::models::AdversarialAudit {
+    blocking(move || audit::adversarial_audit(&serial, profile_id)).await
+}
+
+// ---- Per-instance proxy egress ----
+
+#[tauri::command]
+pub async fn apply_device_proxy(serial: String, proxy: String) -> ShellResult {
+    blocking(move || proxy::apply_device_proxy(&serial, &proxy)).await
+}
+
+#[tauri::command]
+pub async fn clear_device_proxy(serial: String) -> ShellResult {
+    blocking(move || proxy::clear_device_proxy(&serial)).await
+}
+
+#[tauri::command]
+pub async fn get_device_proxy_status(serial: String) -> crate::models::DeviceProxyStatus {
+    blocking(move || proxy::device_proxy_status(&serial)).await
+}
+
+#[tauri::command]
+pub async fn apply_transparent_proxy(serial: String, proxy: String) -> ShellResult {
+    blocking(move || proxy::apply_transparent_proxy(&serial, &proxy)).await
+}
+
+#[tauri::command]
+pub async fn stop_transparent_proxy(serial: String) -> ShellResult {
+    blocking(move || proxy::stop_transparent_proxy(&serial)).await
+}
+
+// ---- Spoof-profile diversity ----
+
+#[tauri::command]
+pub async fn spoof_profile_usage() -> Vec<crate::models::SpoofProfileUsage> {
+    blocking(spoof::spoof_profile_usage).await
 }
 
 #[tauri::command]

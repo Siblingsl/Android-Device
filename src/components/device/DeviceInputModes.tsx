@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Gamepad2, Keyboard, Mouse, Usb } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -27,16 +27,18 @@ export function DeviceInputModes({
   const [active, setActive] = useState(false);
   const [localBusy, setLocalBusy] = useState<string | null>(null);
   const blocked = disabled || Boolean(busy) || Boolean(localBusy);
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
 
   useEffect(() => {
-    if (!active || !onStatus) return;
+    if (!active || !onStatusRef.current) return;
     const timer = window.setInterval(() => {
-      void onStatus().then((status) => {
+      void onStatusRef.current!().then((status) => {
         if (status !== "running") setActive(false);
       }).catch(() => undefined);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [active, onStatus]);
+  }, [active]);
 
   const selectMode = (next: ScrcpyInputMode) => {
     setMode(next);

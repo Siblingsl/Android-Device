@@ -31,6 +31,14 @@ import type {
   SuPolicyEntry,
   SystemStatus,
   WslKernelStatus,
+  SpoofProfileSummary,
+  SpoofIdentity,
+  SpoofProfileUsage,
+  DeviceProxyStatus,
+  CloakStatus,
+  BatteryState,
+  AdversarialAudit,
+  GeoCheck,
 } from "../types";
 
 /** Unified Device Service — all device capabilities go through here */
@@ -211,6 +219,46 @@ export const DeviceService = {
   magiskDenylistRemove: (serial: string, pkg: string) =>
     invoke<ShellResult>("magisk_denylist_remove", { serial, package: pkg }),
   magiskApplySpoof: (serial: string) => invoke<ShellResult>("magisk_apply_spoof", { serial }),
+  listSpoofProfiles: () => invoke<SpoofProfileSummary[]>("list_spoof_profiles"),
+  getSpoofIdentity: (serial: string) => invoke<SpoofIdentity>("get_spoof_identity", { serial }),
+  applySpoofProfile: (serial: string, profileId: string) =>
+    invoke<ShellResult>("apply_spoof_profile", { serial, profileId }),
+  captureSpoofProfile: (serial: string, idHint: string) =>
+    invoke<SpoofProfileSummary>("capture_spoof_profile", { serial, idHint }),
+  deleteCustomProfile: (id: string) => invoke<void>("delete_custom_profile", { id }),
+  installCloakModule: (serial: string) =>
+    invoke<ShellResult>("install_cloak_module", { serial }),
+  pushCloakConfig: (serial: string, profileId: string) =>
+    invoke<ShellResult>("push_cloak_config", { serial, profileId }),
+  getCloakStatus: (serial: string) => invoke<CloakStatus>("get_cloak_status", { serial }),
+  /** Install the native (Zygisk) NativeCloak module onto an existing instance. */
+  installNativeCloak: (serial: string, zipPath?: string) =>
+    invoke<ShellResult>("install_native_cloak", { serial, zipPath: zipPath ?? null }),
+  /** Seed the usage-stats baseline + /sdcard timestamp backstop. */
+  seedUsageBaseline: (serial: string, profileId: string) =>
+    invoke<ShellResult>("seed_usage_baseline", { serial, profileId }),
+  /** Geo/timezone consistency check against a spoof profile. */
+  geoConsistencyCheck: (serial: string, profileId: string) =>
+    invoke<GeoCheck>("geo_consistency_check", { serial, profileId }),
+  // Battery spoofing curve
+  getBatteryState: (serial: string) => invoke<BatteryState>("get_battery_state", { serial }),
+  applyBatteryPolicy: (serial: string) => invoke<ShellResult>("apply_battery_policy", { serial }),
+  // Adversarial self-audit
+  adversarialAudit: (serial: string, profileId?: string) =>
+    invoke<AdversarialAudit>("adversarial_audit", { serial, profileId: profileId || null }),
+  // Per-instance proxy egress
+  applyDeviceProxy: (serial: string, proxy: string) =>
+    invoke<ShellResult>("apply_device_proxy", { serial, proxy }),
+  clearDeviceProxy: (serial: string) =>
+    invoke<ShellResult>("clear_device_proxy", { serial }),
+  getDeviceProxyStatus: (serial: string) =>
+    invoke<DeviceProxyStatus>("get_device_proxy_status", { serial }),
+  applyTransparentProxy: (serial: string, proxy: string) =>
+    invoke<ShellResult>("apply_transparent_proxy", { serial, proxy }),
+  stopTransparentProxy: (serial: string) =>
+    invoke<ShellResult>("stop_transparent_proxy", { serial }),
+  // Spoof-profile diversity census
+  spoofProfileUsage: () => invoke<SpoofProfileUsage[]>("spoof_profile_usage"),
   magiskSetShamikoMode: (serial: string, whitelist: boolean) =>
     invoke<ShellResult>("magisk_set_shamiko_mode", { serial, whitelist }),
   magiskModuleSetEnabled: (serial: string, id: string, enabled: boolean) =>

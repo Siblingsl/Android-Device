@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, CircleStop, LockKeyhole, Power, RotateCw, VolumeX } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { Card } from "../ui/Card";
@@ -58,26 +58,30 @@ export function DeviceMediaControls({
   const [camera, setCamera] = useState<ScrcpyCameraOptions>(DEFAULT_CAMERA_OPTIONS);
   const [localBusy, setLocalBusy] = useState<string | null>(null);
   const blocked = disabled || Boolean(busy) || Boolean(localBusy);
+  const onRecordingStatusRef = useRef(onRecordingStatus);
+  onRecordingStatusRef.current = onRecordingStatus;
+  const onCameraStatusRef = useRef(onCameraStatus);
+  onCameraStatusRef.current = onCameraStatus;
 
   useEffect(() => {
-    if (!recording || !onRecordingStatus) return;
+    if (!recording || !onRecordingStatusRef.current) return;
     const timer = window.setInterval(() => {
-      void onRecordingStatus().then((status) => {
+      void onRecordingStatusRef.current!().then((status) => {
         if (status !== "running") setRecording(false);
       }).catch(() => undefined);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [onRecordingStatus, recording]);
+  }, [recording]);
 
   useEffect(() => {
-    if (!cameraMirroring || !onCameraStatus) return;
+    if (!cameraMirroring || !onCameraStatusRef.current) return;
     const timer = window.setInterval(() => {
-      void onCameraStatus().then((status) => {
+      void onCameraStatusRef.current!().then((status) => {
         if (status !== "running") setCameraMirroring(false);
       }).catch(() => undefined);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [cameraMirroring, onCameraStatus]);
+  }, [cameraMirroring]);
 
   const updateCamera = (patch: Partial<ScrcpyCameraOptions>) => {
     // Keep the in-progress text while editing; normalize only when starting a

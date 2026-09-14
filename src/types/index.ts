@@ -38,6 +38,8 @@ export interface DeviceInfo {
   adbPort: number;
   scrcpyPort: number;
   dataVolume?: string;
+  /** Effective spoofed model from ro.product.model (may differ from the container name). */
+  spoofedModel?: string;
   batteryLevel?: number;
   batteryCharging?: boolean;
   batteryTemperatureC?: number;
@@ -61,8 +63,35 @@ export interface CreateInstanceRequest {
   installLsposed?: boolean;
   installShamiko?: boolean;
   spoofProfile?: string;
+  /** Built-in spoof profile id; takes precedence over spoofProfile when set. */
+  spoofProfileId?: string;
+  /** Spoof ro.product.cpu.abilist* to arm64-v8a (unsafe on x86_64 without a translator). */
+  spoofAbilist?: boolean;
   hidePackages?: string[];
   waitAdb?: boolean;
+  /** Install the DeviceCloak LSPosed module after first boot and push its config. */
+  installCloak?: boolean;
+  /** L3 trace cleansing: fake /proc/cpuinfo + /proc/version bind mounts and
+   *  a systemd-style cgroup parent. Defaults to true on both sides. */
+  cleanTraces?: boolean;
+  /** GPU passthrough: androidboot.redroid_gpu_mode=host + --device /dev/dri.
+   *  Requires the host to expose GPU nodes (native Linux or a WSL2 kernel
+   *  with GPU-PV); otherwise docker run itself fails. */
+  gpuPassthrough?: boolean;
+}
+
+/** One row of the spoof-profile usage census (docker label rdc.spoof-profile). */
+export interface SpoofProfileUsage {
+  profileId: string;
+  count: number;
+}
+
+/** Per-instance network egress state ("每实例住宅代理分流"). */
+export interface DeviceProxyStatus {
+  httpProxy: string;
+  original: string;
+  transparentRunning: boolean;
+  message?: string;
 }
 
 export interface MagiskAssets {
@@ -71,6 +100,79 @@ export interface MagiskAssets {
   lsposedOk: boolean;
   shamikoOk: boolean;
   message?: string;
+}
+
+export interface SpoofProfileSummary {
+  id: string;
+  brand: string;
+  manufacturer: string;
+  model: string;
+  marketName: string;
+  androidVersion: string;
+  securityPatch: string;
+  fingerprint: string;
+  notes?: string;
+  /** "builtin" | "captured" */
+  source?: string;
+}
+
+export interface CloakStatus {
+  installed: boolean;
+  enabled: boolean;
+  scopeCount: number;
+  configPushed?: boolean;
+  /** Native Zygisk companion (rdc_nativecloak) installed under /data/adb/modules. */
+  nativeInstalled?: boolean;
+  message?: string;
+}
+
+/** Simulated battery state (BatteryManager status: 2/3/4/5). */
+export interface BatteryState {
+  level: number;
+  status: number;
+  charging: boolean;
+}
+
+/** One row of the adversarial self-audit checklist. */
+export interface AuditCheck {
+  id: string;
+  category: string;
+  /** "pass" | "fail" | "unknown" */
+  verdict: string;
+  detail: string;
+}
+
+export interface AdversarialAudit {
+  serial: string;
+  profileId?: string | null;
+  ranAt: string;
+  message?: string;
+  checks: AuditCheck[];
+}
+
+/** One inconsistency found by the geo-consistency check. */
+export interface GeoIssue {
+  /** timezoneMismatch | timezoneCountryMismatch | localeMismatch | proxyCountryMismatch | noGeoData */
+  code: string;
+  message: string;
+}
+
+/** Result of the geo-consistency check for one device + profile. */
+export interface GeoCheck {
+  profileId?: string | null;
+  deviceTimezone: string;
+  deviceLocale: string;
+  issues: GeoIssue[];
+  consistent: boolean;
+}
+
+export interface SpoofIdentity {
+  brand: string;
+  model: string;
+  marketName: string;
+  fingerprint: string;
+  device: string;
+  matchedProfileId?: string;
 }
 
 export interface RootModuleInfo {
@@ -428,10 +530,15 @@ export interface AppSettings {
   lastResolution?: string;
   lastDpi?: string;
   lastImage?: string;
+  lastSpoofProfileId?: string;
   autoStartDeviceIds?: string[];
   createAutoStart?: boolean;
   createStayOnForm?: boolean;
   createWaitAdb?: boolean;
+  /** Local tun2socks binary for per-instance transparent proxy takeover. */
+  tun2socksPath?: string;
+  /** Apply the simulated battery curve while detail pages are open (default true). */
+  batteryAutoRefresh?: boolean | null;
   resourceAlertThreshold: number;
   deviceRefreshIntervalSecs: number;
   deviceMonitorRules: Record<string, DeviceMonitorRule>;

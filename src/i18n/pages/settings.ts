@@ -16,6 +16,8 @@ export const settingsZh: Record<string, string> = {
   "settings.autoUpdate": "自动更新",
   "settings.enabled": "启用",
   "settings.autoUpdateHint": "仅保存偏好，当前版本不会检查或下载更新。",
+  "settings.batteryAutoRefresh": "电池伪装自动刷新",
+  "settings.batteryAutoRefreshHint": "设备详情页打开期间，每 5 分钟把该实例的模拟电池曲线应用到容器。",
   "settings.proxy": "代理（Docker 拉镜像等）",
   "settings.proxy.valid": "保存后，docker / adb 子进程会带上 HTTP(S)_PROXY。",
   "settings.proxy.invalid": "格式建议 http://127.0.0.1:7890",
@@ -44,6 +46,7 @@ export const settingsZh: Record<string, string> = {
   "settings.path.scrcpyPath": "Scrcpy 路径",
   "settings.path.recordingPath": "录制目录",
   "settings.path.gnirehtetPath": "Gnirehtet 路径",
+  "settings.path.tun2socksPath": "tun2socks 路径（容器内运行，可选）",
   "settings.path.gappsZipPath": "GApps zip（可选）",
   "settings.card.autoStart": "自动启动设备",
   "settings.createAutoStart": "创建实例时默认勾选「创建后加入自动启动」",
@@ -91,6 +94,9 @@ export const settingsEn: Record<string, string> = {
   "settings.enabled": "Enabled",
   "settings.autoUpdateHint":
     "Only saves the preference. The current version does not check for or download updates.",
+  "settings.batteryAutoRefresh": "Battery spoof auto refresh",
+  "settings.batteryAutoRefreshHint":
+    "While a device detail page is open, the instance's simulated battery curve is applied every 5 minutes.",
   "settings.proxy": "Proxy (for Docker image pulls, etc.)",
   "settings.proxy.valid": "After saving, docker / adb subprocesses will use HTTP(S)_PROXY.",
   "settings.proxy.invalid": "Suggested format: http://127.0.0.1:7890",
@@ -120,6 +126,7 @@ export const settingsEn: Record<string, string> = {
   "settings.path.scrcpyPath": "Scrcpy path",
   "settings.path.recordingPath": "Recording directory",
   "settings.path.gnirehtetPath": "Gnirehtet path",
+  "settings.path.tun2socksPath": "tun2socks path (runs inside containers, optional)",
   "settings.path.gappsZipPath": "GApps zip (optional)",
   "settings.card.autoStart": "Auto-start devices",
   "settings.createAutoStart":

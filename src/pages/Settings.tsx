@@ -26,6 +26,9 @@ const PATH_FIELDS = [
   { key: "scrcpyPath", label: "settings.path.scrcpyPath", kind: "exe" as const },
   { key: "recordingPath", label: "settings.path.recordingPath", kind: "dir" as const },
   { key: "gnirehtetPath", label: "settings.path.gnirehtetPath", kind: "exe" as const },
+  // tun2socks is a Linux binary consumed *inside* the container — never an
+  // .exe filter on Windows hosts.
+  { key: "tun2socksPath", label: "settings.path.tun2socksPath", kind: "bin" as const },
   { key: "gappsZipPath", label: "settings.path.gappsZipPath", kind: "zip" as const },
 ] as const;
 
@@ -214,6 +217,20 @@ export function SettingsPage() {
               </label>
               <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                 {t("settings.autoUpdateHint")}
+              </div>
+            </div>
+            <div className="field">
+              <label>{t("settings.batteryAutoRefresh")}</label>
+              <label className="row">
+                <input
+                  type="checkbox"
+                  checked={form.batteryAutoRefresh !== false}
+                  onChange={(e) => set("batteryAutoRefresh", e.target.checked)}
+                />
+                {t("settings.enabled")}
+              </label>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {t("settings.batteryAutoRefreshHint")}
               </div>
             </div>
             <div className="field">

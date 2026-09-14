@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Cable, Link2, RefreshCw, Unplug, Wrench } from "lucide-react";
+import { Cable, Camera, Link2, RefreshCw, Unplug, Wrench } from "lucide-react";
 import { copyText } from "../lib/clipboard";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -37,6 +37,7 @@ export function AdbPage() {
   const [lanAuto, setLanAuto] = useState(true);
   const [lanScanning, setLanScanning] = useState(false);
   const [lanResult, setLanResult] = useState<LanScanResult | null>(null);
+  const [capturingSerial, setCapturingSerial] = useState<string | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
 
   useEffect(() => {
@@ -137,6 +138,30 @@ export function AdbPage() {
     void load();
     return () => loadSequence.invalidate();
   }, []);
+
+  const captureSpoofProfile = async (serial: string) => {
+    setCapturingSerial(serial);
+    setStatusText(t("adb.capturingSpoof", { serial }));
+    try {
+      const identity = await DeviceService.getSpoofIdentity(serial);
+      const brand = identity.brand || "—";
+      const model = identity.model || "—";
+      const fingerprint = identity.fingerprint || "—";
+      const ok = await askConfirm(
+        t("adb.captureSpoofConfirm", { brand, model, fingerprint }),
+      );
+      if (!ok) return;
+      const idHint = model !== "—" ? model : "device";
+      const summary = await DeviceService.captureSpoofProfile(serial, idHint);
+      setStatusText(t("adb.captureSpoofDone", { id: summary.id }));
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("adb.captureSpoofFailed", { reason }));
+      void alert(t("adb.captureSpoofFailed", { reason }));
+    } finally {
+      setCapturingSerial(null);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -479,6 +504,19 @@ export function AdbPage() {
                         >
                           {t("adb.disconnect")}
                         </Button>
+                        {d.state === "device" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={<Camera size={12} />}
+                            loading={capturingSerial === d.serial}
+                            disabled={!adbOk || capturingSerial !== null}
+                            title={t("adb.captureSpoof")}
+                            onClick={() => void captureSpoofProfile(d.serial)}
+                          >
+                            {t("adb.captureSpoof")}
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>

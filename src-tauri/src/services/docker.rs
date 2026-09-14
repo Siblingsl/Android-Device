@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use crate::models::{
     CreateInstanceRequest, DockerContainer, DockerImage, DockerInfo, DockerVolume, ShellResult,
 };
-use crate::services::{adb, cache, log, settings, util};
+use crate::services::{adb, cache, cloak, log, settings, util};
 
 static CREATE_STAGE: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
 static CREATE_CANCEL_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
@@ -487,6 +487,82 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     let volume = data_volume_name(&sanitized);
     let volume_map = format!("{volume}:/data");
 
+    // ---- L3 trace cleansing (default on) ----
+    // Fake /proc/cpuinfo + /proc/version bind mounts + a systemd-style cgroup
+    // parent. Failure to generate the fake files only warns — never blocks
+    // the create (same philosophy as the DeviceCloak install step).
+    let clean_traces = req.clean_traces.unwrap_or(true);
+    let profile_id_raw = req.spoof_profile_id.as_deref().unwrap_or("").trim();
+    let label_profile_id = if profile_id_raw.is_empty() {
+        if req.spoof_profile.trim().is_empty() {
+            "redmi-k40-alioth"
+        } else {
+            "custom"
+        }
+    } else {
+        profile_id_raw
+    };
+    let mut trace_mounts: Vec<String> = Vec::new();
+    if clean_traces {
+        // Render traces from the selected profile; fall back to the bundled
+        // default (SM8550) for custom confs — x86_64→ARM is always right.
+        let trace_profile = crate::services::spoof::profile_by_id(label_profile_id)
+            .or_else(|| crate::services::spoof::profile_by_id("redmi-k40-alioth"));
+        if let Some(tp) = trace_profile {
+            match crate::services::traces::write_fake_traces(&container_name, &tp) {
+                Ok(paths) => {
+                    let cpu = paths.cpuinfo.to_string_lossy().to_string();
+                    let ver = paths.version.to_string_lossy().to_string();
+                    trace_mounts = vec![
+                        format!("{cpu}:/proc/cpuinfo:ro"),
+                        format!("{ver}:/proc/version:ro"),
+                    ];
+                    log::info(
+                        "Docker",
+                        &format!(
+                            "Trace cleansing active for {container_name}: {}",
+                            paths.dir.display()
+                        ),
+                    );
+                }
+                Err(e) => {
+                    log::warn(
+                        "Docker",
+                        &format!("Trace cleansing disabled (generation failed): {e}"),
+                    );
+                }
+            }
+        }
+    }
+    let label_spoof = format!("rdc.spoof-profile={label_profile_id}");
+    let label_traces = format!("rdc.clean-traces={clean_traces}");
+
+    // ---- Network identity & egress hygiene ----
+    // A parameterized hostname removes the default container short-id
+    // fingerprint from DHCP/`net.hostname` surfaces; the same value is baked
+    // into the rendered spoof.conf (`set|net.hostname|…`) so `docker run
+    // --hostname` and the in-instance resetprop never disagree.
+    let hostname_profile = crate::services::spoof::profile_by_id(label_profile_id);
+    let hostname = crate::services::spoof::derive_hostname(
+        hostname_profile.as_ref().map(|p| p.brand.as_str()).unwrap_or(""),
+        req.adb_port,
+    );
+    // Per-instance DNS rotation (only when trace cleansing is on — same
+    // hygiene bucket as the cgroup parent). MOD-3 over the resolver pool
+    // keeps instances on one host from sharing a single resolver.
+    let dns = clean_traces.then(|| dns_for_port(req.adb_port));
+    // GPU passthrough: guest (SwiftShader) ↔ host (gfxstream via /dev/dri).
+    // The `--device /dev/dri` node only exists on hosts with GPU access
+    // (native Linux or a WSL2 kernel with GPU-PV); when it does not, `docker
+    // run` itself fails and the error is surfaced verbatim — the UI hint
+    // says the same thing.
+    let gpu_passthrough = req.gpu_passthrough.unwrap_or(false);
+    let gpu_mode = if gpu_passthrough {
+        "androidboot.redroid_gpu_mode=host"
+    } else {
+        "androidboot.redroid_gpu_mode=guest"
+    };
+
     if create_cancel_requested() {
         return cancelled_create_result(&container_name);
     }
@@ -511,30 +587,44 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
 
     set_create_stage(&format!("启动容器 {container_name}"));
     // docker run -d usually returns quickly once image is local; still allow headroom
-    let mut r = util::run_command_timeout(
-        &docker_bin(),
-        &[
-            "run",
-            "-d",
-            "--name",
-            &container_name,
-            "--privileged",
-            "--cpus",
-            &cpus,
-            "--memory",
-            &memory,
-            "-v",
-            &volume_map,
-            "-p",
-            &port_map,
-            image.as_str(),
-            &w_arg,
-            &h_arg,
-            &dpi_arg,
-            "androidboot.redroid_gpu_mode=guest",
-        ],
-        Duration::from_secs(120),
-    );
+    let mut run_args: Vec<&str> = vec![
+        "run",
+        "-d",
+        "--name",
+        &container_name,
+        "--privileged",
+        "--cpus",
+        &cpus,
+        "--memory",
+        &memory,
+        "-v",
+        &volume_map,
+        "-p",
+        &port_map,
+    ];
+    for mount in &trace_mounts {
+        run_args.extend_from_slice(&["-v", mount.as_str()]);
+    }
+    if clean_traces {
+        // Cgroup paths are kernel-generated and cannot be bind-mounted over;
+        // placing the container under system.slice at least strips the
+        // "docker" segment from /proc/self/cgroup-style reads.
+        run_args.extend_from_slice(&["--cgroup-parent", "system.slice"]);
+    }
+    // Unconditional labels: rdc.spoof-profile feeds the diversity census
+    // (spoof_profile_usage), rdc.clean-traces records the user's choice.
+    run_args.extend_from_slice(&["--label", &label_spoof, "--label", &label_traces]);
+    run_args.extend_from_slice(&["--hostname", &hostname]);
+    if let Some(d) = dns {
+        run_args.extend_from_slice(&["--dns", d]);
+    }
+    if gpu_passthrough {
+        run_args.extend_from_slice(&["--device", "/dev/dri"]);
+    }
+    run_args.push(image.as_str());
+    run_args.extend_from_slice(&[&w_arg, &h_arg, &dpi_arg, gpu_mode]);
+
+    let mut r = util::run_command_timeout(&docker_bin(), &run_args, Duration::from_secs(120));
 
     if r.success {
         CREATE_CONTAINER_CREATED.store(true, Ordering::SeqCst);
@@ -598,9 +688,33 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
                         }
                     }
                 }
+                if req.install_cloak {
+                    let profile_id = req.spoof_profile_id.as_deref().unwrap_or("").trim();
+                    let profile = if profile_id.is_empty() {
+                        crate::services::spoof::profile_by_id("redmi-k40-alioth")
+                    } else {
+                        crate::services::spoof::profile_by_id(profile_id)
+                    };
+                    match cloak::cloak_first_boot_install(&container_name, profile.as_ref(), &serial) {
+                        Ok(msg) => {
+                            r.stdout = format!("{}\n{}", r.stdout.trim(), msg.trim());
+                        }
+                        Err(e) => {
+                            log::warn(
+                                "Docker",
+                                &format!("DeviceCloak install incomplete for {container_name}: {e}"),
+                            );
+                            r.stdout = format!(
+                                "{}\nDeviceCloak 深度伪装安装未完成（警告，不阻断）：{e}",
+                                r.stdout.trim()
+                            );
+                        }
+                    }
+                }
                 if req.install_gapps {
                     skip_first_boot_provisioning(&serial);
                 }
+                first_boot_net_hostname(&container_name, req, &serial);
                 first_boot_screen_on(&serial);
             }
         } else {
@@ -635,6 +749,161 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
 
 fn data_volume_name(sanitized: &str) -> String {
     format!("rdc-{sanitized}-data")
+}
+
+/// Per-instance net.hostname wiring after first boot.
+///
+/// Design note: the baked preset-image conf stays instance-agnostic (no
+/// `net.hostname` line) because preset images are *reused across instances*
+/// — a per-instance value baked into the image would either pin every
+/// instance sharing the image to one name or fragment the image cache per
+/// port. Instead the hostname lives in three instance-scoped places:
+/// 1. `docker run --hostname` (kernel hostname, set by the create flow),
+/// 2. a persistent `/data/adb/service.d/rdc_net_hostname.sh` on the
+///    instance's own data volume (Magisk instances — survives reboots),
+/// 3. a one-shot `resetprop`/`setprop` so the prop is live immediately.
+fn first_boot_net_hostname(container_name: &str, req: &CreateInstanceRequest, serial: &str) {
+    let profile = req
+        .spoof_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .and_then(crate::services::spoof::profile_by_id);
+    let hostname = crate::services::spoof::derive_hostname(
+        profile.as_ref().map(|p| p.brand.as_str()).unwrap_or(""),
+        req.adb_port,
+    );
+    if req.install_magisk {
+        let script = format!(
+            "#!/system/bin/sh\n# RDC per-instance net.hostname (create flow)\n\
+             RP=/sbin/resetprop; [ -x \"$RP\" ] || RP=/system/etc/init/magisk/magisk\n\
+             \"$RP\" net.hostname {hostname}\n"
+        );
+        let write = util::run_command_stdin(
+            &docker_bin(),
+            &[
+                "exec",
+                "-i",
+                container_name,
+                "sh",
+                "-c",
+                "cat > /data/adb/service.d/rdc_net_hostname.sh && chmod 755 /data/adb/service.d/rdc_net_hostname.sh",
+            ],
+            script.as_bytes(),
+            Duration::from_secs(15),
+        );
+        if !write.success {
+            log::warn(
+                "Docker",
+                &format!(
+                    "net.hostname service.d script write failed for {container_name}: {}",
+                    write.stderr.trim()
+                ),
+            );
+        }
+    }
+    // One-shot apply: magisk resetprop when present, plain setprop otherwise
+    // (redroid adbd runs as root on stock images, so setprop usually lands).
+    let apply = util::run_command_timeout(
+        &docker_bin(),
+        &[
+            "exec",
+            container_name,
+            "sh",
+            "-c",
+            &format!(
+                "RP=/sbin/resetprop; [ -x \"$RP\" ] || RP=/system/etc/init/magisk/magisk; \
+                 if [ -x \"$RP\" ]; then \"$RP\" net.hostname {hostname}; else setprop net.hostname {hostname}; fi; \
+                 getprop net.hostname"
+            ),
+        ],
+        Duration::from_secs(15),
+    );
+    if apply.success {
+        log::info(
+            "Docker",
+            &format!("[{serial}] net.hostname -> {hostname}"),
+        );
+    } else {
+        log::warn(
+            "Docker",
+            &format!(
+                "[{serial}] net.hostname apply failed: {}",
+                apply.stderr.trim()
+            ),
+        );
+    }
+}
+
+/// Brand string of the spoof profile a container was created with (label
+/// `rdc.spoof-profile`), for deriving a clone's hostname. Empty for custom
+/// confs / unknown profiles.
+fn container_spoof_brand(id_or_name: &str) -> String {
+    let r = util::run_command_timeout(
+        &docker_bin(),
+        &[
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"rdc.spoof-profile\"}}",
+            id_or_name,
+        ],
+        Duration::from_secs(10),
+    );
+    if !r.success {
+        return String::new();
+    }
+    let id = r.stdout.trim();
+    crate::services::spoof::profile_by_id(id)
+        .map(|p| p.brand)
+        .unwrap_or_default()
+}
+
+/// Per-instance resolver rotation pool. Indexed by `adb_port % 3` so
+/// instances on one host don't all share a single upstream (a fleet-wide
+/// identical DNS tuple is itself a soft fingerprint).
+pub fn dns_for_port(adb_port: u16) -> &'static str {
+    const DNS_POOL: [&str; 3] = ["1.1.1.1", "8.8.8.8", "9.9.9.9"];
+    DNS_POOL[(adb_port as usize) % DNS_POOL.len()]
+}
+
+/// Whether the container was created with trace cleansing, read from the
+/// `rdc.clean-traces` label. `None` = container unreachable / label missing.
+pub fn container_clean_traces_enabled(container: &str) -> Option<bool> {
+    let r = util::run_command_timeout(
+        &docker_bin(),
+        &[
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"rdc.clean-traces\"}}",
+            container,
+        ],
+        Duration::from_secs(10),
+    );
+    if !r.success {
+        return None;
+    }
+    match r.stdout.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a container boots with GPU passthrough. The androidboot args are
+/// the container's CMD, readable from `Config.Cmd` — this is how clones
+/// inherit the source's GPU mode.
+fn container_gpu_passthrough(id_or_name: &str) -> bool {
+    let r = util::run_command_timeout(
+        &docker_bin(),
+        &[
+            "inspect",
+            "--format",
+            "{{json .Config.Cmd}}",
+            id_or_name,
+        ],
+        Duration::from_secs(10),
+    );
+    r.success && r.stdout.contains("androidboot.redroid_gpu_mode=host")
 }
 
 fn create_container_name(name: &str) -> String {
@@ -1245,6 +1514,52 @@ pub fn magisk_assets() -> crate::models::MagiskAssets {
     a
 }
 
+/// Resolve the effective spoof.conf path for a create request.
+///
+/// Precedence: built-in `spoof_profile_id` (rendered to a temp file so the
+/// image build pipeline stays unchanged) > explicit `spoof_profile` path >
+/// the bundled default overlay conf. Returns the effective path plus the temp
+/// file to clean up afterwards (if any).
+fn resolve_spoof_conf_path(
+    req: &CreateInstanceRequest,
+    overlay_src: &str,
+) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>), String> {
+    let id = req.spoof_profile_id.as_deref().unwrap_or("").trim();
+    if !id.is_empty() {
+        let profile = crate::services::spoof::profile_by_id(id).ok_or_else(|| {
+            let ids = crate::services::spoof::built_in_profiles()
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("伪装档案 id 无效: {id}\n可用 id: {ids}")
+        })?;
+        let rendered =
+            crate::services::spoof::render_spoof_conf(&profile, req.spoof_abilist.unwrap_or(false));
+        let tmp = std::env::temp_dir().join(format!(
+            "rdc-spoof-{}-{}.conf",
+            profile.id,
+            util::now_millis()
+        ));
+        std::fs::write(&tmp, rendered).map_err(|e| format!("写入临时伪装配置失败: {e}"))?;
+        return Ok((tmp.clone(), Some(tmp)));
+    }
+
+    let p = req.spoof_profile.trim();
+    if !p.is_empty() {
+        let path = std::path::Path::new(p);
+        if !path.exists() {
+            return Err(format!("伪装配置文件不存在: {p}"));
+        }
+        return Ok((path.to_path_buf(), None));
+    }
+
+    Ok((
+        std::path::Path::new(overlay_src).join("system/etc/init/magisk/spoof.conf"),
+        None,
+    ))
+}
+
 /// Build (or reuse) a derived Redroid image with the Magisk preset
 /// (magiskd + Zygisk + optional LSPosed/Shamiko modules + spoof props).
 /// Also carries the GApps overlay when `install_gapps` is set.
@@ -1284,18 +1599,9 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
     }
 
     // Optional spoof profile override (else the bundled default is baked in).
-    let spoof_conf = {
-        let p = req.spoof_profile.trim();
-        if !p.is_empty() {
-            let path = std::path::Path::new(p);
-            if !path.exists() {
-                return Err(format!("伪装配置文件不存在: {p}"));
-            }
-            path.to_path_buf()
-        } else {
-            std::path::Path::new(&overlay_src).join("system/etc/init/magisk/spoof.conf")
-        }
-    };
+    // A built-in profile id is rendered into a temp conf first; the temp file
+    // is removed before we return (see the cleanup below).
+    let (spoof_conf, spoof_tmp) = resolve_spoof_conf_path(req, &overlay_src)?;
 
     // Stamp = everything that changes the derived image.
     let mut stamp_srcs: Vec<String> = vec![
@@ -1326,6 +1632,9 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
         .collect::<String>();
     let tag = format!("rdc-preset:{tag_safe}-{stamp}");
     if image_exists(&tag) {
+        if let Some(tmp) = &spoof_tmp {
+            let _ = std::fs::remove_file(tmp);
+        }
         log::info("Docker", &format!("Reusing Magisk preset image {tag}"));
         return Ok(tag);
     }
@@ -1487,6 +1796,9 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
     })();
 
     let _ = std::fs::remove_dir_all(&work);
+    if let Some(tmp) = &spoof_tmp {
+        let _ = std::fs::remove_file(tmp);
+    }
     built.map_err(|e| {
         if e.contains("目标镜像:") {
             e
@@ -1998,14 +2310,31 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
         args.push("--memory".into());
         args.push(mem_bytes.to_string());
     }
+    // GPU passthrough is inherited from the source container's CMD (the
+    // clone reuses its image, so the mode must match what the image expects).
+    let gpu_host = container_gpu_passthrough(id_or_name);
+    // Same brand-derived hostname rule as the create flow (brand from the
+    // source's spoof label, port = the clone's own ADB port).
+    let clone_hostname = crate::services::spoof::derive_hostname(&container_spoof_brand(id_or_name), port);
     args.extend([
         "-v".into(),
         volume_map,
         "-p".into(),
         port_map,
-        image_id,
-        "androidboot.redroid_gpu_mode=guest".into(),
+        "--hostname".into(),
+        clone_hostname,
     ]);
+    if gpu_host {
+        args.extend(["--device".into(), "/dev/dri".into()]);
+    }
+    args.push(image_id);
+    args.push(
+        if gpu_host {
+            "androidboot.redroid_gpu_mode=host".to_string()
+        } else {
+            "androidboot.redroid_gpu_mode=guest".to_string()
+        },
+    );
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut r = util::run_command_timeout(&docker_bin(), &arg_refs, Duration::from_secs(120));
     let run_ok = r.success;
@@ -2637,6 +2966,18 @@ mod tests {
     #[test]
     fn parse_stats_summary_line_keeps_the_legacy_two_column_format() {
         assert_eq!(parse_stats_summary_line("12.5%\t6.25%"), Some((12.5, 6.25)));
+    }
+
+    #[test]
+    fn dns_pool_rotates_by_adb_port_modulo() {
+        // Pool indexed by adb_port % 3 over [1.1.1.1, 8.8.8.8, 9.9.9.9].
+        assert_eq!(dns_for_port(5555), "9.9.9.9"); // 5555 % 3 == 2
+        assert_eq!(dns_for_port(5556), "1.1.1.1"); // 5556 % 3 == 0
+        assert_eq!(dns_for_port(5557), "8.8.8.8"); // 5557 % 3 == 1
+        // The pool only contains the three documented resolvers.
+        for port in [0u16, 1, 2, 5555, 5558, 6000, 65535] {
+            assert!(matches!(dns_for_port(port), "1.1.1.1" | "8.8.8.8" | "9.9.9.9"));
+        }
     }
 
     #[test]

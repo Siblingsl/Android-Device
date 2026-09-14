@@ -119,6 +119,7 @@ export function AppLayout() {
   const refreshDevices = useAppStore((s) => s.refreshDevices);
   const devices = useAppStore((s) => s.devices);
   const language = useAppStore((s) => s.settings?.language);
+  const closeToTray = useAppStore((s) => Boolean(s.settings?.closeToTray));
   const booted = useRef(false);
   const restoredArrangementIds = useRef(new Set<string>());
   const pageKey = location.pathname.startsWith("/devices/")
@@ -248,17 +249,17 @@ export function AppLayout() {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!closeToTray) return;
     const appWindow = getCurrentWindow();
     let dispose: (() => void) | undefined;
     void appWindow.onCloseRequested(async (event) => {
-      if (!useAppStore.getState().settings?.closeToTray) return;
       event.preventDefault();
       await appWindow.hide();
     }).then((unlisten) => { dispose = unlisten; }).catch(() => {
       /* Browser preview and unsupported shells have no native close event. */
     });
     return () => dispose?.();
-  }, []);
+  }, [closeToTray]);
 
   useEffect(() => {
     if (!useAppStore.getState().settings?.edgeHide) return;

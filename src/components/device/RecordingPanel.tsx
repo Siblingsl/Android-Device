@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { DeviceService } from "../../services/deviceService";
 import type { RecordingSession } from "../../types";
 import { Button } from "../ui/Button";
+import { useI18n } from "../../i18n";
 
 type Mode = "video" | "audio" | "av" | "camera" | "camera-record" | "otg";
 type OtgGamepad = "" | "disabled" | "uhid" | "aoa";
@@ -14,16 +15,17 @@ interface Props {
   setStatusText: (text: string) => void;
 }
 
-const MODES: Array<{ value: Mode; label: string }> = [
-  { value: "video", label: "屏幕录制" },
-  { value: "audio", label: "仅录音" },
-  { value: "av", label: "音视频" },
-  { value: "camera", label: "摄像头镜像" },
-  { value: "camera-record", label: "摄像头录制" },
-  { value: "otg", label: "OTG 输入" },
+const MODES: Array<{ value: Mode; key: string }> = [
+  { value: "video", key: "detail.recording.mode.video" },
+  { value: "audio", key: "detail.recording.mode.audio" },
+  { value: "av", key: "detail.recording.mode.av" },
+  { value: "camera", key: "detail.recording.mode.camera" },
+  { value: "camera-record", key: "detail.recording.mode.cameraRecord" },
+  { value: "otg", key: "detail.recording.mode.otg" },
 ];
 
 export function RecordingPanel({ serial, online, setStatusText }: Props) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<Mode>("video");
   const [session, setSession] = useState<RecordingSession>({
     serial,
@@ -45,6 +47,9 @@ export function RecordingPanel({ serial, online, setStatusText }: Props) {
   const [recordFormat, setRecordFormat] = useState("");
   const [recordOrientation, setRecordOrientation] = useState("");
   const [otgGamepad, setOtgGamepad] = useState<OtgGamepad>("");
+
+  const modeLabel = (value: Mode) =>
+    t(MODES.find((item) => item.value === value)?.key ?? "detail.recording.mode.video");
 
   useEffect(() => {
     let disposed = false;
@@ -85,13 +90,13 @@ export function RecordingPanel({ serial, online, setStatusText }: Props) {
       otgGamepad,
     );
     setSession(next);
-    setStatusText(next.status === "running" ? `已开始${MODES.find((item) => item.value === mode)?.label}` : next.message);
+    setStatusText(next.status === "running" ? t("detail.recording.started", { mode: modeLabel(mode) }) : next.message);
   };
 
   const stop = async () => {
     const result = await DeviceService.recordingStop(serial);
-    setSession((current) => ({ ...current, status: result.success ? "stopped" : "error", message: result.success ? "录制已停止" : result.stderr || result.stdout || "停止录制失败" }));
-    setStatusText(result.success ? "录制已停止" : result.stderr || result.stdout || "停止录制失败");
+    setSession((current) => ({ ...current, status: result.success ? "stopped" : "error", message: result.success ? t("detail.recording.stoppedMsg") : result.stderr || result.stdout || t("detail.recording.stopFailed") }));
+    setStatusText(result.success ? t("detail.recording.stoppedMsg") : result.stderr || result.stdout || t("detail.recording.stopFailed"));
   };
 
   const chooseDirectory = async () => {
@@ -106,11 +111,11 @@ export function RecordingPanel({ serial, online, setStatusText }: Props) {
   const otg = mode === "otg";
 
   return (
-    <section className="module recording-panel" aria-label="录制与设备输入">
+    <section className="module recording-panel" aria-label={t("detail.recording.title")}>
       <div className="module-head">
-        <div className="module-title">录制与设备输入</div>
+        <div className="module-title">{t("detail.recording.title")}</div>
         <span className={`badge ${running ? "online" : session.status === "error" ? "offline" : "info"}`}>
-          {running ? "进行中" : session.status === "error" ? "失败" : "已停止"}
+          {running ? t("detail.recording.running") : session.status === "error" ? t("detail.recording.error") : t("detail.recording.idle")}
         </span>
       </div>
       <div className="recording-panel-body">
@@ -124,7 +129,7 @@ export function RecordingPanel({ serial, online, setStatusText }: Props) {
               onClick={() => setMode(item.value)}
             >
               {item.value === "audio" ? <Mic size={13} /> : <Video size={13} />}
-              {item.label}
+              {t(item.key)}
             </button>
           ))}
         </div>
@@ -132,33 +137,33 @@ export function RecordingPanel({ serial, online, setStatusText }: Props) {
           <div className="recording-options">
             {mode !== "camera" ? (
               <div className="field">
-                <label>输出文件（留空使用设置中的录制目录）</label>
+                <label>{t("detail.recording.outputLabel")}</label>
                 <div className="row">
-                  <input value={outputPath} disabled={running} onChange={(event) => setOutputPath(event.target.value)} placeholder="自动生成文件名" />
-                  <Button size="sm" variant="ghost" disabled={running} icon={<FolderOpen size={13} />} onClick={() => void chooseDirectory()}>目录</Button>
+                  <input value={outputPath} disabled={running} onChange={(event) => setOutputPath(event.target.value)} placeholder={t("detail.recording.outputPlaceholder")} />
+                  <Button size="sm" variant="ghost" disabled={running} icon={<FolderOpen size={13} />} onClick={() => void chooseDirectory()}>{t("detail.recording.chooseDir")}</Button>
                 </div>
               </div>
             ) : (
-              <div className="notice">摄像头镜像直接打开设备画面，不生成录制文件。</div>
+              <div className="notice">{t("detail.recording.cameraNotice")}</div>
             )}
             {(mode === "camera" || mode === "camera-record") && (
               <div className="row recording-camera-options">
-                <label>摄像头<select value={cameraFacing} disabled={running || Boolean(cameraId.trim())} onChange={(event) => setCameraFacing(event.target.value)}><option value="back">后置</option><option value="front">前置</option><option value="external">外接</option></select></label>
-                <label>摄像头 ID<input value={cameraId} disabled={running} onChange={(event) => setCameraId(event.target.value)} placeholder="默认" /></label>
-                <label>画面比例<input value={cameraAr} disabled={running} onChange={(event) => setCameraAr(event.target.value)} placeholder="例如 4:3" /></label>
-                <label>分辨率<input value={cameraSize} disabled={running} onChange={(event) => setCameraSize(event.target.value)} placeholder="1920x1080" /></label>
+                <label>{t("detail.recording.camera")}<select value={cameraFacing} disabled={running || Boolean(cameraId.trim())} onChange={(event) => setCameraFacing(event.target.value)}><option value="back">{t("detail.recording.back")}</option><option value="front">{t("detail.recording.front")}</option><option value="external">{t("detail.recording.external")}</option></select></label>
+                <label>{t("detail.recording.cameraId")}<input value={cameraId} disabled={running} onChange={(event) => setCameraId(event.target.value)} placeholder={t("detail.recording.default")} /></label>
+                <label>{t("detail.recording.aspect")}<input value={cameraAr} disabled={running} onChange={(event) => setCameraAr(event.target.value)} placeholder="4:3" /></label>
+                <label>{t("detail.recording.resolution")}<input value={cameraSize} disabled={running} onChange={(event) => setCameraSize(event.target.value)} placeholder="1920x1080" /></label>
                 <label>FPS<input type="number" min={1} max={240} value={cameraFps} disabled={running} onChange={(event) => setCameraFps(Math.max(1, Number(event.target.value) || 30))} /></label>
-                <label>变焦<input type="number" min={0} max={100} step={0.1} value={cameraZoom ?? ""} disabled={running} onChange={(event) => setCameraZoom(event.target.value === "" ? null : Number(event.target.value))} placeholder="设备支持时可用" /></label>
-                <label className="row"><input type="checkbox" checked={cameraTorch} disabled={running} onChange={(event) => setCameraTorch(event.target.checked)} />闪光灯</label>
-                <label className="row"><input type="checkbox" checked={cameraHighSpeed} disabled={running} onChange={(event) => setCameraHighSpeed(event.target.checked)} />高速</label>
+                <label>{t("detail.recording.zoom")}<input type="number" min={0} max={100} step={0.1} value={cameraZoom ?? ""} disabled={running} onChange={(event) => setCameraZoom(event.target.value === "" ? null : Number(event.target.value))} placeholder={t("detail.recording.zoomHint")} /></label>
+                <label className="row"><input type="checkbox" checked={cameraTorch} disabled={running} onChange={(event) => setCameraTorch(event.target.checked)} />{t("detail.recording.torch")}</label>
+                <label className="row"><input type="checkbox" checked={cameraHighSpeed} disabled={running} onChange={(event) => setCameraHighSpeed(event.target.checked)} />{t("detail.recording.highSpeed")}</label>
               </div>
             )}
             {mode !== "camera" && (
               <>
-                <label className="recording-limit">时长限制（秒，0 为不限）<input type="number" min={0} max={86400} value={timeLimit} disabled={running} onChange={(event) => setTimeLimit(Math.max(0, Number(event.target.value) || 0))} /></label>
+                <label className="recording-limit">{t("detail.recording.limitLabel")}<input type="number" min={0} max={86400} value={timeLimit} disabled={running} onChange={(event) => setTimeLimit(Math.max(0, Number(event.target.value) || 0))} /></label>
                 <div className="row recording-format-options">
-                  <label>录制格式<select value={recordFormat} disabled={running} onChange={(event) => setRecordFormat(event.target.value)}><option value="">按文件名</option><option value="mp4">MP4</option><option value="mkv">MKV</option>{mode === "audio" && <><option value="mka">MKA</option><option value="m4a">M4A</option><option value="opus">Opus</option><option value="aac">AAC</option><option value="flac">FLAC</option><option value="wav">WAV</option></>}</select></label>
-                  <label>录制方向<select value={recordOrientation} disabled={running} onChange={(event) => setRecordOrientation(event.target.value)}><option value="">跟随屏幕</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+                  <label>{t("detail.recording.format")}<select value={recordFormat} disabled={running} onChange={(event) => setRecordFormat(event.target.value)}><option value="">{t("detail.recording.formatByExt")}</option><option value="mp4">MP4</option><option value="mkv">MKV</option>{mode === "audio" && <><option value="mka">MKA</option><option value="m4a">M4A</option><option value="opus">Opus</option><option value="aac">AAC</option><option value="flac">FLAC</option><option value="wav">WAV</option></>}</select></label>
+                  <label>{t("detail.recording.orientation")}<select value={recordOrientation} disabled={running} onChange={(event) => setRecordOrientation(event.target.value)}><option value="">{t("detail.recording.followScreen")}</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
                 </div>
               </>
             )}
@@ -166,20 +171,20 @@ export function RecordingPanel({ serial, online, setStatusText }: Props) {
         )}
         {otg && (
           <div className="recording-otg-options">
-            <label>游戏手柄模式
+            <label>{t("detail.recording.gamepad")}
               <select value={otgGamepad} disabled={running} onChange={(event) => setOtgGamepad(event.target.value as OtgGamepad)}>
-                <option value="">默认（禁用）</option>
-                <option value="disabled">禁用</option>
+                <option value="">{t("detail.recording.gamepadDefault")}</option>
+                <option value="disabled">{t("detail.recording.gamepadDisabled")}</option>
                 <option value="uhid">UHID</option>
                 <option value="aoa">AOA</option>
               </select>
             </label>
-            <span className="muted">OTG 不传输画面和音频，只转发输入。</span>
+            <span className="muted">{t("detail.recording.otgHint")}</span>
           </div>
         )}
         <div className="row recording-actions">
-          {running ? <Button variant="danger" icon={<CircleStop size={14} />} onClick={() => void stop()}>停止</Button> : <Button variant="primary" disabled={!online} onClick={() => void start()}>{otg ? "启动 OTG" : "开始"}</Button>}
-          <span className="muted recording-message">{session.message || (online ? "可开始新的会话" : "设备离线，需在线")}</span>
+          {running ? <Button variant="danger" icon={<CircleStop size={14} />} onClick={() => void stop()}>{t("detail.recording.stop")}</Button> : <Button variant="primary" disabled={!online} onClick={() => void start()}>{otg ? t("detail.recording.startOtg") : t("detail.recording.start")}</Button>}
+          <span className="muted recording-message">{session.message || (online ? t("detail.recording.ready") : t("detail.recording.offline"))}</span>
           {session.outputPath && <button type="button" className="mono muted recording-output" onClick={() => void DeviceService.revealInFolder(session.outputPath)}>{session.outputPath}</button>}
         </div>
       </div>

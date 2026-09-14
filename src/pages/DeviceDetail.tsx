@@ -81,13 +81,19 @@ import { openTerminalWindow } from "../lib/terminalWindow";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type {
+  AdversarialAudit,
   AppInfo,
+  BatteryState,
+  CloakStatus,
   DeviceMonitorPreset,
   DeviceInfo,
   FileEntry,
+  GeoCheck,
   LsposedScopeReport,
   MonitorQuietHours,
   RootStatus,
+  SpoofIdentity,
+  SpoofProfileSummary,
   SuPolicyEntry,
   FileTransferProgress,
   ScrcpyCameraOptions,
@@ -315,6 +321,33 @@ export function DeviceDetail() {
     }
   }, [tab]);
 
+  // Battery curve auto refresh — every 5 minutes while the page is open.
+  // Per-device opt-in lives in the Settings-tab draft (batterySpoof=1) and
+  // the global switch lives in appSettings; both are re-read each tick so a
+  // toggle takes effect without remounting. Cleared on unmount / device change.
+  const batteryAutoRefreshEnabledRef = useRef(true);
+  batteryAutoRefreshEnabledRef.current = appSettings?.batteryAutoRefresh !== false;
+  const batterySerial = device?.serial || "";
+  const batteryOnline = Boolean(device?.online && device?.adbStatus === "device");
+  useEffect(() => {
+    if (!batterySerial || !batteryOnline) return;
+    const timer = window.setInterval(() => {
+      if (!batteryAutoRefreshEnabledRef.current) return;
+      let enabled = false;
+      try {
+        const raw = sessionStorage.getItem(`rdc.settings.draft.${batterySerial}`);
+        enabled =
+          Boolean(raw) &&
+          (JSON.parse(raw ?? "{}") as Record<string, string>).batterySpoof === "1";
+      } catch {
+        enabled = false;
+      }
+      if (!enabled) return;
+      void DeviceService.applyBatteryPolicy(batterySerial).catch(() => undefined);
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [batterySerial, batteryOnline]);
+
   useEffect(() => {
     loadSequence.invalidate();
     refreshInFlight.current = false;
@@ -523,6 +556,7 @@ export function DeviceDetail() {
             <Button
               variant="primary"
               loading={connecting}
+              disabled={connecting}
               onClick={() => {
                 autoTried.current = "";
                 void connectIfNeeded(device);
@@ -663,8 +697,10 @@ export function DeviceDetail() {
               onAutoRefreshChange={setAutoRefresh}
               onRefresh={() => void load()}
             />
-            <Overview device={device} onOpenTab={setTab} />
-            <RootPanel device={device} />
+            <div className="detail-overview-panes">
+              <Overview device={device} onOpenTab={setTab} />
+              <RootPanel device={device} />
+            </div>
           </>
         )}
         {tab === "control" && (
@@ -853,6 +889,7 @@ function RootPanel({ device }: { device: DeviceInfo }) {
 
   return (
     <Card
+      className="detail-module detail-root-module"
       title={t("detail.root.title")}
       action={
         <div className="row" style={{ flexWrap: "wrap" }}>
@@ -1239,7 +1276,7 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
   ];
   return (
     <Card
-      className="detail-module"
+      className="detail-module detail-overview-module"
       title={t("detail.overview.title")}
       action={
         <div className="row" style={{ flexWrap: "wrap" }}>
@@ -1435,6 +1472,7 @@ function Control({
   const scrcpySequence = useRef(createRequestSequence()).current;
   const previewSequence = useRef(createRequestSequence()).current;
   const { w: screenW, h: screenH } = parseResolution(resolution);
+  const isLandscape = screenW > screenH;
   previewRef.current = Boolean(previewState.image);
   livePreviewRef.current = livePreview;
 
@@ -1478,13 +1516,17 @@ function Control({
   };
 
   useEffect(() => {
+    if (disabled) {
+      scrcpySequence.invalidate();
+      return;
+    }
     void syncScrcpy();
-    const t = setInterval(() => void syncScrcpy(), 4000);
+    const timer = window.setInterval(() => void syncScrcpy(), 4000);
     return () => {
-      clearInterval(t);
+      window.clearInterval(timer);
       scrcpySequence.invalidate();
     };
-  }, [serial]);
+  }, [serial, disabled]);
 
   useEffect(() => {
     const onFs = () => {
@@ -1926,7 +1968,7 @@ function Control({
             recent: "recent",
           };
           const mappedAction = mapped[action as keyof typeof mapped];
-          if (mappedAction) runControlAction(mappedAction, mappedAction === "rotate" ? true : undefined);
+          if (mappedAction) runControlAction(mappedAction, mappedAction === "rotate" ? !isLandscape : undefined);
         }}
       />
       <div className="detail-control-workspace split-control control-workbench">
@@ -1996,7 +2038,7 @@ function Control({
             void el.requestFullscreen().catch((e) => setStatusText(String(e)));
           }
         }}
-        onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, true), "rotate")}
+        onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, !isLandscape), "rotate")}
       />
 
       <div className="control-action-dock" aria-label={t("detail.control.panelTitle")}>
@@ -2107,7 +2149,7 @@ function Control({
           />
         </ControlActionShelf>
         <ControlActionShelf
-          label="ADB Shell"
+          label={t("terminal.title")}
           open={openShelves.terminal}
           onToggle={(open) => setShelfOpen("terminal", open)}
         >
@@ -3816,6 +3858,8 @@ function DeviceSettings({
   const [scrcpyArgs, setScrcpyArgs] = useState(draft.scrcpyArgs || "--max-size 1080 --video-bit-rate 8M");
   const [proxyInput, setProxyInput] = useState(draft.proxy || "");
   const [proxyCurrent, setProxyCurrent] = useState<string>("");
+  const [proxyOriginal, setProxyOriginal] = useState<string>("");
+  const [transparentRunning, setTransparentRunning] = useState(false);
   const settings = useAppStore((s) => s.settings);
   const saveSettings = useAppStore((s) => s.saveSettings);
   const navigate = useNavigate();
@@ -3825,21 +3869,25 @@ function DeviceSettings({
 
   useEffect(() => {
     try {
+      // Merge instead of overwrite: SpoofCard also stores per-device fields
+      // (batterySpoof) under the same draft key.
       sessionStorage.setItem(
         draftKey,
         JSON.stringify({
+          ...readDraft(),
           resolution,
           dpi,
           lang,
           adbPort,
           scrcpyArgs,
+          proxy: proxyInput,
           autoStart: autoStart ? "1" : "0",
         }),
       );
     } catch {
       /* ignore */
     }
-  }, [draftKey, resolution, dpi, lang, adbPort, scrcpyArgs, autoStart]);
+  }, [draftKey, resolution, dpi, lang, adbPort, scrcpyArgs, proxyInput, autoStart]);
 
   useEffect(() => {
     if (!settings) return;
@@ -3848,11 +3896,12 @@ function DeviceSettings({
 
   useEffect(() => {
     let cancelled = false;
-    void DeviceService.shell(serial, "settings get global http_proxy")
-      .then((r) => {
+    void DeviceService.getDeviceProxyStatus(serial)
+      .then((s) => {
         if (cancelled) return;
-        const v = (r.stdout || "").trim();
-        setProxyCurrent(v && v !== ":0" && v.toLowerCase() !== "null" ? v : "");
+        setProxyCurrent(s.httpProxy || "");
+        setProxyOriginal(s.original || "");
+        setTransparentRunning(Boolean(s.transparentRunning));
       })
       .catch(() => {});
     return () => {
@@ -3953,27 +4002,40 @@ function DeviceSettings({
           </Button>
         </div>
         <div className="field">
-          <label>{t("detail.settings.proxy")}</label>
+          <label>{t("detail.settings.egress")}</label>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             {proxyCurrent
               ? t("detail.settings.proxyCurrent", { addr: proxyCurrent })
               : t("detail.settings.proxyNone")}
+            {proxyOriginal && proxyOriginal !== proxyCurrent
+              ? ` · ${t("detail.settings.proxyRecorded", { addr: proxyOriginal })}`
+              : ""}
+            {transparentRunning
+              ? ` · ${t("detail.settings.transparentRunning")}`
+              : ""}
           </div>
           <input
             value={proxyInput}
             onChange={(e) => setProxyInput(e.target.value)}
-            placeholder={t("detail.settings.proxyPlaceholder")}
+            placeholder={t("detail.settings.egressPlaceholder")}
           />
+          {/^socks5:\/\//i.test(proxyInput.trim()) && (
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              {t("detail.settings.proxySocks5Hint")}
+            </div>
+          )}
           <div className="row" style={{ marginTop: 8 }}>
             <Button
               size="sm"
               variant="primary"
-              disabled={!/^[\w.-]+:\d{2,5}$/.test(proxyInput.trim())}
+              disabled={
+                !/^(http:\/\/|socks5:\/\/)?[\w:@.-]+:\d{2,5}$/i.test(proxyInput.trim())
+              }
               onClick={async () => {
                 const v = proxyInput.trim();
-                const r = await DeviceService.shell(serial, `settings put global http_proxy ${v}`);
+                const r = await DeviceService.applyDeviceProxy(serial, v);
                 if (r.success) {
-                  setProxyCurrent(v);
+                  setProxyCurrent(v.replace(/^[a-z]+:\/\//i, "").replace(/^.*@/, ""));
                   setStatusText(t("detail.settings.proxyApplied", { addr: v }));
                   onApplied?.();
                 } else {
@@ -3987,11 +4049,12 @@ function DeviceSettings({
             </Button>
             <Button
               size="sm"
-              disabled={!proxyCurrent}
+              disabled={!proxyCurrent && !transparentRunning}
               onClick={async () => {
-                const r = await DeviceService.shell(serial, "settings put global http_proxy :0");
+                const r = await DeviceService.clearDeviceProxy(serial);
                 if (r.success) {
                   setProxyCurrent("");
+                  setProxyOriginal("");
                   setStatusText(t("detail.settings.proxyCleared"));
                   onApplied?.();
                 } else {
@@ -4003,6 +4066,51 @@ function DeviceSettings({
             >
               {t("detail.settings.proxyClearBtn")}
             </Button>
+            {settings?.tun2socksPath?.trim() ? (
+              transparentRunning ? (
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    const r = await DeviceService.stopTransparentProxy(serial);
+                    if (r.success) {
+                      setTransparentRunning(false);
+                      setStatusText(t("detail.settings.transparentStopped"));
+                    } else {
+                      const reason = (r.stderr || r.stdout || t("detail.settings.proxyFailed")).trim();
+                      setStatusText(reason);
+                      void alert(reason);
+                    }
+                  }}
+                >
+                  {t("detail.settings.transparentStop")}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={
+                    !/^(http:\/\/|socks5:\/\/)?[\w:@.-]+:\d{2,5}$/i.test(proxyInput.trim())
+                  }
+                  onClick={async () => {
+                    const v = proxyInput.trim();
+                    const r = await DeviceService.applyTransparentProxy(serial, v);
+                    if (r.success) {
+                      setTransparentRunning(true);
+                      setStatusText(t("detail.settings.transparentStarted"));
+                    } else {
+                      const reason = (r.stderr || r.stdout || t("detail.settings.proxyFailed")).trim();
+                      setStatusText(reason);
+                      void alert(reason);
+                    }
+                  }}
+                >
+                  {t("detail.settings.transparentStart")}
+                </Button>
+              )
+            ) : (
+              <div className="muted" style={{ fontSize: 11, alignSelf: "center" }}>
+                {t("detail.settings.tun2socksMissing")}
+              </div>
+            )}
           </div>
         </div>
         <div className="field">
@@ -4175,6 +4283,752 @@ function DeviceSettings({
         </Button>
       </div>
     </Card>
+    <SpoofCard serial={serial} deviceId={deviceId} disabled={offline} />
+    <AuditCard serial={serial} disabled={offline} />
     </fieldset>
+  );
+}
+
+function SpoofCard({
+  serial,
+  deviceId,
+  disabled,
+}: {
+  serial: string;
+  deviceId: string;
+  disabled: boolean;
+}) {
+  const setStatusText = useAppStore((s) => s.setStatusText);
+  const { t } = useI18n();
+  const [identity, setIdentity] = useState<SpoofIdentity | null>(null);
+  const [profiles, setProfiles] = useState<SpoofProfileSummary[]>([]);
+  const [profileId, setProfileId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [restartSuggested, setRestartSuggested] = useState(false);
+  const [cloakStatus, setCloakStatus] = useState<CloakStatus | null>(null);
+  const [cloakBusy, setCloakBusy] = useState(false);
+  const [nativeBusy, setNativeBusy] = useState(false);
+  const [seedBusy, setSeedBusy] = useState(false);
+  const [geoCheck, setGeoCheck] = useState<GeoCheck | null>(null);
+  const [geoBusy, setGeoBusy] = useState(false);
+  const identitySequence = useRef(createRequestSequence()).current;
+  const cloakSequence = useRef(createRequestSequence()).current;
+
+  // Battery spoofing — per-device opt-in stored in the same session draft the
+  // Settings tab uses (`rdc.settings.draft.<serial>`), field `batterySpoof`.
+  const draftKey = `rdc.settings.draft.${serial}`;
+  const readDraft = () => {
+    try {
+      const raw = sessionStorage.getItem(draftKey);
+      return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  };
+  const [batterySpoof, setBatterySpoof] = useState(() => readDraft().batterySpoof === "1");
+  const [batteryState, setBatteryState] = useState<BatteryState | null>(null);
+  const [batteryBusy, setBatteryBusy] = useState(false);
+
+  useEffect(() => {
+    setBatteryState(null);
+    if (disabled) return;
+    let cancelled = false;
+    // get_battery_state is computed host-side from the serial — no device I/O.
+    void DeviceService.getBatteryState(serial)
+      .then((state) => {
+        if (!cancelled) setBatteryState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [serial, disabled]);
+
+  const toggleBatterySpoof = (on: boolean) => {
+    setBatterySpoof(on);
+    try {
+      sessionStorage.setItem(
+        draftKey,
+        JSON.stringify({ ...readDraft(), batterySpoof: on ? "1" : "0" }),
+      );
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const applyBatteryNow = async () => {
+    if (batteryBusy || disabled) return;
+    setBatteryBusy(true);
+    try {
+      const r = await DeviceService.applyBatteryPolicy(serial);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.battery.offlineHint")).trim();
+        setStatusText(t("detail.battery.applyFailed", { reason }));
+        void alert(reason);
+        return;
+      }
+      setStatusText(t("detail.battery.applied", { level: batteryState?.level ?? "—" }));
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.battery.applyFailed", { reason }));
+      void alert(reason);
+    } finally {
+      setBatteryBusy(false);
+    }
+  };
+
+  const batteryStatusLabel = batteryState
+    ? batteryState.status === 2
+      ? t("detail.battery.state.charging")
+      : batteryState.status === 3
+        ? t("detail.battery.state.discharging")
+        : batteryState.status === 5
+          ? t("detail.battery.state.full")
+          : t("detail.battery.state.notCharging")
+    : "—";
+
+  const loadIdentity = async () => {
+    if (disabled) return;
+    const token = identitySequence.begin();
+    setLoading(true);
+    try {
+      const next = await DeviceService.getSpoofIdentity(serial);
+      if (!identitySequence.isCurrent(token)) return;
+      setIdentity(next);
+    } catch {
+      if (!identitySequence.isCurrent(token)) return;
+      setIdentity(null);
+    } finally {
+      if (!identitySequence.isCurrent(token)) return;
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    identitySequence.invalidate();
+    setIdentity(null);
+    setRestartSuggested(false);
+    if (disabled) return;
+    void loadIdentity();
+    return () => identitySequence.invalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial, disabled]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void DeviceService.listSpoofProfiles()
+      .then((p) => {
+        if (!cancelled) setProfiles(p);
+      })
+      .catch(() => {
+        /* profile list is best-effort for the picker */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const loadCloakStatus = async () => {
+    if (disabled) return;
+    const token = cloakSequence.begin();
+    try {
+      const next = await DeviceService.getCloakStatus(serial);
+      if (!cloakSequence.isCurrent(token)) return;
+      setCloakStatus(next);
+    } catch {
+      if (!cloakSequence.isCurrent(token)) return;
+      setCloakStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    cloakSequence.invalidate();
+    setCloakStatus(null);
+    if (disabled) return;
+    void loadCloakStatus();
+    return () => cloakSequence.invalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial, disabled]);
+
+  const apply = async () => {
+    if (!profileId || applying) return;
+    setApplying(true);
+    setStatusText(t("detail.spoof.applying", { id: profileId }));
+    try {
+      const r = await DeviceService.applySpoofProfile(serial, profileId);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.spoof.applyFailed")).trim();
+        setStatusText(reason);
+        void alert(reason);
+        return;
+      }
+      setStatusText(t("detail.spoof.applied"));
+      setRestartSuggested(true);
+      await loadIdentity();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(reason);
+      void alert(reason);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const reapply = async () => {
+    if (applying) return;
+    setApplying(true);
+    setStatusText(t("detail.spoof.reapplying"));
+    try {
+      const r = await DeviceService.magiskApplySpoof(serial);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.spoof.reapplyFailed")).trim();
+        setStatusText(reason);
+        void alert(reason);
+        return;
+      }
+      setStatusText(t("detail.spoof.reapplied"));
+      await loadIdentity();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(reason);
+      void alert(reason);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const matchedProfile = profiles.find((p) => p.id === identity?.matchedProfileId) ?? null;
+
+  const targetCloakProfileId = profileId || identity?.matchedProfileId || "redmi-k40-alioth";
+
+  const installCloak = async () => {
+    if (cloakBusy) return;
+    setCloakBusy(true);
+    setStatusText(t("detail.cloak.install"));
+    try {
+      const r = await DeviceService.installCloakModule(serial);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.cloak.installFailed")).trim();
+        setStatusText(t("detail.cloak.installFailed", { reason }));
+        void alert(reason);
+        return;
+      }
+      setStatusText(t("detail.cloak.installed"));
+      await loadCloakStatus();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.cloak.installFailed", { reason }));
+      void alert(reason);
+    } finally {
+      setCloakBusy(false);
+    }
+  };
+
+  const pushCloak = async () => {
+    if (cloakBusy) return;
+    setCloakBusy(true);
+    setStatusText(t("detail.cloak.pushConfig"));
+    try {
+      const r = await DeviceService.pushCloakConfig(serial, targetCloakProfileId);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.cloak.pushFailed")).trim();
+        setStatusText(t("detail.cloak.pushFailed", { reason }));
+        void alert(reason);
+        return;
+      }
+      setStatusText(t("detail.cloak.pushDone"));
+      await loadCloakStatus();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.cloak.pushFailed", { reason }));
+      void alert(reason);
+    } finally {
+      setCloakBusy(false);
+    }
+  };
+
+  const cloakStateLabel = cloakStatus
+    ? cloakStatus.enabled
+      ? t("detail.cloak.statusEnabled")
+      : cloakStatus.installed
+        ? t("detail.cloak.statusInstalled")
+        : t("detail.cloak.statusNotInstalled")
+    : t("detail.cloak.loading");
+
+  const installNativeCloak = async () => {
+    if (nativeBusy || disabled) return;
+    setNativeBusy(true);
+    setStatusText(t("detail.cloak.nativeInstalling"));
+    try {
+      const r = await DeviceService.installNativeCloak(serial);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.cloak.nativeFailed")).trim();
+        setStatusText(t("detail.cloak.nativeFailed", { reason }));
+        void alert(reason);
+        return;
+      }
+      setStatusText(t("detail.cloak.nativeInstalled"));
+      void alert((r.stdout || t("detail.cloak.nativeInstalled")).trim());
+      await loadCloakStatus();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.cloak.nativeFailed", { reason }));
+      void alert(reason);
+    } finally {
+      setNativeBusy(false);
+    }
+  };
+
+  const seedBaseline = async () => {
+    if (seedBusy || disabled) return;
+    setSeedBusy(true);
+    setStatusText(t("detail.cloak.seeding"));
+    try {
+      const r = await DeviceService.seedUsageBaseline(serial, targetCloakProfileId);
+      if (!r.success) {
+        const reason = (r.stderr || r.stdout || t("detail.cloak.seedFailed")).trim();
+        setStatusText(t("detail.cloak.seedFailed", { reason }));
+        void alert(reason);
+        return;
+      }
+      const warnings = r.stderr.trim();
+      setStatusText(t("detail.cloak.seeded"));
+      void alert(warnings ? `${(r.stdout || "").trim()}\n${warnings}` : (r.stdout || "").trim());
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.cloak.seedFailed", { reason }));
+      void alert(reason);
+    } finally {
+      setSeedBusy(false);
+    }
+  };
+
+  const runGeoCheck = async () => {
+    if (geoBusy || disabled) return;
+    setGeoBusy(true);
+    try {
+      const next = await DeviceService.geoConsistencyCheck(serial, targetCloakProfileId);
+      setGeoCheck(next);
+      setStatusText(
+        next.consistent
+          ? t("detail.geo.consistent")
+          : t("detail.geo.issuesFound", { n: next.issues.length }),
+      );
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.geo.failed", { reason }));
+      setGeoCheck(null);
+    } finally {
+      setGeoBusy(false);
+    }
+  };
+
+  return (
+    <Card className="detail-module detail-spoof-module" title={t("detail.spoof.title")}>
+      {loading ? (
+        <Skeleton count={3} height={16} />
+      ) : (
+        <>
+          <div className="form-grid" style={{ marginBottom: 10 }}>
+            <div className="field">
+              <label>{t("detail.spoof.brand")}</label>
+              <div className="mono" style={{ padding: "8px 0" }}>{identity?.brand || "—"}</div>
+            </div>
+            <div className="field">
+              <label>{t("detail.spoof.model")}</label>
+              <div className="mono" style={{ padding: "8px 0" }}>{identity?.model || "—"}</div>
+            </div>
+            <div className="field">
+              <label>{t("detail.spoof.marketName")}</label>
+              <div className="mono" style={{ padding: "8px 0" }}>{identity?.marketName || "—"}</div>
+            </div>
+            <div className="field">
+              <label>{t("detail.spoof.matchedProfile")}</label>
+              <div className="mono" style={{ padding: "8px 0", wordBreak: "break-all" }}>
+                {matchedProfile ? `${matchedProfile.marketName} (${matchedProfile.id})` : t("detail.spoof.unmatched")}
+              </div>
+            </div>
+            <div className="field" style={{ gridColumn: "1 / -1" }}>
+              <label>{t("detail.spoof.fingerprint")}</label>
+              <div className="mono" style={{ padding: "8px 0", wordBreak: "break-all" }}>
+                {identity?.fingerprint || "—"}
+              </div>
+            </div>
+          </div>
+
+          <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+            <select
+              value={profileId}
+              aria-label={t("detail.spoof.selectProfile")}
+              onChange={(e) => setProfileId(e.target.value)}
+              style={{ minWidth: 220, height: 30 }}
+            >
+              <option value="">{t("detail.spoof.selectProfile")}</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.marketName} · {p.model} ({p.id})
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="primary"
+              loading={applying}
+              disabled={!profileId}
+              onClick={() => void apply()}
+            >
+              {t("detail.spoof.apply")}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={applying} onClick={() => void reapply()}>
+              {t("detail.spoof.reapplyCurrent")}
+            </Button>
+          </div>
+
+          {restartSuggested && (
+            <div className="notice" style={{ marginTop: 10 }}>
+              {t("detail.spoof.restartHint")}
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={async () => {
+                    setStatusText(t("detail.status.restarting"));
+                    const r = await DeviceService.restart(deviceId);
+                    setStatusText(
+                      r.success ? t("detail.status.restartSent") : r.stderr || r.stdout || t("detail.status.restartFailed"),
+                    );
+                  }}
+                >
+                  {t("detail.spoof.restartNow")}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setRestartSuggested(false)}>
+                  {t("detail.spoof.later")}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="detail-cloak-section" style={{ marginTop: 14 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+              {t("detail.cloak.title")}
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <span className={`badge ${cloakStatus?.enabled ? "online" : cloakStatus?.installed ? "warn" : "muted"}`}>
+                {cloakStateLabel}
+              </span>
+              {cloakStatus?.enabled && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {t("detail.cloak.scopeCount", { n: cloakStatus.scopeCount })}
+                </span>
+              )}
+              {cloakStatus?.configPushed && (
+                <span className="ok" style={{ fontSize: 12 }}>
+                  {t("detail.cloak.configPushed")}
+                </span>
+              )}
+              {cloakStatus?.nativeInstalled && (
+                <span className="ok" style={{ fontSize: 12 }}>
+                  {t("detail.cloak.nativePresent")}
+                </span>
+              )}
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={cloakBusy}
+                disabled={disabled}
+                onClick={() => void installCloak()}
+              >
+                {t("detail.cloak.install")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={cloakBusy}
+                disabled={disabled}
+                onClick={() => void pushCloak()}
+              >
+                {t("detail.cloak.pushConfig")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={nativeBusy}
+                disabled={disabled}
+                onClick={() => void installNativeCloak()}
+              >
+                {t("detail.cloak.nativeInstall")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={seedBusy}
+                disabled={disabled}
+                onClick={() => void seedBaseline()}
+              >
+                {t("detail.cloak.seedBaseline")}
+              </Button>
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+              {t("detail.cloak.hint")}
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              {t("detail.cloak.nativeHint")}
+            </div>
+          </div>
+
+          <div className="detail-cloak-section" style={{ marginTop: 14 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+              {t("detail.geo.title")}
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={geoBusy}
+                disabled={disabled}
+                onClick={() => void runGeoCheck()}
+              >
+                {t("detail.geo.check")}
+              </Button>
+              {geoCheck && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {t("detail.geo.deviceValues", {
+                    timezone: geoCheck.deviceTimezone || "—",
+                    locale: geoCheck.deviceLocale || "—",
+                  })}
+                </span>
+              )}
+            </div>
+            {geoCheck && (
+              <div style={{ marginTop: 8 }}>
+                {geoCheck.issues.length === 0 ? (
+                  <div className="ok" style={{ fontSize: 12 }}>
+                    {t("detail.geo.consistent")}
+                  </div>
+                ) : (
+                  geoCheck.issues.map((issue, idx) => (
+                    <div key={`${issue.code}-${idx}`} className="bad" style={{ fontSize: 12, marginTop: 4 }}>
+                      {issue.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+            <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+              {t("detail.geo.hint")}
+            </div>
+          </div>
+
+          <div className="detail-cloak-section" style={{ marginTop: 14 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+              {t("detail.battery.title")}
+            </div>
+            <label className="row" style={{ gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={batterySpoof}
+                onChange={(e) => toggleBatterySpoof(e.target.checked)}
+              />
+              {t("detail.battery.toggle")}
+            </label>
+            <div className="row" style={{ flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 8 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {t("detail.battery.level")}: {batteryState ? `${batteryState.level}%` : "—"}
+              </span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {t("detail.battery.state")}: {batteryStatusLabel}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={batteryBusy}
+                disabled={disabled}
+                onClick={() => void applyBatteryNow()}
+              >
+                {t("detail.battery.applyNow")}
+              </Button>
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+              {t("detail.battery.refreshHint")}
+            </div>
+            {disabled && (
+              <div className="muted" style={{ fontSize: 11 }}>
+                {t("detail.battery.offlineHint")}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/** Stable check-id / category labels (static keys so i18n coverage sees them). */
+const AUDIT_CHECK_LABELS: Record<string, string> = {
+  cgroup: "detail.audit.check.cgroup",
+  qemu: "detail.audit.check.qemu",
+  cpuinfo: "detail.audit.check.cpuinfo",
+  version: "detail.audit.check.version",
+  gl: "detail.audit.check.gl",
+  sensors: "detail.audit.check.sensors",
+  fingerprint: "detail.audit.check.fingerprint",
+  securityPatch: "detail.audit.check.securityPatch",
+  mac: "detail.audit.check.mac",
+  hostname: "detail.audit.check.hostname",
+  dns: "detail.audit.check.dns",
+  telephony: "detail.audit.check.telephony",
+};
+
+const AUDIT_CATEGORY_LABELS: Record<string, string> = {
+  cgroup: "detail.audit.cat.cgroup",
+  props: "detail.audit.cat.props",
+  cpu: "detail.audit.cat.cpu",
+  kernel: "detail.audit.cat.kernel",
+  gl: "detail.audit.cat.gl",
+  sensors: "detail.audit.cat.sensors",
+  identity: "detail.audit.cat.identity",
+  attestation: "detail.audit.cat.attestation",
+  network: "detail.audit.cat.network",
+  telephony: "detail.audit.cat.telephony",
+};
+
+function AuditCard({ serial, disabled }: { serial: string; disabled: boolean }) {
+  const setStatusText = useAppStore((s) => s.setStatusText);
+  const { t } = useI18n();
+  const [profiles, setProfiles] = useState<SpoofProfileSummary[]>([]);
+  const [profileId, setProfileId] = useState("");
+  const [audit, setAudit] = useState<AdversarialAudit | null>(null);
+  const [running, setRunning] = useState(false);
+  const auditSequence = useRef(createRequestSequence()).current;
+
+  useEffect(() => {
+    let cancelled = false;
+    void DeviceService.listSpoofProfiles()
+      .then((list) => {
+        if (!cancelled) setProfiles(list);
+      })
+      .catch(() => {
+        /* profile list is best-effort for the expectation annotations */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    auditSequence.invalidate();
+    setAudit(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial]);
+
+  const runAudit = async () => {
+    if (running || disabled) return;
+    setRunning(true);
+    setStatusText(t("detail.audit.running"));
+    const token = auditSequence.begin();
+    try {
+      const next = await DeviceService.adversarialAudit(serial, profileId || undefined);
+      if (!auditSequence.isCurrent(token)) return;
+      setAudit(next);
+    } catch (e) {
+      if (!auditSequence.isCurrent(token)) return;
+      const reason = e instanceof Error ? e.message : String(e);
+      setStatusText(t("detail.audit.failed", { reason }));
+      void alert(reason);
+    } finally {
+      if (auditSequence.isCurrent(token)) setRunning(false);
+    }
+  };
+
+  const verdictLabel = (verdict: string) =>
+    verdict === "pass"
+      ? t("detail.audit.verdict.pass")
+      : verdict === "fail"
+        ? t("detail.audit.verdict.fail")
+        : t("detail.audit.verdict.unknown");
+
+  const verdictClass = (verdict: string) =>
+    verdict === "pass" ? "online" : verdict === "fail" ? "danger" : "warn";
+
+  const checkLabel = (id: string) => {
+    const key = AUDIT_CHECK_LABELS[id];
+    return key ? t(key) : id;
+  };
+
+  const categoryLabel = (category: string) => {
+    const key = AUDIT_CATEGORY_LABELS[category];
+    return key ? t(key) : category;
+  };
+
+  return (
+    <Card className="detail-module" title={t("detail.audit.title")}>
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <select
+          value={profileId}
+          aria-label={t("detail.audit.profile")}
+          onChange={(e) => setProfileId(e.target.value)}
+          style={{ minWidth: 200, height: 30 }}
+        >
+          <option value="">{t("detail.audit.profileNone")}</option>
+          {profiles.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.marketName} ({p.id})
+            </option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          variant="primary"
+          loading={running}
+          disabled={disabled}
+          onClick={() => void runAudit()}
+        >
+          {t("detail.audit.run")}
+        </Button>
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+        {t("detail.audit.description")}
+      </div>
+      {audit?.message ? (
+        <div className="notice" style={{ marginTop: 8 }}>
+          {audit.message}
+        </div>
+      ) : null}
+      {audit && audit.checks.length > 0 ? (
+        <div className="table-wrap detail-table-scroll" style={{ marginTop: 10 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{t("detail.audit.col.category")}</th>
+                <th>{t("detail.audit.col.check")}</th>
+                <th>{t("detail.audit.col.verdict")}</th>
+                <th>{t("detail.audit.col.detail")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {audit.checks.map((check) => (
+                <tr key={check.id}>
+                  <td>{categoryLabel(check.category)}</td>
+                  <td>{checkLabel(check.id)}</td>
+                  <td>
+                    <span className={`badge ${verdictClass(check.verdict)}`}>
+                      {verdictLabel(check.verdict)}
+                    </span>
+                  </td>
+                  <td style={{ wordBreak: "break-word" }}>{check.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+          {t("detail.audit.empty")}
+        </div>
+      )}
+    </Card>
   );
 }

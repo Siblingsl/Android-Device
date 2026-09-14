@@ -7,7 +7,7 @@ use crate::models::{
     AppInfo, DashboardData, DeviceInfo, DeviceTelemetry, FileEntry, ScreenshotResult, ShellResult,
     SystemStatus,
 };
-use crate::services::{adb, cache, docker, log, scrcpy, settings, transfer, util};
+use crate::services::{adb, cache, docker, log, scrcpy, settings, spoof, transfer, util};
 
 /// Fast device list — only adb devices -l + docker ps. No per-device shell probes.
 pub fn list_devices() -> Vec<DeviceInfo> {
@@ -94,6 +94,12 @@ pub fn list_devices_cached(force: bool) -> Vec<DeviceInfo> {
             adb_port,
             scrcpy_port: 0,
             data_volume: matched.map(|c| data_volume_of(&c.name)).unwrap_or_default(),
+            // adb devices -l already reports the effective `ro.product.model`
+            // (which the boot-time spoof rewrites). Only mark a *container* as
+            // spoofed when its model is not a default redroid/generic value;
+            // physical / LAN devices never carry a spoofedModel label here.
+            spoofed_model: (matched.is_some() && !spoof::looks_unspoofed_model(&d.model))
+                .then(|| d.model.clone()),
         });
     }
 
@@ -135,6 +141,7 @@ pub fn list_devices_cached(force: bool) -> Vec<DeviceInfo> {
             adb_port: port,
             scrcpy_port: 0,
             data_volume: data_volume_of(&c.name),
+            spoofed_model: None,
         });
     }
 
@@ -159,7 +166,9 @@ pub fn enrich_device(mut d: DeviceInfo) -> DeviceInfo {
         } else if let Some(v) = line.strip_prefix("MODEL=") {
             // Keep container instance name as primary title; model goes to cpu if empty later
             let _model = v.trim();
-            let _ = _model;
+            if !d.container_id.is_empty() && !spoof::looks_unspoofed_model(_model) {
+                d.spoofed_model = Some(_model.to_string());
+            }
         } else if let Some(v) = line.strip_prefix("ABI=") {
             d.cpu = v.trim().to_string();
         } else if let Some(v) = line.strip_prefix("SIZE=") {

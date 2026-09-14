@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Xposed 模块无需任何权限与组件；仅靠 assets/xposed_init 被 LSPosed 识别。 -->
+    <application
+        android:label="RDC DeviceCloak"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+</manifest>

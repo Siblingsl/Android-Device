@@ -1,0 +1,22 @@
+#!/sbin/sh
+
+#################
+# Initialization
+#################
+
+# Magisk module update-binary template (simplified). See the official
+# template in topjohnwu/Magisk for the full-featured version.
+
+umask 022
+
+# Load utility functions from Magisk
+OUTFD=$2
+ZIPFILE=$3
+
+mount /data 2>/dev/null
+
+[ -f /data/adb/magisk/util_functions.sh ] || exit 1
+. /data/adb/magisk/util_functions.sh
+
+install_module
+exit 0

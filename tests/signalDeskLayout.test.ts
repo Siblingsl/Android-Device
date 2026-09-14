@@ -13,7 +13,8 @@ describe("Signal Desk layout", () => {
     expect(detail).toContain('className="detail-context"');
     expect(detail).toContain('className="detail-tabbar"');
     expect(detail).toContain('className="detail-workspace"');
-    expect(detail).toContain('className="detail-module"');
+    expect(detail).toMatch(/className="[^"]*detail-module[^"]*"/);
+    expect(detail).toContain('className="detail-overview-panes"');
   });
 
   it("keeps all six detail tabs in the new tab rail", () => {
@@ -63,10 +64,17 @@ describe("Signal Desk layout", () => {
     expect(styles).toMatch(/\.status-bar/);
   });
 
-  it("keeps top-level feature pages in a single module flow", () => {
+  it("keeps top-level feature pages aligned in paired module columns", () => {
     for (const page of ["settings", "adb", "apk", "docker"]) {
-      expect(styles).toMatch(new RegExp(`\\.page-${page} \\.page-fade > div > \\.grid-2\\s*\\{[^}]*grid-template-columns: minmax\\(0, 1fr\\);`, "s"));
+      expect(styles).toMatch(new RegExp(`\\.page-${page} \\.page-fade > div > \\.grid-2\\s*\\{[^}]*grid-template-columns:(?! minmax\\(0, 1fr\\);)[^;]+;`, "s"));
     }
     expect(styles).toMatch(/\.page-dashboard \.grid-2\s*,[\s\S]*\.page-dashboard \.grid-3/);
+  });
+
+  it("keeps device columns aligned across the table header and rows", () => {
+    expect(styles).toMatch(/\.devices-table \{[^}]*table-layout:\s*fixed;/s);
+    expect(styles).toMatch(/\.devices-table \.device-list-table-head \{[^}]*display:\s*table-row;/s);
+    expect(styles).toMatch(/\.device-grid \{[^}]*grid-template-columns:\s*repeat\(auto-fit/s);
+    expect(styles).toMatch(/\.detail-overview-panes \{[^}]*grid-template-columns:/s);
   });
 });

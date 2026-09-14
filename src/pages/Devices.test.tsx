@@ -19,6 +19,9 @@ vi.mock("../services/deviceService", () => ({
     refreshDevices: vi.fn(),
     exportLogs: vi.fn(),
     revealInFolder: vi.fn(),
+    listSpoofProfiles: vi.fn(),
+    spoofProfileUsage: vi.fn(),
+    applySpoofProfile: vi.fn(),
   },
 }));
 const storeState = vi.hoisted(() => ({
@@ -92,6 +95,9 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.stop).mockReset();
     vi.mocked(DeviceService.exportLogs).mockReset();
     vi.mocked(DeviceService.revealInFolder).mockReset();
+    vi.mocked(DeviceService.listSpoofProfiles).mockReset();
+    vi.mocked(DeviceService.spoofProfileUsage).mockReset();
+    vi.mocked(DeviceService.applySpoofProfile).mockReset();
     vi.mocked(save).mockReset();
     vi.mocked(askConfirm).mockReset();
     vi.mocked(copyText).mockReset();
@@ -104,6 +110,12 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.exportLogs).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(DeviceService.revealInFolder).mockResolvedValue(undefined);
+    vi.mocked(DeviceService.listSpoofProfiles).mockResolvedValue([
+      { id: "redmi-k40-alioth", brand: "Xiaomi", manufacturer: "Xiaomi", model: "2210132C", marketName: "Redmi K40", androidVersion: "13", securityPatch: "2023-11-01", fingerprint: "fp", source: "builtin" },
+      { id: "captured-one", brand: "samsung", manufacturer: "samsung", model: "SM-S9110", marketName: "Galaxy S23", androidVersion: "14", securityPatch: "2023-12-01", fingerprint: "fp2", source: "captured" },
+    ]);
+    vi.mocked(DeviceService.applySpoofProfile).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.spoofProfileUsage).mockResolvedValue([]);
     vi.mocked(save).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(askConfirm).mockResolvedValue(true);
     vi.mocked(copyText).mockResolvedValue(undefined);
@@ -806,7 +818,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "restart" } });
 
     await waitFor(() => expect(DeviceService.restart).toHaveBeenCalledWith("one"));
@@ -824,7 +836,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "stop" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("停止设备 设备 one？"));
@@ -839,7 +851,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "stop" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("停止设备 设备 one？"));
@@ -855,7 +867,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "restart" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
@@ -869,7 +881,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "restart" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
@@ -889,7 +901,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "disconnect" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("断开设备 设备 one？"));
@@ -908,7 +920,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "disconnect" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("断开设备 设备 one？"));
@@ -925,7 +937,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "restart" } });
 
     await waitFor(() => expect(askConfirm).toHaveBeenCalledWith("重启设备 设备 one？"));
@@ -952,7 +964,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "restart" } });
 
     await waitFor(() => expect(DeviceService.restart).toHaveBeenCalledWith("one"));
@@ -975,7 +987,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "copy" } });
 
     await waitFor(() => expect(copyText).toHaveBeenCalledWith("one-serial"));
@@ -993,10 +1005,138 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const cardActions = screen.getAllByRole("combobox").slice(2);
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
     fireEvent.change(cardActions[0], { target: { value: "copy" } });
 
     await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("复制失败"));
     expect(storeState.setStatusText).toHaveBeenCalledWith("复制失败");
   });
+
+  it("shows batch spoof and applies the selected profile to each device", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量伪装" }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "选择伪装档案…" }), {
+      target: { value: "captured-one" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+
+    expect(await screen.findByText(/批量伪装 · 2\/2 成功/)).toBeTruthy();
+    expect(DeviceService.applySpoofProfile).toHaveBeenCalledTimes(2);
+  }, 15_000);
+
+  it("reports failed and successful batch spoof items", async () => {
+    vi.mocked(DeviceService.applySpoofProfile)
+      .mockRejectedValueOnce(new Error("仅容器实例支持热切换伪装档案"))
+      .mockResolvedValueOnce({ success: true, stdout: "", stderr: "", exitCode: 0 });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量伪装" }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "选择伪装档案…" }), {
+      target: { value: "captured-one" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+
+    expect(await screen.findByText(/批量伪装 · 1\/2 成功/)).toBeTruthy();
+    expect(
+      screen.getByRole("row", { name: /设备 one 失败 仅容器实例支持热切换伪装档案/ }),
+    ).toBeTruthy();
+    expect(screen.getByRole("row", { name: /设备 two 成功/ })).toBeTruthy();
+  }, 15_000);
+
+  it("rotates distinct profiles across the selected devices when rotation is checked", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole("button", { name: "批量伪装" }));
+
+    // Rotation mode: the single-profile select is disabled and not required.
+    fireEvent.click(screen.getByRole("checkbox", { name: "轮转分配不同档案" }));
+    expect((screen.getByRole("combobox", { name: "选择伪装档案…" }) as HTMLSelectElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+
+    expect(await screen.findByText(/批量伪装 · 2\/2 成功/)).toBeTruthy();
+    // Spoof profiles rotate in their listed order: builtin first, then captured.
+    expect(DeviceService.applySpoofProfile).toHaveBeenCalledTimes(2);
+    expect(DeviceService.applySpoofProfile).toHaveBeenNthCalledWith(1, "one-serial", "redmi-k40-alioth");
+    expect(DeviceService.applySpoofProfile).toHaveBeenNthCalledWith(2, "two-serial", "captured-one");
+    // Confirm dialog carries the assignment preview.
+    expect(askConfirm).toHaveBeenCalledWith(expect.stringContaining("redmi-k40-alioth"));
+  }, 15_000);
+
+  it("warns in the confirm dialog when the single profile is over-used", async () => {
+    vi.mocked(DeviceService.spoofProfileUsage).mockResolvedValue([
+      { profileId: "captured-one", count: 6 },
+    ]);
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    const checkboxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(screen.getByRole("button", { name: "批量伪装" }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "选择伪装档案…" }), {
+      target: { value: "captured-one" },
+    });
+    // Inline warning appears in the panel…
+    expect(screen.getByText(/该档案已被 6 台实例使用/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+
+    // …and the confirm dialog repeats it.
+    await waitFor(() =>
+      expect(askConfirm).toHaveBeenCalledWith(expect.stringContaining("指纹重复度过高")),
+    );
+  }, 15_000);
+
+  it("filters the list by cloud versus real devices and persists the choice", async () => {
+    vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      device("one"), // containerId: container-one → cloud instance
+      { ...device("two"), containerId: "" }, // no container → real device
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const kindFilter = screen.getByRole("combobox", { name: "云机/真机筛选" });
+
+    fireEvent.change(kindFilter, { target: { value: "cloud" } });
+    expect(screen.getByText("设备 one")).toBeTruthy();
+    expect(screen.queryByText("设备 two")).toBeNull();
+    await waitFor(() =>
+      expect(sessionStorage.getItem("rdc.devices.kindFilter")).toBe("cloud"),
+    );
+
+    fireEvent.change(kindFilter, { target: { value: "real" } });
+    expect(screen.getByText("设备 two")).toBeTruthy();
+    expect(screen.queryByText("设备 one")).toBeNull();
+
+    fireEvent.change(kindFilter, { target: { value: "all" } });
+    expect(screen.getByText("设备 one")).toBeTruthy();
+    expect(screen.getByText("设备 two")).toBeTruthy();
+  }, 15_000);
 });
