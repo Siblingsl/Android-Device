@@ -1,0 +1,135 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { SettingsPage } from "./Settings";
+import type { AppSettings } from "../types";
+
+vi.mock("../stores/appStore", () => {
+  const saveSettings = vi.fn(async (settings: AppSettings) => settings);
+  const loadSettings = vi.fn();
+  const state = {
+    settings: null as AppSettings | null,
+    devices: [] as unknown[],
+    saveSettings,
+    loadSettings,
+    setTheme: vi.fn(),
+    setStatusText: vi.fn(),
+  };
+  return {
+    useAppStore: (selector: (s: typeof state) => unknown) => selector(state),
+    __state: state,
+  };
+});
+vi.mock("../hooks/useToolProbe", () => ({
+  useToolProbe: () => ({
+    tools: {},
+    busy: false,
+    probe: vi.fn(),
+    probeMany: vi.fn(async () => ({ ok: 0, total: 0 })),
+  }),
+}));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn(async () => "0.0.0") }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
+vi.mock("../lib/dialogs", () => ({
+  askConfirm: vi.fn(async () => true),
+  alertMsg: vi.fn(),
+}));
+vi.mock("../lib/deviceMetadata", () => ({
+  getAllDeviceMetadata: () => ({}),
+  removeDeviceMetadata: () => false,
+}));
+vi.mock("../components/settings/ShortcutEditor", () => ({ ShortcutEditor: () => null }));
+vi.mock("../components/settings/ConfigTransfer", () => ({ ConfigTransfer: () => null }));
+vi.mock("../components/settings/UpdatePanel", () => ({ UpdatePanel: () => null }));
+vi.mock("../components/settings/SchedulerPanel", () => ({ SchedulerPanel: () => null }));
+
+const { __state } = (await import("../stores/appStore")) as unknown as {
+  __state: {
+    settings: AppSettings | null;
+    saveSettings: ReturnType<typeof vi.fn>;
+  };
+};
+
+const baseSettings: AppSettings = {
+  theme: "light",
+  language: "zh-CN",
+  autoUpdate: true,
+  logPath: "C:/logs",
+  screenshotPath: "C:/shots",
+  apkPath: "C:/apks",
+  proxy: "",
+  dockerPath: "docker",
+  adbPath: "adb",
+  scrcpyPath: "scrcpy",
+  gnirehtetPath: "gnirehtet",
+  recordingPath: "C:/rec",
+  resourceAlertThreshold: 85,
+  deviceRefreshIntervalSecs: 5,
+  deviceMonitorRules: {},
+  defaultTrack: "docker",
+};
+
+/** The track select has no htmlFor label; locate it through its label text. */
+function trackSelect() {
+  const field = screen.getByText("默认运行轨道").closest(".field") as HTMLElement;
+  return field.querySelector("select") as HTMLSelectElement;
+}
+
+/** The track card lives in the "高级" tab since the tabbed settings redesign. */
+async function openAdvancedTab() {
+  fireEvent.click(screen.getByRole("tab", { name: "高级" }));
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+describe("SettingsPage default runtime track", () => {
+  beforeEach(() => {
+    __state.settings = { ...baseSettings };
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the dropdown with the saved track", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openAdvancedTab();
+    const select = trackSelect();
+    expect(select.value).toBe("docker");
+    expect(screen.getByText("QEMU（实验性）")).toBeTruthy();
+  });
+
+  it("persists a switched default track through saveSettings", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openAdvancedTab();
+    fireEvent.change(trackSelect(), { target: { value: "qemu" } });
+    const save = screen.getByRole("button", { name: "保存" });
+    await act(async () => {
+      fireEvent.click(save);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(__state.saveSettings).toHaveBeenCalled());
+    const saved = __state.saveSettings.mock.calls[0][0] as AppSettings;
+    expect(saved.defaultTrack).toBe("qemu");
+    // The rest of the settings survive the round-trip untouched.
+    expect(saved.theme).toBe("light");
+    expect(saved.dockerPath).toBe("docker");
+  });
+});

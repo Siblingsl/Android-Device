@@ -313,7 +313,10 @@ pub struct DeviceTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    pub theme: String,
+    /// UI theme preference: "light" | "dark" | None (= follow the system via
+    /// prefers-color-scheme). Anything unrecognized is treated as system.
+    #[serde(default)]
+    pub theme: Option<String>,
     pub language: String,
     pub auto_update: bool,
     pub log_path: String,
@@ -375,6 +378,14 @@ pub struct AppSettings {
     /// treated as true (the default keeps curves fresh).
     #[serde(default)]
     pub battery_auto_refresh: Option<bool>,
+    /// Preferred runtime track: "docker" (default) | "qemu". Preference only —
+    /// the QEMU track stays experimental until its verify report is all-green.
+    #[serde(default)]
+    pub default_track: Option<String>,
+    /// Per-device grouping tags (simplified model: tags ARE the groups).
+    /// deviceId (or serial) → list of tag names. Lives in settings.json.
+    #[serde(default)]
+    pub device_tags: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 impl Default for AppSettings {
@@ -382,7 +393,7 @@ impl Default for AppSettings {
         let home = dirs::home_dir().unwrap_or_default();
         let base = home.join("RedroidDeviceCenter");
         Self {
-            theme: "light".into(),
+            theme: Some("light".into()),
             language: "zh-CN".into(),
             auto_update: true,
             log_path: base.join("logs").to_string_lossy().into(),
@@ -414,6 +425,8 @@ impl Default for AppSettings {
             create_wait_adb: true,
             tun2socks_path: String::new(),
             battery_auto_refresh: Some(true),
+            default_track: None,
+            device_tags: None,
         }
     }
 }

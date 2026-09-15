@@ -1,0 +1,6 @@
+# Local to the qemu-center sub-crate only (repo-root .gitignore is off-limits
+# by design: qemu-center must be a pure addition).
+/target
+state/
+*.iso
+*.qcow2

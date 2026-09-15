@@ -55,6 +55,7 @@ import type { DeviceInfo, SpoofProfileSummary, SpoofProfileUsage } from "../type
 
 const FILTER_KEY = "rdc.devices.filter";
 const KIND_KEY = "rdc.devices.kindFilter";
+const TAG_FILTER_KEY = "rdc.devices.tagFilter";
 const QUERY_KEY = "rdc.devices.query";
 const PICKED_KEY = "rdc.devices.picked";
 const VIEW_KEY = "rdc.devices.view";
@@ -297,6 +298,16 @@ function readFilter(): "all" | "online" | "offline" {
 }
 
 type KindFilter = "all" | "cloud" | "real";
+/** "all" | "none" (ungrouped) | a concrete tag name. */
+type TagFilter = string;
+
+function readTagFilter(): TagFilter {
+  try {
+    return sessionStorage.getItem(TAG_FILTER_KEY) ?? "all";
+  } catch {
+    return "all";
+  }
+}
 
 function readKindFilter(): KindFilter {
   try {
@@ -325,6 +336,7 @@ export function Devices() {
   });
   const [filter, setFilter] = useState<"all" | "online" | "offline">(readFilter);
   const [kindFilter, setKindFilter] = useState<KindFilter>(readKindFilter);
+  const [tagFilter, setTagFilter] = useState<TagFilter>(readTagFilter);
   const [devicesView, setDevicesView] = useState<DevicesView>(readDevicesView);
   const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
@@ -356,11 +368,17 @@ export function Devices() {
   const [batchSpoofOpen, setBatchSpoofOpen] = useState(false);
   const [spoofProfileId, setSpoofProfileId] = useState("");
   const [rotateSpoof, setRotateSpoof] = useState(false);
+  /** Tag editor target (row "更多" → 设置标签): id + display name, null = closed. */
+  const [tagEditor, setTagEditor] = useState<{ id: string; name: string } | null>(null);
+  const [tagDraft, setTagDraft] = useState<string[]>([]);
+  const [tagNew, setTagNew] = useState("");
   const navigate = useNavigate();
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
   const refreshDevices = useAppStore((s) => s.refreshDevices);
   const screenshotDir = useAppStore((s) => s.settings?.screenshotPath);
+  const deviceTagsRecord = useAppStore((s) => s.settings?.deviceTags);
+  const loadSettings = useAppStore((s) => s.loadSettings);
   const [scrcpyLayout, setScrcpyLayout] = useState<ScrcpyLayoutConfig>(readScrcpyLayout);
   const { t } = useI18n();
   const loadSequence = useRef(createRequestSequence()).current;
@@ -389,7 +407,9 @@ export function Devices() {
       setLoading(true);
     }
     try {
-      const list = await DeviceService.listDevices();
+      // Unified stream (Docker + QEMU tracks) — rows carry an optional
+      // `source` so the list can badge QEMU instances distinctly.
+      const list = await DeviceService.listDevicesUnified();
       if (!loadSequence.isCurrent(token)) return;
       setDevices(list);
       const nextOfflineHistory = rememberDevices(readOfflineDeviceHistory(), list);
@@ -435,12 +455,13 @@ export function Devices() {
     try {
       sessionStorage.setItem(FILTER_KEY, filter);
       sessionStorage.setItem(KIND_KEY, kindFilter);
+      sessionStorage.setItem(TAG_FILTER_KEY, tagFilter);
       sessionStorage.setItem(QUERY_KEY, query);
       sessionStorage.setItem(PICKED_KEY, JSON.stringify(picked));
     } catch {
       /* ignore */
     }
-  }, [filter, kindFilter, query, picked]);
+  }, [filter, kindFilter, tagFilter, query, picked]);
 
   useEffect(() => {
     try {
@@ -537,13 +558,29 @@ export function Devices() {
 
   const isOnline = (d: DeviceInfo) => d.online && d.adbStatus === "device";
   const q = query.trim().toLowerCase();
-  // Cloud instances carry a container id; real / LAN devices never do.
-  const isCloud = (d: DeviceInfo) => Boolean(d.containerId);
+  // Grouping tags: tags ARE the groups (no separate registry). The record is
+  // keyed by device id; the serial is accepted as a fallback key.
+  const tagsOf = (d: DeviceInfo): string[] =>
+    deviceTagsRecord?.[d.id] ?? deviceTagsRecord?.[d.serial] ?? [];
+  const allTags: string[] = [...new Set(Object.values(deviceTagsRecord ?? {}).flat())].sort();
+  // Cloud instances carry a container id; QEMU-track instances are cloud-class
+  // too (they live inside a VM node) even though no local container exists.
+  // Real / LAN devices never do either.
+  const isCloud = (d: DeviceInfo) => Boolean(d.containerId) || d.source === "qemu";
+  // Origin badge for the unified list: QEMU / cloud instance / real device.
+  const sourceBadge = (d: DeviceInfo): { label: string; cls: string } | null => {
+    if (d.source === "qemu") return { label: t("devices.source.qemu"), cls: "badge info" };
+    if (d.source === "docker") return { label: t("devices.source.docker"), cls: "badge" };
+    if (d.source === "adb") return { label: t("devices.source.adb"), cls: "badge" };
+    return null;
+  };
   const visible = devices.filter((d) => {
     if (filter === "online" && !isOnline(d)) return false;
     if (filter === "offline" && isOnline(d)) return false;
     if (kindFilter === "cloud" && !isCloud(d)) return false;
     if (kindFilter === "real" && isCloud(d)) return false;
+    if (tagFilter === "none" && tagsOf(d).length > 0) return false;
+    if (tagFilter !== "all" && tagFilter !== "none" && !tagsOf(d).includes(tagFilter)) return false;
     if (!q) return true;
     return (
       d.name.toLowerCase().includes(q) ||
@@ -909,6 +946,37 @@ export function Devices() {
     setOfflineHistoryOpen(false);
   };
 
+  const openTagEditor = (d: DeviceInfo) => {
+    setTagEditor({ id: d.id || d.serial, name: d.name });
+    setTagDraft(tagsOf(d));
+    setTagNew("");
+  };
+
+  const toggleDraftTag = (tag: string) =>
+    setTagDraft((current) => (current.includes(tag) ? current.filter((x) => x !== tag) : [...current, tag]));
+
+  const addDraftTag = () => {
+    const name = tagNew.trim();
+    if (!name) return;
+    if (!tagDraft.includes(name)) setTagDraft((current) => [...current, name]);
+    setTagNew("");
+  };
+
+  const saveTagEditor = async () => {
+    if (!tagEditor) return;
+    try {
+      await DeviceService.setDeviceTags(tagEditor.id, tagDraft);
+      await loadSettings();
+      setStatusText(t("devices.tags.saved", { n: tagDraft.length }));
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      setStatusText(err);
+      void alert(err);
+    } finally {
+      setTagEditor(null);
+    }
+  };
+
   return (
     <div className="devices-workbench">
       <div className="page-header devices-header-rail">
@@ -1098,6 +1166,20 @@ export function Devices() {
             <option value="all">{t("devices.kind.all", { n: devices.length })}</option>
             <option value="cloud">{t("devices.kind.cloud", { n: devices.filter(isCloud).length })}</option>
             <option value="real">{t("devices.kind.real", { n: devices.filter((d) => !isCloud(d)).length })}</option>
+          </select>
+          <select
+            value={tagFilter}
+            aria-label={t("devices.tags.filter")}
+            onChange={(e) => setTagFilter(e.target.value)}
+            style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
+          >
+            <option value="all">{t("devices.tags.all", { n: devices.length })}</option>
+            <option value="none">{t("devices.tags.ungrouped", { n: devices.filter((d) => tagsOf(d).length === 0).length })}</option>
+            {allTags.map((tag) => (
+              <option key={tag} value={tag}>
+                {t("devices.tags.one", { tag, n: devices.filter((d) => tagsOf(d).includes(tag)).length })}
+              </option>
+            ))}
           </select>
           <div className="devices-view-toggle" role="group" aria-label={t("devices.view.label")}>
             <Button
@@ -1969,6 +2051,19 @@ export function Devices() {
                             <span className="devices-table-serial mono">
                               {d.serial || "—"}{d.adbPort ? ` · :${d.adbPort}` : ""}
                             </span>
+                            {sourceBadge(d) ? (
+                              <span
+                                className={sourceBadge(d)!.cls}
+                                title={d.source === "qemu" && d.qemuVm ? t("devices.source.qemuHint", { vm: d.qemuVm, instance: d.qemuInstance ?? "" }) : undefined}
+                              >
+                                {sourceBadge(d)!.label}
+                              </span>
+                            ) : null}
+                            {tagsOf(d).map((tag) => (
+                              <span key={tag} className="badge devices-tag-chip" title={t("devices.tags.chipHint")}>
+                                {tag}
+                              </span>
+                            ))}
                             {d.spoofedModel ? (
                               <span className="devices-table-meta muted" title={t("devices.card.spoofed", { model: d.spoofedModel })}>
                                 {t("devices.card.spoofed", { model: d.spoofedModel })}
@@ -2153,6 +2248,7 @@ export function Devices() {
                                   },
                                 );
                               }
+                              if (value === "setTags") openTagEditor(d);
                             }}
                           >
                             <option value="" disabled>{t("devices.card.more")}</option>
@@ -2160,6 +2256,7 @@ export function Devices() {
                             <option value="restart" disabled={!canRestart}>{t("devices.card.restart")}</option>
                             <option value="stop" disabled={!canStop}>{t("devices.card.stop")}</option>
                             <option value="copy" disabled={!d.serial}>{t("devices.card.copySerial")}</option>
+                            <option value="setTags">{t("devices.tags.setTags")}</option>
                           </select>
                           {rowActionBusy ? (
                             <span className="muted" role="status" aria-live="polite" style={{ fontSize: 11 }}>
@@ -2238,7 +2335,10 @@ export function Devices() {
                     />
                   </label>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>{d.name}</div>
+                    <div style={{ fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      {d.name}
+                      {sourceBadge(d) ? <span className={sourceBadge(d)!.cls}>{sourceBadge(d)!.label}</span> : null}
+                    </div>
                     <DeviceNoteEditor
                       deviceName={d.name}
                       value={deviceNotes[d.id]}
@@ -2248,6 +2348,15 @@ export function Devices() {
                       {d.serial || "—"}
                       {d.adbPort ? ` · ADB :${d.adbPort}` : ""}
                     </div>
+                    {tagsOf(d).length > 0 && (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                        {tagsOf(d).map((tag) => (
+                          <span key={tag} className="badge devices-tag-chip" title={t("devices.tags.chipHint")}>
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
                       Android {d.androidVersion || "—"}
                       {d.image ? ` · ${d.image}` : ""}
@@ -2432,6 +2541,7 @@ export function Devices() {
                         },
                       );
                     }
+                    if (v === "setTags") openTagEditor(d);
                   }}
                 >
                   <option value="" disabled>
@@ -2449,6 +2559,7 @@ export function Devices() {
                   <option value="copy" disabled={!d.serial}>
                     {t("devices.card.copySerial")}
                   </option>
+                  <option value="setTags">{t("devices.tags.setTags")}</option>
                 </select>
               </div>
             </Card>
@@ -2459,6 +2570,67 @@ export function Devices() {
       )}
 
       </div>
+
+      {tagEditor && (
+        <div
+          className="devices-tag-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("devices.tags.title", { name: tagEditor.name })}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setTagEditor(null);
+          }}
+        >
+          <Card className="devices-tag-panel" title={t("devices.tags.title", { name: tagEditor.name })}>
+            {allTags.length === 0 && tagDraft.length === 0 ? (
+              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                {t("devices.tags.empty")}
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                {allTags.map((tag) => (
+                  <label key={tag} className="row devices-tag-option" style={{ gap: 5 }}>
+                    <input
+                      type="checkbox"
+                      checked={tagDraft.includes(tag)}
+                      onChange={() => toggleDraftTag(tag)}
+                      aria-label={tag}
+                    />
+                    {tag}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                value={tagNew}
+                maxLength={24}
+                placeholder={t("devices.tags.newPlaceholder")}
+                aria-label={t("devices.tags.newPlaceholder")}
+                style={{ flex: 1 }}
+                onChange={(e) => setTagNew(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addDraftTag();
+                  }
+                }}
+              />
+              <Button size="sm" disabled={!tagNew.trim()} onClick={addDraftTag}>
+                {t("devices.tags.add")}
+              </Button>
+            </div>
+            <div className="row" style={{ gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
+              <Button size="sm" variant="ghost" onClick={() => setTagEditor(null)}>
+                {t("common.close")}
+              </Button>
+              <Button size="sm" variant="primary" onClick={() => void saveTagEditor()}>
+                {t("devices.tags.save")}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

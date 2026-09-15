@@ -19,6 +19,7 @@
   --danger: #c54f5c;
   --danger-soft: #fde9eb;
   --violet: #7654af;
+  --on-accent: #ffffff;
   --success: #18825f;
   --shadow: 0 2px 8px rgba(33, 48, 59, 0.045);
   --shadow-hover: 0 3px 12px rgba(33, 48, 59, 0.08);
@@ -50,6 +51,7 @@
   --danger: #ed7b87;
   --danger-soft: rgba(237, 123, 135, 0.14);
   --violet: #b99be9;
+  --on-accent: #10181e;
   --success: #63c69e;
   --shadow: 0 2px 10px rgba(0, 0, 0, 0.19);
   --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.27);
@@ -109,7 +111,7 @@ a { color: inherit; text-decoration: none; }
 .topbar-rule { display: none; }
 .brand { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .logo { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--ink); border-radius: 8px; color: var(--surface); background: var(--ink); font-family: "Arial Narrow", "Bahnschrift", sans-serif; font-size: 16px; font-weight: 800; line-height: 1; }
-.brand:hover .logo { color: #fff; background: var(--accent); border-color: var(--accent); }
+.brand:hover .logo { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
 .brand-title { font-family: "Arial Narrow", "Bahnschrift", "Segoe UI", sans-serif; font-size: 15px; font-weight: 800; letter-spacing: -0.03em; }
 .brand-sub { color: var(--muted); font-size: 9px; letter-spacing: 0.03em; }
 .brand-mark { color: var(--accent); font-weight: 750; }
@@ -148,7 +150,9 @@ a { color: inherit; text-decoration: none; }
 .grid-2 > *,
 .grid-3 > *,
 .form-grid > * { min-width: 0; }
-.page-dashboard .grid-stats { grid-template-columns: repeat(6, minmax(0, 1fr)); flex: 0 0 auto; }
+/* Authoritative dashboard stat grid: 3 columns x 2 rows so long hints (Docker
+   version strings) keep room; height comes from card content, not a fixed floor. */
+.page-dashboard .grid-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 0 0 auto; gap: 7px; margin-bottom: 0; }
 .page-dashboard .grid-2 { grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr); flex: 1 1 200px; min-height: 175px; }
 .page-dashboard .grid-3 { grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(0, 0.825fr)); flex: 1 1 160px; min-height: 145px; }
 
@@ -169,7 +173,10 @@ a { color: inherit; text-decoration: none; }
 .page-dashboard .grid-stats .module:nth-child(4) { --module-accent: var(--warning); }
 .page-dashboard .grid-stats .module:nth-child(5) { --module-accent: #4b9bbc; }
 .page-dashboard .grid-stats .module:nth-child(6) { --module-accent: var(--danger); }
-.grid-stats .module-body { min-height: 76px; padding: 10px 11px; }
+/* Stat cards size to their content (icon row + label + value + hint); equal
+   heights come from the grid's align-items: stretch. The module itself keeps
+   overflow: hidden as the backstop. */
+.grid-stats .module-body { min-height: 0; padding: 10px 11px; overflow: visible; }
 .grid-stats .module-body > button { display: block !important; width: 100%; min-height: 54px; padding: 0; text-align: left; background: none; border: 0; }
 .grid-stats .module-body > button .row-between { align-items: flex-start; }
 .stat-icon { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--line); border-radius: 9px; color: var(--accent); background: var(--accent-soft); }
@@ -238,7 +245,7 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .btn.sm { height: 26px; padding: 0 8px; font-size: 10px; }
 .btn.md { height: 31px; padding: 0 10px; font-size: 11px; }
 .btn.lg { height: 36px; padding: 0 13px; font-size: 12px; }
-.btn.primary { color: #fff; background: var(--accent); }
+.btn.primary { color: var(--on-accent); background: var(--accent); }
 .btn.primary:hover:not(:disabled) { background: var(--accent-deep); }
 .btn.secondary { border-color: var(--line-strong); color: var(--ink); background: var(--surface); }
 .btn.secondary:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-soft); }
@@ -316,7 +323,9 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .instance-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 9px; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--module-accent, var(--accent)); border-radius: 8px !important; background: var(--surface-tint); transition: background 120ms ease, border-color 120ms ease; }
 .instance-row:hover { border-color: var(--line-strong); background: var(--surface-soft); }
 .notice { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--warning); border-radius: 8px !important; color: var(--ink); background: var(--surface-tint); font-size: 11px; text-align: left; transition: border-color 120ms ease, background 120ms ease; }
-.notice:hover { border-color: var(--line-strong); background: var(--surface-soft); }
+/* Only interactive notices (Dashboard notification buttons) react to hover;
+   static notice strips must not shift underneath the cursor. */
+button.notice:hover { border-color: var(--line-strong); background: var(--surface-soft); }
 
 /* Creation is an in-app workbench: the form owns its scroll, while the list
    remains visible behind the lightweight overlay when the workbench is folded. */
@@ -326,6 +335,13 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .create-modal > .module-body { overflow: auto; }
 .create-modal-actions { flex-wrap: nowrap !important; }
 .create-modal-status { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-deep); font-size: 10px; font-weight: 700; white-space: nowrap; }
+/* Creation toggles (stay / wait-adb / trace cleanup / GPU) sit in one compact
+   grid instead of a long single-column run; each hint rides under its check. */
+.create-modal-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin-bottom: 12px; }
+.create-modal-checks > label { align-self: center; }
+.create-modal-check { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.create-check-hint { font-size: 11px; }
+@media (max-width: 700px) { .create-modal-checks { grid-template-columns: minmax(0, 1fr); } }
 .create-spinner { flex: 0 0 auto; animation: create-spin 1s linear infinite; }
 @keyframes create-spin { to { transform: rotate(360deg); } }
 .creating-instance-row { align-items: center; opacity: 0.72; border-style: dashed; border-color: var(--line-strong); background: var(--surface-tint); }
@@ -415,6 +431,7 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .wireless-discovery { display: flex; min-width: 0; flex-direction: column; gap: 8px; padding: 10px; }
 .wireless-form { border-right: 1px solid var(--line); }
 .wireless-form-actions { flex-wrap: wrap; }
+.wireless-auto-reconnect { align-self: flex-start; font-size: 10px; }
 .wireless-qr { display: flex; align-items: center; gap: 9px; padding-top: 4px; color: var(--muted); font-size: 9px; }
 .wireless-qr img { width: 92px; height: 92px; padding: 4px; border-radius: 5px; background: #fff; }
 .wireless-service { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-left: 3px solid var(--mint); border-radius: 6px; background: var(--surface-tint); }
@@ -486,7 +503,7 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .arrangement-tile > .device-stream { position: relative; inset: auto; min-height: 220px; flex: 1 1 0; }
 .arrangement-tile > .device-stream.is-running { min-height: 220px; }
 .native-device-window { display: flex; min-width: 0; min-height: 100vh; flex-direction: column; padding: 8px; gap: 8px; background: var(--surface-soft); color: var(--ink); }
-.native-device-window-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-top: 2px solid var(--blue); background: var(--surface); }
+.native-device-window-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-top: 2px solid var(--accent); background: var(--surface); }
 .native-device-window-head > div { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .native-device-window-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .native-device-window > .device-stream { position: relative; inset: auto; flex: 1 1 0; min-height: 0; }
@@ -604,12 +621,6 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .page-adb .page-fade > div > .grid-2 {
   flex: 0 0 auto;
 }
-.page-devices .page-fade > div > .row,
-.page-volumes .page-fade > div > .row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 8px !important; padding: 6px 8px; border-bottom: 1px solid var(--line); background: transparent; }
-.page-devices .page-fade > div > .row input,
-.page-devices .page-fade > div > .row select,
-.page-volumes .page-fade > div > .row input,
-.page-volumes .page-fade > div > .row select { background: var(--surface); }
 .page-devices .page-fade > div > .device-list-module { flex: 1 1 0; min-height: 190px; }
 .page-devices .page-fade > div > .module:not(.device-list-module) { flex: 0 0 auto; }
 .page-volumes .page-fade > div > .module { flex: 1 1 0; min-height: 0; margin-bottom: 8px; --module-accent: var(--mint); }
@@ -634,7 +645,9 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
 .page-docker .page-fade > div > .grid-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .page-logs .page-fade > div > .module { flex: 1 1 0; min-height: 0; --module-accent: var(--violet); }
 .page-logs .module-body { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
-.page-logs .module-body > .shell-output { flex: 1 1 0; min-height: 0; max-height: none !important; overflow: auto; }
+/* The log stream reads on the light surface so the shared log-line palette
+   (ink/muted/warn/danger) keeps its contrast in both themes. */
+.page-logs .module-body > .shell-output { flex: 1 1 0; min-height: 0; max-height: none !important; overflow: auto; border-color: var(--line); background: var(--surface-tint); color: var(--ink); }
 .page-settings .page-fade > div > .grid-2 { flex: 1 1 0; min-height: 260px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .page-settings .grid-2 > .module { min-height: 0; }
 .page-settings .module-body { overflow: auto; }
@@ -749,7 +762,6 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
   .topbar-inner { gap: 10px; padding-right: 14px; padding-left: 14px; }
   .nav-item { padding-right: 6px; padding-left: 6px; }
   .content { padding-right: 14px; padding-left: 14px; }
-  .page-dashboard .grid-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 850px) {
@@ -902,6 +914,7 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
   --warning-soft: #FFF0D2;
   --danger: #C9515D;
   --danger-soft: #FDE9EB;
+  --on-accent: #FFFFFF;
   --shadow: 0 1px 4px rgba(33, 48, 59, 0.05);
   --shadow-hover: 0 3px 12px rgba(33, 48, 59, 0.09);
   --radius: 6px;
@@ -919,6 +932,7 @@ input[type="checkbox"] { width: 14px; height: 14px; padding: 0; accent-color: va
   --muted-2: #718089;
   --line: #34444D;
   --line-strong: #52646F;
+  --on-accent: #10181E;
   --accent: #82A8FF;
   --accent-deep: #AAC3FF;
   --accent-soft: rgba(130, 168, 255, 0.16);
@@ -1011,6 +1025,9 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
 .detail-files-workspace .table-wrap,
 .detail-apps-workspace .table-wrap,
 .detail-logs-workspace .shell-output { max-height: min(58vh, 560px); }
+/* The device log stream reads on the light surface for the same reason as the
+   Logs page: .log-line tones keep their contrast in both themes. */
+.detail-logs-workspace .shell-output { border-color: var(--line); background: var(--surface-tint); color: var(--ink); }
 .detail-files-workspace > fieldset,
 .detail-apps-workspace > fieldset { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 9px; }
 .detail-files-workspace > fieldset > .module,
@@ -1090,8 +1107,6 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
 .page-dashboard .grid-3 { gap: 9px; }
 .page-dashboard .grid-2 > .module,
 .page-dashboard .grid-3 > .module { min-height: 0; }
-.page-dashboard .grid-stats { gap: 7px; margin-bottom: 0; }
-.page-dashboard .grid-stats .module-body { min-height: 68px; }
 .page-apk .grid-2 > .module,
 .page-docker .grid-2 > .module,
 .page-settings .grid-2 > .module { min-height: 0; }
@@ -1582,6 +1597,33 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
   overscroll-behavior: contain;
 }
 .device-session-list { min-width: 860px; }
+/* Per-device grouping tag chips + editor overlay. */
+.devices-tag-chip { flex: 0 0 auto; font-size: 9px; }
+.devices-tag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(23, 35, 45, 0.42);
+}
+.devices-tag-panel { width: min(360px, 100%); }
+.devices-tag-option { font-size: 12px; }
+/* Dashboard first-use readiness checklist. */
+.dashboard-checklist-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  max-width: 100%;
+}
+.dashboard-checklist-chip-text { display: flex; flex-direction: column; min-width: 0; }
+.dashboard-checklist-chip-title { font-weight: 650; font-size: 12px; }
+.dashboard-checklist-chip-hint { font-size: 11px; }
 .device-session-row {
   position: relative;
   min-width: 0;
@@ -1797,6 +1839,23 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
   .device-session-detail-item:nth-child(2n) { border-right: 0; }
   .device-session-detail-item:nth-child(n + 3) { border-top: 1px solid var(--line); }
   .device-session-actions .device-row-action:first-child { display: none; }
+}
+
+/* Devices page aux surfaces that were left unstyled by the session-strip
+   redesign: the header rail hook, the table/cards view toggle, the compact
+   row-action group, and the offline-history card list. */
+.devices-header-rail { flex: 0 0 auto; }
+.devices-view-toggle { display: inline-flex; align-items: center; gap: 4px; padding-left: 7px; border-left: 1px solid var(--line); }
+.devices-table-actions-compact { justify-content: flex-end; }
+.offline-device-history-list { display: grid; gap: 6px; }
+.offline-device-history-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px solid var(--line); border-left: 3px solid var(--danger); border-radius: 6px; background: var(--surface-tint); }
+.offline-device-history-identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.offline-device-history-name { overflow: hidden; color: var(--ink); font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.offline-device-history-time { font-size: 9px; }
+.device-note-history { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.offline-device-history-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
+@media (max-width: 700px) {
+  .offline-device-history-item { align-items: flex-start; flex-direction: column; }
 }
 
 /* Shared text-tone utilities (kept beside .ok / .bad / .muted). */
@@ -2047,4 +2106,81 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
   .media-control-grid { grid-template-columns: minmax(0, 1fr); }
   .scrcpy-options-panel { grid-template-columns: minmax(0, 1fr); }
   .device-monitor-runtime { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---- QEMU Center page (src/pages/QemuCenter.tsx) ----
+   Page-scoped only: `.page-qemu` lives on `.app-shell` (route key) so every
+   rule below stays inside this page and never touches the shared .module/.table
+   primitives. */
+.page-qemu .page-title { display: flex; align-items: center; gap: 7px; }
+/* The generic page root already scrolls; without `flex: 0 0 auto` the five
+   cards shrink to fit the viewport and .module{overflow:hidden} clips them
+   (the "cards never open up" report). Let the page scroll instead. Generic
+   class overrides stay inside `.page-fade` so the device-detail panel is
+   never affected. */
+.page-qemu .page-fade > div > .module { flex: 0 0 auto; }
+.page-qemu .page-fade .module-body { overflow: visible; }
+.page-qemu .page-fade .table th { white-space: nowrap; }
+.qemu-experimental { border-color: color-mix(in srgb, var(--warning) 34%, var(--line)); color: var(--warning); }
+.qemu-cli-missing { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); color: var(--danger); }
+/* Pending-setup banner: the long Rust CLI run survives page switches; the
+   banner is the cross-page "still running" truth shown after coming back. */
+.qemu-setup-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); border-left-width: 3px; color: var(--ink); font-size: 12px; }
+.qemu-setup-pending .create-spinner { color: var(--accent); }
+.qemu-setup-pending-text { flex: 1 1 auto; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
+.qemu-card-actions { flex-wrap: wrap; gap: 8px; align-items: center; }
+/* Check rows: badge | title | detail on line 1, the fix hint spans line 2.
+   Long paths are ellipsised (full value in the `title` tooltip), never
+   allowed to push the card wider than its track. */
+.qemu-check-list { gap: 10px; }
+.qemu-check-row { display: grid; grid-template-columns: auto minmax(140px, 1fr) minmax(0, 1.25fr); gap: 3px 10px; align-items: center; }
+.qemu-check-row .badge { min-width: 62px; justify-content: center; }
+.qemu-check-title { min-width: 0; overflow: hidden; font-weight: 650; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.qemu-check-detail { min-width: 0; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.qemu-check-fix { grid-column: 2 / -1; min-width: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.qemu-check-fix .mono { color: var(--accent-deep); }
+.qemu-state-dir-row { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; }
+.qemu-state-dir-label { flex: 0 0 auto; }
+.qemu-state-dir-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qemu-state-dir-row .badge { flex: 0 0 auto; }
+.qemu-portable-note { font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.qemu-table-wrap { margin-top: 10px; }
+.qemu-table-wrap .mono { white-space: nowrap; }
+.qemu-row-selected td { background: var(--accent-soft); }
+.qemu-row-actions { flex-wrap: wrap; gap: 6px; }
+.qemu-wait-strip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); font-size: 11px; font-weight: 650; }
+.qemu-wait-interrupted { border-color: color-mix(in srgb, var(--warning) 34%, var(--line)); color: var(--warning); }
+.qemu-serial-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border: 1px solid color-mix(in srgb, var(--mint) 28%, var(--line)); border-radius: 999px; background: var(--mint-soft); font-size: 11px; }
+.qemu-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 14px; align-items: end; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed var(--line); }
+.qemu-form-grid .qemu-checkbox { grid-column: 1 / -1; align-self: center; font-size: 12px; font-weight: 600; gap: 6px; }
+.qemu-verify-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.qemu-verify-controls label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.qemu-verify-controls select { min-width: 200px; }
+.qemu-verify-note { font-size: 11px; }
+.qemu-log-card { --module-accent: var(--violet); }
+.qemu-log-card > .module-body { display: flex; flex-direction: column; }
+.qemu-log-output { margin: 0; flex: 1 1 auto; min-height: 180px; max-height: 320px; overflow: auto; padding: 10px; border-radius: var(--radius-sm); background: var(--surface-tint); font-size: 11px; line-height: 1.55; white-space: pre; }
+.qemu-log-empty { flex: 1 1 auto; min-height: 180px; display: grid; place-items: center; }
+.qemu-log-collapsed { font-size: 11px; }
+.qemu-status-line { font-size: 12px; padding: 0 4px 4px; }
+
+/* ---- Settings page tabs (src/pages/Settings.tsx) ----
+   The page keeps the shared workbench rhythm: one horizontal tab strip under
+   the page header, each tab rendering its own stack of setting cards. The tab
+   strip reuses the global .tabs/.tab primitives; panels behave like the other
+   page roots (page scrolls, cards keep their natural height). */
+.settings-tabs { flex: 0 0 auto; margin-bottom: 0; }
+.settings-tabs .tab { min-height: 36px; }
+.page-settings .page-fade .settings-tabpanel {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+}
+.page-settings .page-fade .settings-tabpanel > .module { flex: 0 0 auto; }
+.page-settings .page-fade .settings-tabpanel .module-body { overflow: visible; }
+.page-settings .page-fade .settings-tabpanel > .grid-2 { flex: 0 0 auto; min-height: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 900px) {
+  .page-settings .page-fade .settings-tabpanel > .grid-2 { grid-template-columns: minmax(0, 1fr); }
 }

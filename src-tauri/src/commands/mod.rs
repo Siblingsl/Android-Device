@@ -41,6 +41,13 @@ pub async fn get_system_status() -> SystemStatus {
     blocking(device::system_status).await
 }
 
+/// First-use readiness checklist for the Dashboard: reuses the existing probe
+/// functions (docker / adb / scrcpy / WHPX / qemu-center / cloud image).
+#[tauri::command]
+pub async fn readiness_checklist() -> Vec<crate::services::readiness::ReadinessItem> {
+    blocking(crate::services::readiness::checklist).await
+}
+
 // ---- Devices ----
 
 #[tauri::command]
@@ -48,9 +55,19 @@ pub async fn list_devices() -> Vec<DeviceInfo> {
     blocking(device::list_devices).await
 }
 
+/// Unified device list: Docker track (containers + physical/LAN adb) plus the
+/// QEMU track's redroid instances (`source: "qemu"`, tagged with vm/instance).
+/// QEMU rows carry `id == adb serial`, so every existing serial-keyed command
+/// (scrcpy / files / apps / control / shell) works on them unchanged — the adb
+/// channel is the same.
 #[tauri::command]
-pub async fn get_device(id: String) -> Option<DeviceInfo> {
-    blocking_opt(move || device::get_device(&id)).await
+pub async fn list_devices_unified() -> Vec<crate::services::unified::UnifiedDevice> {
+    blocking(crate::services::unified::list_devices_unified).await
+}
+
+#[tauri::command]
+pub async fn get_device(id: String) -> Option<crate::services::unified::UnifiedDevice> {
+    blocking_opt(move || crate::services::unified::get_device_unified(&id)).await
 }
 
 fn encode_url_component(value: &str) -> String {
@@ -1054,6 +1071,23 @@ pub async fn read_config_file(path: String) -> Result<String, String> {
     blocking_res(move || config::read(&path)).await
 }
 
+// ---- Device tags (settings-backed grouping) ----
+
+/// Full deviceId|serial → [tag, …] record as stored in settings.json.
+#[tauri::command]
+pub async fn get_device_tags() -> std::collections::BTreeMap<String, Vec<String>> {
+    blocking(crate::services::device_tags::get_tags).await
+}
+
+/// Replace one device's tags. An empty list clears the record ("ungrouped").
+#[tauri::command]
+pub async fn set_device_tags(
+    device_id: String,
+    tags: Vec<String>,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    blocking_res(move || crate::services::device_tags::set_tags(&device_id, tags)).await
+}
+
 #[tauri::command]
 pub async fn write_config_file(path: String, content: String) -> Result<(), String> {
     blocking_res(move || config::write(&path, &content)).await
@@ -1171,4 +1205,97 @@ pub async fn switch_wsl_kernel(mode: String, apply: bool) -> ShellResult {
 #[tauri::command]
 pub async fn verify_wsl_binder() -> ShellResult {
     blocking(wsl_kernel::verify_binder).await
+}
+
+// ---- QEMU track (qemu-center CLI bridge) ----
+
+#[tauri::command]
+pub async fn qemu_doctor() -> Result<crate::services::qemu::QemuDoctorReport, String> {
+    blocking_res(crate::services::qemu::doctor).await
+}
+
+#[tauri::command]
+pub async fn qemu_setup(step: String, distro: String) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::setup(&step, &distro)).await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_list() -> Result<Vec<crate::services::qemu::QemuVmEntry>, String> {
+    blocking_res(crate::services::qemu::vm_list).await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_create(
+    req: crate::services::qemu::QemuVmCreateRequest,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_create(req)).await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_start(name: String) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_start(&name)).await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_stop(name: String) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_stop(&name)).await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_delete(
+    name: String,
+    purge: bool,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_delete(&name, purge)).await
+}
+
+/// Create an internal qcow2 snapshot of a node's disk (VM should be stopped).
+#[tauri::command]
+pub async fn qemu_vm_snapshot(
+    name: String,
+    tag: String,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_snapshot(&name, &tag)).await
+}
+
+/// Restore (apply) an internal qcow2 snapshot. The VM must be stopped — the
+/// UI confirms before calling; qemu-img refuses images locked by a running VM.
+#[tauri::command]
+pub async fn qemu_vm_restore(
+    name: String,
+    tag: String,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_restore(&name, &tag)).await
+}
+
+#[tauri::command]
+pub async fn qemu_guest_wait(
+    name: String,
+    timeout_secs: u64,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::guest_wait(&name, timeout_secs)).await
+}
+
+#[tauri::command]
+pub async fn qemu_redroid_create(
+    req: crate::services::qemu::QemuRedroidCreateRequest,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::redroid_create(req)).await
+}
+
+#[tauri::command]
+pub async fn qemu_redroid_list(
+    vm: String,
+) -> Result<Vec<crate::services::qemu::QemuRedroidInstance>, String> {
+    blocking_res(move || crate::services::qemu::redroid_list(&vm)).await
+}
+
+#[tauri::command]
+pub async fn qemu_adb_list() -> Result<Vec<crate::services::qemu::QemuAdbMapping>, String> {
+    blocking_res(crate::services::qemu::adb_list).await
+}
+
+#[tauri::command]
+pub async fn qemu_verify(vm: String) -> Result<crate::services::qemu::QemuVerifyReport, String> {
+    blocking_res(move || crate::services::qemu::verify(&vm)).await
 }

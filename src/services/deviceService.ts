@@ -39,6 +39,15 @@ import type {
   BatteryState,
   AdversarialAudit,
   GeoCheck,
+  QemuAdbMapping,
+  QemuCliOutput,
+  QemuDoctorReport,
+  QemuRedroidCreateRequest,
+  QemuRedroidInstance,
+  QemuVerifyReport,
+  QemuVmCreateRequest,
+  QemuVmEntry,
+  ReadinessItem,
 } from "../types";
 
 /** Unified Device Service — all device capabilities go through here */
@@ -57,9 +66,13 @@ export const DeviceService = {
   // System
   getDashboard: () => invoke<DashboardData>("get_dashboard"),
   getSystemStatus: () => invoke<SystemStatus>("get_system_status"),
+  /** First-use readiness checklist (Dashboard 待办卡). */
+  readinessChecklist: () => invoke<ReadinessItem[]>("readiness_checklist"),
 
   // Devices
   listDevices: () => invoke<DeviceInfo[]>("list_devices"),
+  /** Unified list: Docker track + QEMU track (rows carry `source`). */
+  listDevicesUnified: () => invoke<DeviceInfo[]>("list_devices_unified"),
   getDevice: (id: string) => invoke<DeviceInfo | null>("get_device", { id }),
   getDeviceTelemetry: (serial: string) => invoke<DeviceTelemetry>("get_device_telemetry", { serial }),
   connect: (serial: string) => invoke<ShellResult>("connect_device", { serial }),
@@ -435,6 +448,11 @@ export const DeviceService = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) =>
     invoke<AppSettings>("update_settings", { settings }),
+  /** Full deviceId|serial → [tag, …] grouping record. */
+  getDeviceTags: () => invoke<Record<string, string[]>>("get_device_tags"),
+  /** Replace one device's tags; empty list clears (ungrouped). */
+  setDeviceTags: (deviceId: string, tags: string[]) =>
+    invoke<Record<string, string[]>>("set_device_tags", { deviceId, tags }),
   readConfigFile: (path: string) => invoke<string>("read_config_file", { path }),
   writeConfigFile: (path: string, content: string) => invoke<void>("write_config_file", { path, content }),
   revealInFolder: (path: string) => invoke<void>("reveal_in_folder", { path }),
@@ -446,4 +464,39 @@ export const DeviceService = {
   switchWslKernel: (mode: "custom" | "default", apply = false) =>
     invoke<ShellResult>("switch_wsl_kernel", { mode, apply }),
   verifyWslBinder: () => invoke<ShellResult>("verify_wsl_binder"),
+};
+
+/**
+ * QEMU track service — thin wrappers over the `qemu-center` CLI bridge
+ * commands (see src-tauri/src/services/qemu.rs). Experimental track; the
+ * Docker track above remains the default runtime.
+ */
+export const QemuService = {
+  /** Host readiness report (WHPX / QEMU / disk / tools). */
+  doctor: () => invoke<QemuDoctorReport>("qemu_doctor"),
+  /** step: "whpx" | "qemu" | "image" | "all" (long-running, up to 60 min). */
+  setup: (step: "whpx" | "qemu" | "image" | "all", distro = "noble") =>
+    invoke<QemuCliOutput>("qemu_setup", { step, distro }),
+  vmList: () => invoke<QemuVmEntry[]>("qemu_vm_list"),
+  vmCreate: (req: QemuVmCreateRequest) =>
+    invoke<QemuCliOutput>("qemu_vm_create", { req }),
+  vmStart: (name: string) => invoke<QemuCliOutput>("qemu_vm_start", { name }),
+  vmStop: (name: string) => invoke<QemuCliOutput>("qemu_vm_stop", { name }),
+  vmDelete: (name: string, purge = true) =>
+    invoke<QemuCliOutput>("qemu_vm_delete", { name, purge }),
+  /** Create an internal qcow2 snapshot of the node's disk (VM should be stopped). */
+  vmSnapshot: (name: string, tag: string) =>
+    invoke<QemuCliOutput>("qemu_vm_snapshot", { name, tag }),
+  /** Apply a qcow2 internal snapshot — VM must be stopped (UI confirms). */
+  vmRestore: (name: string, tag: string) =>
+    invoke<QemuCliOutput>("qemu_vm_restore", { name, tag }),
+  /** Poll guest SSH readiness; caller budgets timeoutSecs. */
+  guestWait: (name: string, timeoutSecs: number) =>
+    invoke<QemuCliOutput>("qemu_guest_wait", { name, timeoutSecs }),
+  redroidCreate: (req: QemuRedroidCreateRequest) =>
+    invoke<QemuCliOutput>("qemu_redroid_create", { req }),
+  redroidList: (vm: string) =>
+    invoke<QemuRedroidInstance[]>("qemu_redroid_list", { vm }),
+  adbList: () => invoke<QemuAdbMapping[]>("qemu_adb_list"),
+  verify: (vm: string) => invoke<QemuVerifyReport>("qemu_verify", { vm }),
 };

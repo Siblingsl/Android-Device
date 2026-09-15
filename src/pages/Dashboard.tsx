@@ -6,7 +6,7 @@ import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
-import type { DashboardData } from "../types";
+import type { DashboardData, ReadinessItem } from "../types";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import { createRequestSequence } from "../lib/requestSequence";
@@ -15,6 +15,8 @@ export function Dashboard() {
   const { t } = useI18n();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  /** First-use readiness checklist; hidden entirely when every item is done. */
+  const [checklist, setChecklist] = useState<ReadinessItem[]>([]);
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
   const navigate = useNavigate();
@@ -62,6 +64,24 @@ export function Dashboard() {
     };
   }, []);
 
+  // Onboarding checklist: fetched once per mount (its probes shell out, so it
+  // deliberately does NOT ride the 20s dashboard tick).
+  useEffect(() => {
+    let cancelled = false;
+    void DeviceService.readinessChecklist()
+      .then((items) => {
+        if (!cancelled) setChecklist(items);
+      })
+      .catch(() => {
+        /* best-effort: no checklist on probe failure */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const pendingChecklist = checklist.filter((item) => !item.done);
+
   return (
     <div>
       <div className="page-header">
@@ -70,6 +90,34 @@ export function Dashboard() {
           <div className="page-subtitle">{t("dashboard.subtitle")}</div>
         </div>
       </div>
+
+      {pendingChecklist.length > 0 && (
+        <Card
+          className="dashboard-checklist-card"
+          title={t("dashboard.checklist.title", { n: pendingChecklist.length })}
+        >
+          <div className="row dashboard-checklist-row" style={{ flexWrap: "wrap", gap: 8 }}>
+            {checklist.map((item) => (
+              <div key={item.id} className="dashboard-checklist-chip">
+                <span className={item.done ? "badge success" : "badge warn"} aria-hidden="true">
+                  {item.done ? "✓" : "○"}
+                </span>
+                <div className="dashboard-checklist-chip-text">
+                  <span className="dashboard-checklist-chip-title">{item.title}</span>
+                  {!item.done && item.hint ? (
+                    <span className="muted dashboard-checklist-chip-hint">{item.hint}</span>
+                  ) : null}
+                </div>
+                {!item.done && (
+                  <Button size="sm" variant="ghost" onClick={() => navigate(item.cta)}>
+                    {t("dashboard.checklist.go")}
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid-stats">
         {loading && !data ? (
@@ -112,7 +160,7 @@ export function Dashboard() {
         )}
       </div>
 
-      <div className="grid-2" style={{ marginBottom: 16 }}>
+      <div className="grid-2">
         <Card
           title={t("dashboard.card.deviceStatus")}
           action={
@@ -362,7 +410,7 @@ function StatCard({
           <div className="stat-icon">{icon}</div>
           {ok !== undefined && <StatusDot online={!!ok} label={ok ? "OK" : "ERR"} />}
         </div>
-        <div style={{ marginTop: 12, color: "var(--text-secondary)", fontSize: 12 }}>{label}</div>
+        <div style={{ marginTop: 12, fontSize: 12 }} className="muted">{label}</div>
         <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
         {hint && (
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>

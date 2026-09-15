@@ -51,8 +51,10 @@ pub fn run() {
             // System
             get_dashboard,
             get_system_status,
+            readiness_checklist,
             // Devices
             list_devices,
+            list_devices_unified,
             get_device,
             open_device_window,
             get_device_telemetry,
@@ -226,10 +228,28 @@ pub fn run() {
             write_config_file,
             reveal_in_folder,
             probe_tool,
+            // Device tags (settings-backed grouping)
+            get_device_tags,
+            set_device_tags,
             // WSL binder kernel (switch / restore / verify)
             get_wsl_kernel_status,
             switch_wsl_kernel,
             verify_wsl_binder,
+            // QEMU track (qemu-center CLI bridge)
+            qemu_doctor,
+            qemu_setup,
+            qemu_vm_list,
+            qemu_vm_create,
+            qemu_vm_start,
+            qemu_vm_stop,
+            qemu_vm_delete,
+            qemu_vm_snapshot,
+            qemu_vm_restore,
+            qemu_guest_wait,
+            qemu_redroid_create,
+            qemu_redroid_list,
+            qemu_adb_list,
+            qemu_verify,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

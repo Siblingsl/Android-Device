@@ -9,6 +9,7 @@ import { ApkPage } from "./pages/Apk";
 import { VolumesPage } from "./pages/Volumes";
 import { LogsPage } from "./pages/Logs";
 import { SettingsPage } from "./pages/Settings";
+import { QemuCenterPage } from "./pages/QemuCenter";
 import { DeviceWindowPage } from "./pages/DeviceWindow";
 import { I18nProvider } from "./i18n";
 
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="adb" element={<AdbPage />} />
             <Route path="apk" element={<ApkPage />} />
             <Route path="volumes" element={<VolumesPage />} />
+            <Route path="qemu" element={<QemuCenterPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -40,6 +40,12 @@ export interface DeviceInfo {
   dataVolume?: string;
   /** Effective spoofed model from ro.product.model (may differ from the container name). */
   spoofedModel?: string;
+  /** Origin track of this row (unified list only): "docker" | "adb" | "qemu". */
+  source?: string;
+  /** QEMU track only: the owning VM node name. */
+  qemuVm?: string;
+  /** QEMU track only: the redroid instance name inside the node. */
+  qemuInstance?: string;
   batteryLevel?: number;
   batteryCharging?: boolean;
   batteryTemperatureC?: number;
@@ -505,7 +511,8 @@ export interface GnirehtetSession {
 }
 
 export interface AppSettings {
-  theme: string;
+  /** "light" | "dark" | null (= follow the system via prefers-color-scheme). */
+  theme?: string | null;
   language: string;
   autoUpdate: boolean;
   logPath: string;
@@ -539,9 +546,14 @@ export interface AppSettings {
   tun2socksPath?: string;
   /** Apply the simulated battery curve while detail pages are open (default true). */
   batteryAutoRefresh?: boolean | null;
+  /** Preferred runtime track: "docker" (default) | "qemu". Preference only —
+   * the QEMU track stays experimental until its verify report is all-green. */
+  defaultTrack?: string;
   resourceAlertThreshold: number;
   deviceRefreshIntervalSecs: number;
   deviceMonitorRules: Record<string, DeviceMonitorRule>;
+  /** Per-device grouping tags: deviceId|serial → tag names (tags ARE groups). */
+  deviceTags?: Record<string, string[]> | null;
 }
 
 export interface DashboardData {
@@ -551,6 +563,18 @@ export interface DashboardData {
   recentScreenshots: string[];
   recentApks: string[];
   notifications: string[];
+}
+
+/** One row of the Dashboard first-use readiness checklist. */
+export interface ReadinessItem {
+  /** docker | adb | scrcpy | whpx | qemu-bin | cloud-image */
+  id: string;
+  title: string;
+  done: boolean;
+  /** What to do when not done (rendered verbatim from the backend). */
+  hint: string;
+  /** Frontend route the "go fix" button navigates to. */
+  cta: string;
 }
 
 /** WSL2 custom binder kernel (Redroid + Docker Desktop) */
@@ -628,4 +652,94 @@ export interface QueueResult<TItem, TValue> {
 export interface QueueHandle<TItem, TValue> {
   done: Promise<QueueResult<TItem, TValue>>;
   cancel: () => void;
+}
+
+// ---- QEMU track (qemu-center CLI bridge) ----
+
+export interface QemuCliOutput {
+  success: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface QemuDoctorCheck {
+  id: string;
+  title: string;
+  /** "ok" | "fail" | "unknown" */
+  status: string;
+  detail: string;
+  fix: string;
+}
+
+export interface QemuDoctorReport {
+  stateDir: string;
+  checks: QemuDoctorCheck[];
+}
+
+export interface QemuAdbAssignment {
+  instance: string;
+  port: number;
+  serial: string;
+}
+
+export interface QemuVmEntry {
+  name: string;
+  vcpus: number;
+  memMib: number;
+  accel: string;
+  sshHostPort: number;
+  adbPorts: number[];
+  adbAssignments: QemuAdbAssignment[];
+  /** qcow2 internal snapshot tags registered in state.json. */
+  snapshots?: string[];
+}
+
+export interface QemuVerifyCheck {
+  id: string;
+  title: string;
+  /** "PASS" | "FAIL" | "UNTESTED" */
+  verdict: string;
+  detail: string;
+}
+
+export interface QemuVerifyReport {
+  vm: string;
+  container?: string | null;
+  checks: QemuVerifyCheck[];
+}
+
+export interface QemuRedroidInstance {
+  instance: string;
+  container: string;
+  port: number;
+  serial: string;
+  status: string;
+}
+
+export interface QemuAdbMapping {
+  serial: string;
+  vm: string;
+  instance: string;
+}
+
+export interface QemuVmCreateRequest {
+  name: string;
+  /** Empty/absent → backend resolves the default downloaded cloud image. */
+  imagePath?: string;
+  cpus: number;
+  memMib: number;
+  diskGib: number;
+  adbPortCount: number;
+  autoSetup: boolean;
+}
+
+export interface QemuRedroidCreateRequest {
+  vm: string;
+  name: string;
+  cpus: number;
+  memoryMib: number;
+  width: number;
+  height: number;
+  dpi: number;
 }

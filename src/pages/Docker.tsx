@@ -499,7 +499,7 @@ export function DockerPage() {
         </div>
       </div>
 
-      <div className="row" style={{ marginBottom: 14, flexWrap: "wrap", gap: 16 }}>
+      <div className="row" style={{ flexWrap: "wrap" }}>
         <ToolStatus kind="docker" hit={tools?.docker} />
         <ToolStatus kind="adb" hit={tools?.adb} />
       </div>
@@ -588,7 +588,7 @@ export function DockerPage() {
               </div>
             ) : null}
             {kernel?.dockerReadyHints?.length ? (
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "var(--text-muted)" }}>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "var(--muted)" }}>
                 {kernel.dockerReadyHints.map((h) => (
                   <li key={h}>{h}</li>
                 ))}
@@ -680,7 +680,7 @@ export function DockerPage() {
         )}
       </Card>
 
-      <div className="grid-stats" style={{ marginTop: 16 }}>
+      <div className="grid-stats">
         {loading && !info ? (
           Array.from({ length: 4 }).map((_, i) => (
             <Card key={i}>
@@ -794,59 +794,65 @@ export function DockerPage() {
               </Button>
             </div>
           )}
-          <label className="row" style={{ marginBottom: 12 }}>
-            <input
-              type="checkbox"
-              checked={stayToCreate}
-              onChange={(e) => {
-                const on = e.target.checked;
-                setStayToCreate(on);
-                if (settings) {
-                  void saveSettings({ ...settings, createStayOnForm: on }).catch(() => {
-                    /* ignore */
-                  });
-                }
-              }}
-            />
-            {t("docker.stayOnForm")}
-          </label>
-          <label className="row" style={{ marginBottom: 12 }}>
-            <input
-              type="checkbox"
-              checked={waitAdbPref}
-              onChange={(e) => {
-                const on = e.target.checked;
-                setWaitAdbPref(on);
-                if (settings) {
-                  void saveSettings({ ...settings, createWaitAdb: on }).catch(() => {
-                    /* ignore */
-                  });
-                }
-              }}
-            />
-            {t("docker.waitAdb")}
-          </label>
-          <label className="row" style={{ marginBottom: 12 }}>
-            <input
-              type="checkbox"
-              checked={form.cleanTraces !== false}
-              onChange={(e) => setForm((f) => ({ ...f, cleanTraces: e.target.checked }))}
-            />
-            {t("docker.cleanTraces")}
-          </label>
-          <div className="muted" style={{ fontSize: 11, marginBottom: 12, maxWidth: 560 }}>
-            {t("docker.cleanTracesHint")}
-          </div>
-          <label className="row" style={{ marginBottom: 12 }}>
-            <input
-              type="checkbox"
-              checked={form.gpuPassthrough === true}
-              onChange={(e) => setForm((f) => ({ ...f, gpuPassthrough: e.target.checked }))}
-            />
-            {t("docker.gpuPassthrough")}
-          </label>
-          <div className="muted" style={{ fontSize: 11, marginBottom: 12, maxWidth: 560 }}>
-            {t("docker.gpuPassthroughHint")}
+          <div className="create-modal-checks">
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={stayToCreate}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setStayToCreate(on);
+                  if (settings) {
+                    void saveSettings({ ...settings, createStayOnForm: on }).catch(() => {
+                      /* ignore */
+                    });
+                  }
+                }}
+              />
+              {t("docker.stayOnForm")}
+            </label>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={waitAdbPref}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setWaitAdbPref(on);
+                  if (settings) {
+                    void saveSettings({ ...settings, createWaitAdb: on }).catch(() => {
+                      /* ignore */
+                    });
+                  }
+                }}
+              />
+              {t("docker.waitAdb")}
+            </label>
+            <div className="create-modal-check">
+              <label className="row">
+                <input
+                  type="checkbox"
+                  checked={form.cleanTraces !== false}
+                  onChange={(e) => setForm((f) => ({ ...f, cleanTraces: e.target.checked }))}
+                />
+                {t("docker.cleanTraces")}
+              </label>
+              <div className="muted create-check-hint">
+                {t("docker.cleanTracesHint")}
+              </div>
+            </div>
+            <div className="create-modal-check">
+              <label className="row">
+                <input
+                  type="checkbox"
+                  checked={form.gpuPassthrough === true}
+                  onChange={(e) => setForm((f) => ({ ...f, gpuPassthrough: e.target.checked }))}
+                />
+                {t("docker.gpuPassthrough")}
+              </label>
+              <div className="muted create-check-hint">
+                {t("docker.gpuPassthroughHint")}
+              </div>
+            </div>
           </div>
           <fieldset disabled={busy === "create"} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="form-grid">
@@ -1657,7 +1663,7 @@ export function DockerPage() {
         </div>
       )}
 
-      <div className="grid-2" style={{ marginTop: 16 }}>
+      <div className="grid-2">
         <Card
           title={t("docker.instancesTitle")}
           action={

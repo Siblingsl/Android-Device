@@ -1,6 +1,64 @@
 import { create } from "zustand";
 import type { AppSettings, DeviceInfo, SystemStatus } from "../types";
 import { DeviceService } from "../services/deviceService";
+
+/**
+ * Cross-page state of a QEMU environment-setup run (`setup all` can block in a
+ * Rust CLI child for up to an hour). Lives in the global store so switching
+ * pages — which unmounts QemuCenter — never loses the "still running" signal.
+ * Session-only on purpose: restarting the app kills the child process anyway.
+ */
+export interface QemuSetupState {
+  running: boolean;
+  step: string;
+  startedAt: number;
+}
+
+/** Tri-state theme preference ("system" = follow prefers-color-scheme). */
+export type ThemePref = "light" | "dark" | "system";
+
+/** Map a stored settings theme value onto the tri-state preference. */
+export function themePrefOf(value: string | null | undefined): ThemePref {
+  return value === "dark" || value === "light" ? value : "system";
+}
+
+function resolvedTheme(pref: ThemePref): "light" | "dark" {
+  if (pref !== "system") return pref;
+  try {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function applyThemeAttribute(theme: "light" | "dark") {
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+}
+
+/** Live MediaQueryList while the preference is "system" (else null). */
+let systemThemeQuery: MediaQueryList | null = null;
+
+function onSystemThemeChange() {
+  const theme = resolvedTheme("system");
+  useAppStore.setState({ theme });
+  applyThemeAttribute(theme);
+}
+
+function syncSystemThemeListener(pref: ThemePref) {
+  try {
+    systemThemeQuery?.removeEventListener?.("change", onSystemThemeChange);
+    systemThemeQuery = null;
+    if (pref === "system") {
+      const mql = window.matchMedia("(prefers-color-scheme: dark)");
+      mql.addEventListener?.("change", onSystemThemeChange);
+      systemThemeQuery = mql;
+    }
+  } catch {
+    /* matchMedia unavailable (old webview / test env): static resolution only */
+  }
+}
 import {
   appendMonitorAlert,
   clearMonitorAlertsBefore,
@@ -16,6 +74,7 @@ import {
 
 interface AppState {
   theme: "light" | "dark";
+  themePref: ThemePref;
   detailOpen: boolean;
   selectedDeviceId: string | null;
   status: SystemStatus | null;
@@ -28,10 +87,16 @@ interface AppState {
   loading: boolean;
   statusText: string;
   refreshing: boolean;
-  setTheme: (theme: "light" | "dark") => void;
+  qemuSetup: QemuSetupState | null;
+  /** VM whose guest-SSH wait was interrupted by a page switch (null = none). */
+  qemuWaitVm: string | null;
+  /** pref: "light" | "dark" | "system" (system tracks prefers-color-scheme). */
+  setTheme: (pref: ThemePref) => void;
   setDetailOpen: (open: boolean) => void;
   setSelectedDeviceId: (id: string | null) => void;
   setStatusText: (text: string) => void;
+  setQemuSetup: (state: QemuSetupState | null) => void;
+  setQemuWaitVm: (vm: string | null) => void;
   addMonitorAlert: (alert: MonitorAlert) => void;
   dismissMonitorAlert: (id: string) => void;
   dismissMonitorAlerts: (ids: string[]) => void;
@@ -92,6 +157,7 @@ function noteRefreshFail(kind: string) {
 
 export const useAppStore = create<AppState>((set, get) => ({
   theme: "light",
+  themePref: "light",
   detailOpen: (() => {
     try {
       return localStorage.getItem("rdc.detailOpen") !== "0";
@@ -116,10 +182,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   loading: false,
   statusText: tStatic("common.status.ready"),
   refreshing: false,
+  qemuSetup: null,
+  qemuWaitVm: null,
 
-  setTheme: (theme) => {
-    set({ theme });
-    document.documentElement.setAttribute("data-theme", theme);
+  setQemuSetup: (qemuSetup) => set({ qemuSetup }),
+  setQemuWaitVm: (qemuWaitVm) => set({ qemuWaitVm }),
+
+  setTheme: (pref) => {
+    const theme = resolvedTheme(pref);
+    set({ themePref: pref, theme });
+    applyThemeAttribute(theme);
+    syncSystemThemeListener(pref);
   },
 
   setDetailOpen: (detailOpen) => {
@@ -273,7 +346,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!hasData) set({ loading: true });
     const request = (async () => {
       try {
-        const devices = await DeviceService.listDevices();
+        // Unified stream: Docker track + QEMU track (rows carry `source`).
+        // The plain list_devices command stays registered for compatibility.
+        const devices = await DeviceService.listDevicesUnified();
         set({ devices, loading: false });
         deviceFails = 0;
         if (statusFails === 0) noteRefreshOk();
@@ -292,11 +367,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadSettings: async () => {
     try {
       const settings = await DeviceService.getSettings();
-      set({ settings, theme: settings.theme === "dark" ? "dark" : "light" });
-      document.documentElement.setAttribute(
-        "data-theme",
-        settings.theme === "dark" ? "dark" : "light"
-      );
+      const pref = themePrefOf(settings.theme);
+      set({ settings, themePref: pref, theme: resolvedTheme(pref) });
+      applyThemeAttribute(resolvedTheme(pref));
+      syncSystemThemeListener(pref);
     } catch {
       // Web preview / backend unavailable: fall back to client defaults so the
       // Settings page renders instead of hanging on the loading state.
@@ -344,6 +418,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveSettings: async (settings) => {
     const updated = await DeviceService.updateSettings(settings);
     set({ settings: updated });
-    get().setTheme(updated.theme === "dark" ? "dark" : "light");
+    get().setTheme(themePrefOf(updated.theme));
   },
 }));

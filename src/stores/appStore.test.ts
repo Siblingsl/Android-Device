@@ -172,7 +172,8 @@ describe("app monitor alert state", () => {
     const pending = new Promise<DeviceInfo[]>((resolve) => {
       resolveList = resolve;
     });
-    const listDevices = vi.spyOn(DeviceService, "listDevices").mockReturnValue(pending);
+    // The store consumes the unified stream (Docker + QEMU tracks).
+    const listDevices = vi.spyOn(DeviceService, "listDevicesUnified").mockReturnValue(pending);
     const refreshDevices = useAppStore.getState().refreshDevices;
 
     const first = refreshDevices();
@@ -188,5 +189,41 @@ describe("app monitor alert state", () => {
     resolveList([]);
     await Promise.all([first, second]);
     expect(useAppStore.getState().devices).toEqual([]);
+  });
+});
+
+describe("qemu cross-page task state", () => {
+  afterEach(() => {
+    useAppStore.setState({ qemuSetup: null, qemuWaitVm: null });
+  });
+
+  it("keeps the setup flag while a page switch unmounts QemuCenter", () => {
+    useAppStore.getState().setQemuSetup({ running: true, step: "all", startedAt: 1234 });
+
+    expect(useAppStore.getState().qemuSetup).toEqual({
+      running: true,
+      step: "all",
+      startedAt: 1234,
+    });
+
+    useAppStore.getState().setQemuSetup(null);
+    expect(useAppStore.getState().qemuSetup).toBeNull();
+  });
+
+  it("replaces a still-running setup entry instead of merging", () => {
+    useAppStore.getState().setQemuSetup({ running: true, step: "whpx", startedAt: 1 });
+    useAppStore.getState().setQemuSetup({ running: true, step: "image", startedAt: 2 });
+
+    expect(useAppStore.getState().qemuSetup).toEqual({ running: true, step: "image", startedAt: 2 });
+  });
+
+  it("remembers the interrupted guest-wait vm until cleared", () => {
+    expect(useAppStore.getState().qemuWaitVm).toBeNull();
+
+    useAppStore.getState().setQemuWaitVm("node9");
+    expect(useAppStore.getState().qemuWaitVm).toBe("node9");
+
+    useAppStore.getState().setQemuWaitVm(null);
+    expect(useAppStore.getState().qemuWaitVm).toBeNull();
   });
 });

@@ -353,7 +353,6 @@ export function LogsPage() {
         ) : (
           <div
             className="shell-output"
-            style={{ maxHeight: 560, background: "var(--bg)" , color: "var(--text)" }}
             onScroll={bumpPause}
           >
             {logs.map((l) => {

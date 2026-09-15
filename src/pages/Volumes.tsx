@@ -179,7 +179,7 @@ export function VolumesPage() {
         </div>
       </div>
 
-      <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
+      <div className="row" style={{ flexWrap: "wrap" }}>
         <ToolStatus kind="docker" hit={docker ?? undefined} />
         <input
           value={query}

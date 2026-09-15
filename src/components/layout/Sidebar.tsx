@@ -6,6 +6,7 @@ import {
   Cable,
   Package,
   Database,
+  Server,
   ScrollText,
   Settings,
 } from "lucide-react";
@@ -19,6 +20,7 @@ const items = [
   { to: "/adb", icon: Cable, key: "common.nav.adb" },
   { to: "/apk", icon: Package, key: "common.nav.apk" },
   { to: "/volumes", icon: Database, key: "common.nav.volumes" },
+  { to: "/qemu", icon: Server, key: "common.nav.qemu" },
   { to: "/logs", icon: ScrollText, key: "common.nav.logs" },
   { to: "/settings", icon: Settings, key: "common.nav.settings" },
 ];
@@ -57,7 +59,7 @@ export function Sidebar() {
                 )}
               </NavLink>
             ))}
-            {items.slice(2, 7).map((item) => (
+            {items.slice(2, 8).map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

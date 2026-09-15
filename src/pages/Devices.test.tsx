@@ -12,6 +12,7 @@ vi.mock("../lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../services/deviceService", () => ({
   DeviceService: {
     listDevices: vi.fn(),
+    listDevicesUnified: vi.fn(),
     connect: vi.fn(),
     disconnect: vi.fn(),
     restart: vi.fn(),
@@ -22,21 +23,25 @@ vi.mock("../services/deviceService", () => ({
     listSpoofProfiles: vi.fn(),
     spoofProfileUsage: vi.fn(),
     applySpoofProfile: vi.fn(),
+    setDeviceTags: vi.fn(),
   },
 }));
 const storeState = vi.hoisted(() => ({
   setSelectedDeviceId: vi.fn(),
   setStatusText: vi.fn(),
   refreshDevices: vi.fn(async () => undefined),
+  loadSettings: vi.fn(async () => undefined),
+  deviceTags: undefined as Record<string, string[]> | undefined,
 }));
 vi.mock("../stores/appStore", () => ({
   useAppStore: (selector: (state: unknown) => unknown) =>
     selector({
       devices: [],
-      settings: { screenshotPath: "" },
+      settings: { screenshotPath: "", deviceTags: storeState.deviceTags },
       setSelectedDeviceId: storeState.setSelectedDeviceId,
       setStatusText: storeState.setStatusText,
       refreshDevices: storeState.refreshDevices,
+      loadSettings: storeState.loadSettings,
     }),
 }));
 
@@ -89,6 +94,7 @@ describe("Devices batch controls", () => {
     sessionStorage.clear();
     localStorage.clear();
     vi.mocked(DeviceService.listDevices).mockReset();
+    vi.mocked(DeviceService.listDevicesUnified).mockReset();
     vi.mocked(DeviceService.connect).mockReset();
     vi.mocked(DeviceService.disconnect).mockReset();
     vi.mocked(DeviceService.restart).mockReset();
@@ -104,6 +110,8 @@ describe("Devices batch controls", () => {
     storeState.setSelectedDeviceId.mockReset();
     storeState.setStatusText.mockReset();
     vi.mocked(DeviceService.listDevices).mockResolvedValue([device("one"), device("two")]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([device("one"), device("two")]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([device("one"), device("two")]);
     vi.mocked(DeviceService.connect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.disconnect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
@@ -115,6 +123,9 @@ describe("Devices batch controls", () => {
       { id: "captured-one", brand: "samsung", manufacturer: "samsung", model: "SM-S9110", marketName: "Galaxy S23", androidVersion: "14", securityPatch: "2023-12-01", fingerprint: "fp2", source: "captured" },
     ]);
     vi.mocked(DeviceService.applySpoofProfile).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.setDeviceTags).mockReset();
+    vi.mocked(DeviceService.setDeviceTags).mockResolvedValue({});
+    storeState.deviceTags = undefined;
     vi.mocked(DeviceService.spoofProfileUsage).mockResolvedValue([]);
     vi.mocked(save).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(askConfirm).mockResolvedValue(true);
@@ -410,6 +421,11 @@ describe("Devices batch controls", () => {
       device("two"),
       device("three"),
     ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      device("one"),
+      device("two"),
+      device("three"),
+    ]);
     vi.mocked(DeviceService.connect)
       .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device offline", exitCode: 1 })
       .mockResolvedValueOnce({ success: false, stdout: "", stderr: "device unauthorized", exitCode: 1 })
@@ -563,6 +579,10 @@ describe("Devices batch controls", () => {
       { ...device("one"), online: true, adbStatus: "device" },
       device("two"),
     ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
 
     render(
       <MemoryRouter>
@@ -587,6 +607,10 @@ describe("Devices batch controls", () => {
       { ...device("one"), online: true, adbStatus: "device" },
       device("two"),
     ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
 
     render(
       <MemoryRouter>
@@ -606,6 +630,10 @@ describe("Devices batch controls", () => {
 
   it("shows the current actionable count and disables batch actions for hidden picks", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
       { ...device("one"), online: true, adbStatus: "device" },
       device("two"),
     ]);
@@ -784,12 +812,12 @@ describe("Devices batch controls", () => {
     );
     await screen.findAllByRole("checkbox");
     const refresh = deferred<DeviceInfo[]>();
-    vi.mocked(DeviceService.listDevices).mockReturnValueOnce(refresh.promise);
+    vi.mocked(DeviceService.listDevicesUnified).mockReturnValueOnce(refresh.promise);
     const refreshButton = screen.getByRole("button", { name: "刷新" });
 
     fireEvent.click(refreshButton);
 
-    await waitFor(() => expect(DeviceService.listDevices).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(DeviceService.listDevicesUnified).toHaveBeenCalledTimes(2));
     expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
     expect(refreshButton.textContent).toBe("...");
 
@@ -894,6 +922,10 @@ describe("Devices batch controls", () => {
       { ...device("one"), online: true, adbStatus: "device" },
       device("two"),
     ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
 
     render(
       <MemoryRouter>
@@ -910,6 +942,10 @@ describe("Devices batch controls", () => {
 
   it("disconnects one device only after the confirmation is accepted", async () => {
     vi.mocked(DeviceService.listDevices).mockResolvedValue([
+      { ...device("one"), online: true, adbStatus: "device" },
+      device("two"),
+    ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
       { ...device("one"), online: true, adbStatus: "device" },
       device("two"),
     ]);
@@ -1115,6 +1151,10 @@ describe("Devices batch controls", () => {
       device("one"), // containerId: container-one → cloud instance
       { ...device("two"), containerId: "" }, // no container → real device
     ]);
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      device("one"), // containerId: container-one → cloud instance
+      { ...device("two"), containerId: "" }, // no container → real device
+    ]);
 
     render(
       <MemoryRouter>
@@ -1138,5 +1178,111 @@ describe("Devices batch controls", () => {
     fireEvent.change(kindFilter, { target: { value: "all" } });
     expect(screen.getByText("设备 one")).toBeTruthy();
     expect(screen.getByText("设备 two")).toBeTruthy();
+  }, 15_000);
+
+  it("badges QEMU-track devices and classifies them as cloud instances", async () => {
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      device("one"), // Docker track: source "docker" via containerId (fallback default)
+      {
+        ...device("qemu1"),
+        name: "node1·r1",
+        serial: "127.0.0.1:24500",
+        id: "127.0.0.1:24500",
+        containerId: "",
+        source: "qemu",
+        qemuVm: "node1",
+        qemuInstance: "r1",
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+
+    // The QEMU row carries a visible origin badge.
+    const badge = screen.getByText("QEMU");
+    expect(badge.className).toContain("badge");
+    // QEMU instances count as 云机 in the kind filter.
+    const kindFilter = screen.getByRole("combobox", { name: "云机/真机筛选" });
+    fireEvent.change(kindFilter, { target: { value: "cloud" } });
+    expect(screen.getByText("node1·r1")).toBeTruthy();
+    expect(screen.getByText("设备 one")).toBeTruthy();
+    expect(screen.queryByText("设备 two")).toBeNull();
+  }, 15_000);
+
+  it("renders grouping tag chips in the device identity area", async () => {
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([device("one")]);
+    storeState.deviceTags = { one: ["vip"] };
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    expect(screen.getAllByText("vip")).toHaveLength(1);
+    expect(screen.getByRole("combobox", { name: "分组筛选" })).toBeTruthy();
+  }, 15_000);
+
+  it("filters devices by tag and by ungrouped", async () => {
+    storeState.deviceTags = { one: ["vip"], two: [] };
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const tagFilter = screen.getByRole("combobox", { name: "分组筛选" });
+
+    fireEvent.change(tagFilter, { target: { value: "vip" } });
+    expect(screen.getByText("设备 one")).toBeTruthy();
+    expect(screen.queryByText("设备 two")).toBeNull();
+
+    fireEvent.change(tagFilter, { target: { value: "none" } });
+    expect(screen.getByText("设备 two")).toBeTruthy();
+    expect(screen.queryByText("设备 one")).toBeNull();
+  }, 15_000);
+
+  it("edits tags from the row More menu and persists them through setDeviceTags", async () => {
+    storeState.deviceTags = { one: ["vip"], two: ["farm"] };
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+    const cardActions = screen.getAllByRole("combobox", { name: "操作" });
+    fireEvent.change(cardActions[0], { target: { value: "setTags" } });
+
+    // The editor opens with the device's current tags pre-checked.
+    await screen.findByRole("dialog");
+    expect((screen.getByRole("checkbox", { name: "vip" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "farm" }) as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "farm" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存标签" }));
+
+    await waitFor(() =>
+      expect(DeviceService.setDeviceTags).toHaveBeenCalledWith("one", ["vip", "farm"]),
+    );
+    expect(storeState.loadSettings).toHaveBeenCalled();
+    expect(storeState.setStatusText).toHaveBeenCalledWith("标签已保存（2 个）");
+  }, 15_000);
+
+  it("keeps the plain device list command working when the unified stream is unavailable", async () => {
+    vi.mocked(DeviceService.listDevicesUnified).mockRejectedValue(new Error("backend down"));
+    vi.mocked(DeviceService.listDevices).mockClear();
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    // Loading resolves through the error path without crashing the page.
+    await waitFor(() => expect(storeState.setStatusText).toHaveBeenCalled());
+    expect(screen.queryByText("设备 one")).toBeNull();
   }, 15_000);
 });

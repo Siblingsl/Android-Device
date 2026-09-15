@@ -183,7 +183,7 @@ export function AdbPage() {
         </Button>
       </div>
 
-      <div className="row" style={{ flexWrap: "wrap", gap: 16 }}>
+      <div className="row" style={{ flexWrap: "wrap" }}>
         <ToolStatus kind="adb" hit={tools.adb} />
         <ToolStatus kind="docker" hit={tools.docker} />
       </div>
