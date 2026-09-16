@@ -67,7 +67,7 @@ rg -n "启动|前置依赖|Docker|QEMU|WHPX|macOS|ARM64|GApps|安装包|贡献|�
 
 ```powershell
 git diff --check
-rg -n "Windows x64|Docker 轨道|QEMU/WHPX|兼容性矩阵|故障排查" README.md
+rg -n "Windows x64|Docker 轨道|QEMU/WHPX" README.md
 ```
 
 提交：
@@ -104,17 +104,14 @@ git commit -m "docs: 收敛 Beta README 入口"
 
 所有命令示例使用仓库现有入口：`npm run tauri dev`、`npm run tauri build`、`qemu-center` 的独立 manifest 命令和 `scripts/` 中已有脚本；不新增与现有脚本重复的一键命令。
 
-- [ ] **Step 5: 加入统一文档索引**
+- [ ] **Step 5: 加入已创建的安装文档链接**
 
-在安装文档已经创建后，把以下相对链接加入 README，并确认每个目标存在：
+在安装文档已经创建后，把以下三个相对链接加入 README，并确认每个目标存在：
 
 ```markdown
 [Windows 干净机器安装](docs/getting-started/windows-clean.md)
 [Docker 轨道](docs/getting-started/docker-track.md)
 [QEMU/WHPX 轨道](docs/getting-started/qemu-whpx-track.md)
-[兼容性矩阵](docs/compatibility.md)
-[故障排查](docs/troubleshooting.md)
-[贡献指南](CONTRIBUTING.md)
 ```
 
 - [ ] **Step 6: 链接与措辞检查**
@@ -164,8 +161,10 @@ git commit -m "docs: 增加 Windows 与双轨安装指南"
 
 - [ ] **Step 5: 提交**
 
+在 README 中加入 `[兼容性矩阵](docs/compatibility.md)` 和 `[故障排查](docs/troubleshooting.md)` 两个链接，并确认两个目标文件存在。
+
 ```powershell
-git add docs/compatibility.md docs/troubleshooting.md
+git add README.md docs/compatibility.md docs/troubleshooting.md
 git commit -m "docs: 建立兼容性矩阵与排障指南"
 ```
 
@@ -206,8 +205,10 @@ Bug 模板收集复现步骤、期望/实际结果、轨道、应用版本、Win
 
 - [ ] **Step 6: 提交**
 
+在 README 中加入 `[贡献指南](CONTRIBUTING.md)`，并确认目标文件存在。
+
 ```powershell
-git add CONTRIBUTING.md SECURITY.md CHANGELOG.md .github/ISSUE_TEMPLATE .github/pull_request_template.md
+git add README.md CONTRIBUTING.md SECURITY.md CHANGELOG.md .github/ISSUE_TEMPLATE .github/pull_request_template.md
 git commit -m "docs: 建立贡献与问题反馈规范"
 ```
 

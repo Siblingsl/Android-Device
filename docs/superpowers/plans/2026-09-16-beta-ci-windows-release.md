@@ -112,11 +112,11 @@ git commit -m "ci: 增加发布版本一致性检查"
 
 - [ ] **Step 1: 设置触发器和权限**
 
-工作流只使用 `push.tags: ["v*.*.*"]` 和 `workflow_dispatch`；设置 `contents: write` 仅为创建草稿 Release，其他权限保持只读。每次运行固定 `windows-latest`、Node 20、Rust stable 和 timeout。
+工作流只使用 `push.tags: ["v*.*.*"]` 和带必填 `version` 输入的 `workflow_dispatch`；设置 `contents: write` 仅为创建草稿 Release，其他权限保持只读。每次运行固定 `windows-latest`、Node 20、Rust stable 和 timeout。tag 运行使用 `GITHUB_REF_NAME`，手动运行使用输入的 `version`。
 
 - [ ] **Step 2: 设置构建步骤**
 
-按顺序执行：checkout、Node/Rust 安装、`npm ci --ignore-scripts`、版本一致性脚本、`npx tsc --noEmit`、`npx vitest run`、两套 `cargo test --locked`、`npm run build`、`npx tauri build --bundles nsis`。
+按顺序执行：checkout、Node/Rust 安装、`npm ci --ignore-scripts`、用 tag 或手动输入调用版本一致性脚本、`npx tsc --noEmit`、`npx vitest run`、两套 `cargo test --locked`、`npm run build`、`npx tauri build --bundles nsis`。
 
 - [ ] **Step 3: 验证 NSIS 产物**
 
