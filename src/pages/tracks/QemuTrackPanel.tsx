@@ -387,18 +387,33 @@ export default function QemuTrackPanel({
    * only from data this panel already loads. Every count is `null` until its
    * own read succeeded, and the check tally carries the check's timestamp, so
    * the shell can say "未读取" / "未检查" and "N 分钟前" instead of inventing a 0.
+   *
+   * `instanceRows` (P6, additive) maps the instance list this panel renders for
+   * the comparison view. It follows the *same* gate as `instances`: only a list
+   * that actually came back for the currently selected node is published, so a
+   * stale or failed read keeps reading as "未读取" instead of as instances. The
+   * rows therefore cover that one node — the view says so.
    */
   const publishSource = useAppStore((s) => s.setQemuSource);
   useEffect(() => {
     if (!listAt && !doctorAt && !doctorError) return;
+    const hasInstances = Boolean(selectedVm) && instancesForRef.current === selectedVm;
     publishSource({
       at: listAt,
       nodes: listAt ? vms.length : null,
-      instances:
-        selectedVm && instancesForRef.current === selectedVm ? instances.length : null,
+      instances: hasInstances ? instances.length : null,
       scope: selectedVm,
       checks: doctor && doctorAt ? { at: doctorAt, ...checkTally(doctor.checks) } : null,
       cliError: doctorError,
+      instanceRows: hasInstances
+        ? instances.map((instance) => ({
+            name: instance.instance,
+            androidVersion: instance.androidVersion ?? "",
+            image: instance.image ?? "",
+            status: instance.status,
+            host: selectedVm,
+          }))
+        : null,
     });
   }, [listAt, doctorAt, vms, instances, selectedVm, doctor, doctorError, publishSource]);
 

@@ -2207,9 +2207,63 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
    around a panel would break the `.page-fade > div` scoping above; the shell
    also renders the Docker panel first and the QEMU panel second, which is what
    these sibling selectors rely on (the Docker panel root carries no class of
-   its own, so it is matched as "any following div that is not the QEMU one"). */
-.runtime-shell[data-inactive-track="docker"] ~ div:not(.page-qemu) { display: none; }
+   its own, so it is matched as "any following div that is not the QEMU one").
+   `.runtime-compare` (P6) is a following sibling too and is excluded from the
+   first rule: it replaces the panel area, it is never the hidden one. */
+.runtime-shell[data-inactive-track="docker"] ~ div:not(.page-qemu):not(.runtime-compare) { display: none; }
 .runtime-shell[data-inactive-track="qemu"] ~ .page-qemu { display: none; }
+
+/* Compare view (merge spec §6.8, P6): `?view=compare` replaces the panel area,
+   so both panels leave the layout through the same attribute-driven mechanism
+   as above. The compare root keeps the `.page-fade > div` full-height treatment
+   and scrolls internally, exactly like a track panel does. */
+.runtime-shell[data-view="compare"] ~ div:not(.runtime-compare) { display: none; }
+.content > .page-fade > .runtime-compare { flex: 1 1 0; height: auto; min-height: 0; overflow-y: auto; padding-right: 3px; }
+.runtime-trackbar { display: flex; align-items: flex-start; gap: 6px; }
+.runtime-trackbar > .runtime-tabs { flex: 1 1 auto; min-width: 0; }
+.runtime-view-toggle { flex: 0 0 auto; min-height: 26px; margin-top: 2px; }
+
+.runtime-compare { display: flex; flex-direction: column; gap: 8px; }
+.runtime-compare-head { flex: 0 0 auto; align-items: flex-start; gap: 10px; }
+.runtime-compare-title { color: var(--ink); font-size: 13px; font-weight: 700; }
+.runtime-compare-subtitle { font-size: 11px; }
+.runtime-compare-tracks { display: grid; flex: 0 0 auto; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.runtime-compare-track { min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-tint); }
+.runtime-compare-track-name { color: var(--ink); font-size: 11px; font-weight: 700; }
+.runtime-compare-track-value { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 3px; font-size: 11px; font-weight: 650; }
+.runtime-compare-at { font-size: 10px; font-weight: 500; }
+.runtime-compare-scope { margin-top: 3px; font-size: 10px; }
+
+/* Group card: metric rows × one column per track. `.module` is the shared Card,
+   so only the head row and the table wrapping are new here. `.page-qemu` sets
+   `flex: 0 0 auto` on its `.page-fade > div > .module` children, which is what
+   this card wants anyway; the table keeps the shared `.table` look. */
+.runtime-compare-group { flex: 0 0 auto; min-height: 0; --module-accent: var(--muted-2); }
+.runtime-compare-group-head { flex: 0 0 auto; gap: 10px; margin-bottom: 6px; }
+.runtime-compare-group-title { min-width: 0; gap: 8px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.runtime-compare-group-raw { max-width: 46ch; overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-compare-table-wrap { max-height: none; overflow: visible; }
+.runtime-compare-table { min-width: 460px; }
+.runtime-compare-table th[scope="row"] { color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: 0.04em; }
+.runtime-compare-value { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.runtime-compare-number { font-size: 11px; font-weight: 700; }
+.runtime-compare-note { font-size: 10px; }
+.runtime-compare-gap { color: var(--muted); font-size: 10px; }
+.runtime-compare-unavailable { color: var(--danger); font-size: 10px; font-weight: 650; }
+
+/* Lightweight bar: the shared meter primitive (a `role="meter"` box whose inner
+   span carries the ratio as a width), same visual family as the device hover
+   card's battery meter. No chart library, no remote asset. */
+.runtime-compare-meter { display: block; flex: 1 1 60px; max-width: 140px; height: 5px; overflow: hidden; border-radius: 999px; background: var(--surface-soft); }
+.runtime-compare-meter > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+
+.runtime-compare-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.runtime-compare-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); font-size: 10px; }
+.runtime-compare-chip > .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-compare-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted-2); }
+.runtime-compare-chip[data-state="up"] .runtime-compare-dot { background: var(--mint); }
+.runtime-compare-chip[data-state="down"] .runtime-compare-dot { background: var(--danger); }
+.runtime-compare-empty { flex: 0 0 auto; }
 
 /* Background-task bar: same visual family as the QEMU pending-setup banner. */
 .runtime-bg-task { display: flex; align-items: center; gap: 8px; margin-top: 8px; border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); border-left-width: 3px; color: var(--ink); font-size: 12px; }

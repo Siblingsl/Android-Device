@@ -421,6 +421,13 @@ export default function DockerTrackPanel({
    * never queries anything itself. The deps change exactly when a read landed
    * (`setInfo`/`setKernel`/`setTools` always store fresh objects), so the
    * timestamp is the age of the reading, not of the last render.
+   *
+   * `instances` (P6, additive) is the same redroid container list this panel
+   * renders, mapped 1:1 for the comparison view. It is deliberately *not*
+   * filtered by the panel's own search/status filters: those are view state, and
+   * a snapshot that changed with them would be reporting the filter, not the
+   * host. `androidVersion` stays empty because `docker ps` carries no version —
+   * the image tag is the evidence and the view maps it.
    */
   const publishSource = useAppStore((s) => s.setDockerSource);
   useEffect(() => {
@@ -431,6 +438,17 @@ export default function DockerTrackPanel({
       containers: info ? info.containers.length : null,
       cliAvailable: tools ? tools.docker.ok : null,
       kernelBinderEnabled: kernel ? kernel.binderEnabled : null,
+      instances: info
+        ? info.containers
+            .filter((container) => container.isRedroid)
+            .map((container) => ({
+              name: container.name,
+              androidVersion: "",
+              image: container.image,
+              status: container.status,
+              host: "",
+            }))
+        : null,
     });
   }, [info, kernel, tools, publishSource]);
 

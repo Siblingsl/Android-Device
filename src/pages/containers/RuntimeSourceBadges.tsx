@@ -30,7 +30,7 @@ import type {
  */
 type Level = "ok" | "warn" | "fail" | "unknown";
 
-const LEVEL_CLASS: Record<Level, string> = {
+export const LEVEL_CLASS: Record<Level, string> = {
   ok: "badge success",
   warn: "badge warn",
   fail: "badge danger",
@@ -68,6 +68,38 @@ function useNowTick(): number {
 }
 
 type Translator = (key: string, vars?: Record<string, string | number>) => string;
+
+/**
+ * The 健康度 slot of a track, shared with the compare view (P6).
+ *
+ * The compare view's 「健康度摘要」 metric has to be the same statement the badge
+ * makes — same wording, same cached source, same "state a reason" rule — so it
+ * is derived here rather than re-implemented there. `text` falls back to the
+ * count slot, which is where an unusable reading puts its reason
+ * ("Docker 未启动" / "CLI 缺失"): a track that cannot be read must say why
+ * instead of reporting a healthy 0.
+ */
+export type TrackHealthView = { text: string; level: Level; detail: string };
+
+function healthOf(view: BadgeView): TrackHealthView {
+  return { text: view.health ?? view.count, level: view.level, detail: view.detail ?? "" };
+}
+
+export function dockerHealthView(
+  reading: DockerSourceReading | null,
+  now: number,
+  t: Translator,
+): TrackHealthView {
+  return healthOf(dockerView(reading, now, t));
+}
+
+export function qemuHealthView(
+  reading: QemuSourceReading | null,
+  now: number,
+  t: Translator,
+): TrackHealthView {
+  return healthOf(qemuView(reading, now, t));
+}
 
 /** Docker: containers from `docker info`, health from engine + WSL binder. */
 function dockerView(reading: DockerSourceReading | null, now: number, t: Translator): BadgeView {

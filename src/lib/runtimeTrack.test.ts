@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_RUNTIME_VIEW,
   FALLBACK_RUNTIME_TRACK,
   RUNTIME_ROUTE,
   normalizeRuntimeTrack,
   resolveRuntimeLink,
   resolveRuntimeTrack,
+  resolveRuntimeView,
 } from "./runtimeTrack";
 
 describe("resolveRuntimeTrack (spec §6.1 priority)", () => {
@@ -18,6 +20,21 @@ describe("resolveRuntimeTrack (spec §6.1 priority)", () => {
     expect(resolveRuntimeTrack(null, "podman")).toBe(FALLBACK_RUNTIME_TRACK);
     expect(resolveRuntimeTrack(null, null)).toBe(FALLBACK_RUNTIME_TRACK);
     expect(normalizeRuntimeTrack("podman")).toBeNull();
+  });
+});
+
+/**
+ * P6: `?view=compare` selects the read-only compare view. Anything else — a
+ * bare `/containers`, an old deep link, a typo — stays on the track view, so no
+ * existing URL changes meaning and `?track=` keeps working alongside it.
+ */
+describe("resolveRuntimeView (P6)", () => {
+  it("selects the compare view only for ?view=compare", () => {
+    expect(resolveRuntimeView("compare")).toBe("compare");
+    expect(resolveRuntimeView("tracks")).toBe(DEFAULT_RUNTIME_VIEW);
+    for (const value of [null, undefined, "", "compare view", "COMPARE", "podman"]) {
+      expect(resolveRuntimeView(value)).toBe(DEFAULT_RUNTIME_VIEW);
+    }
   });
 });
 

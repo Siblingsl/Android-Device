@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import clsx from "clsx";
-import { Container, LoaderCircle, Server } from "lucide-react";
+import { ArrowLeft, Container, LoaderCircle, Scale, Server } from "lucide-react";
 import DockerTrackPanel from "../tracks/DockerTrackPanel";
 import QemuTrackPanel from "../tracks/QemuTrackPanel";
+import RuntimeCompare from "./RuntimeCompare";
 import RuntimeSourceBadges from "./RuntimeSourceBadges";
 import { Button } from "../../components/ui/Button";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
 import {
+  RUNTIME_COMPARE_PANEL_ID,
   RUNTIME_TRACKS,
   normalizeRuntimeTrack,
   panelDomId,
   resolveRuntimeTrack,
+  resolveRuntimeView,
   tabDomId,
   type RuntimeTrack,
   type TrackTaskInfo,
@@ -49,6 +52,13 @@ function otherTrack(track: RuntimeTrack): RuntimeTrack {
  * a wrapper element here would break the `.page-fade > div` scoping the track
  * layouts depend on (see the comment in global.css).
  *
+ * P6 adds a second view of the same page: `?view=compare` renders
+ * `RuntimeCompare` (read-only aggregation of the panels' published snapshots)
+ * in the panel area. It is a sibling of the shell as well, hidden panels are
+ * taken out of layout by the same attribute-driven CSS, and the mount strategy
+ * above is untouched — the shell still calls no service, the compare view
+ * included.
+ *
  * The panel is rendered as a *sibling* of the shell block, never inside an
  * extra wrapper: global.css scopes each track's layout through
  * `.page-docker`/`.page-qemu .page-fade > div > …`, which requires the panel
@@ -64,6 +74,9 @@ export default function RuntimePage() {
   const [tasks, setTasks] = useState<Partial<Record<RuntimeTrack, TrackTaskInfo>>>({});
 
   const track = resolveRuntimeTrack(searchParams.get("track"), settings?.defaultTrack);
+  /** `?view=compare` replaces the panel area with the read-only compare view. */
+  const view = resolveRuntimeView(searchParams.get("view"));
+  const inCompare = view === "compare";
 
   const reportTask = useCallback((from: RuntimeTrack, task: TrackTaskInfo | null) => {
     setTasks((previous) => {
@@ -123,28 +136,55 @@ export default function RuntimePage() {
     [settings, saveSettings],
   );
 
+  /** One history entry per user action: every `?track=`/`?view=` write goes here. */
+  const writeParams = useCallback(
+    (mutate: (params: URLSearchParams) => void) => {
+      setSearchParams((prev) => {
+        const params = new URLSearchParams(prev);
+        mutate(params);
+        return params;
+      });
+    },
+    [setSearchParams],
+  );
+
   const selectTrack = useCallback(
-    (next: RuntimeTrack) => {
+    (next: RuntimeTrack, options?: { keepView?: boolean }) => {
       // Write the choice into the URL (shareable / refresh-safe). Skipped when
       // the URL already says so, to avoid a duplicate history entry.
-      if (searchParams.get("track") !== next) {
-        setSearchParams((prev) => {
-          const params = new URLSearchParams(prev);
+      const trackStale = searchParams.get("track") !== next;
+      // Picking a track means "show me that track's panel", so it also leaves
+      // the compare view. A refresh delegation passes `keepView` instead: that
+      // click is not a navigation, it only has to mount a panel to read it.
+      const viewStale = !options?.keepView && searchParams.get("view") !== null;
+      if (trackStale || viewStale) {
+        writeParams((params) => {
           params.set("track", next);
-          return params;
+          if (viewStale) params.delete("view");
         });
       }
       rememberTrack(next);
     },
-    [searchParams, setSearchParams, rememberTrack],
+    [searchParams, writeParams, rememberTrack],
   );
 
+  /** Enter the compare view (`?view=compare`); `?track=` stays untouched. */
+  const enterCompare = useCallback(() => {
+    writeParams((params) => params.set("view", "compare"));
+  }, [writeParams]);
+
+  /** Leave it: the track the URL kept is the panel the user returns to. */
+  const leaveCompare = useCallback(() => {
+    writeParams((params) => params.delete("view"));
+  }, [writeParams]);
+
   /**
-   * Explicit refresh from a source badge (P5). A mounted panel re-runs its own
-   * read-only load when its signal is raised; an unmounted one is only revealed
-   * by a track switch, because mounting *is* that track's read (its mount load).
-   * Either way the shell itself calls no service — it only decides which of the
-   * panel's two existing entry points the user's click maps onto.
+   * Explicit refresh from a source badge (P5) or the compare view (P6). A
+   * mounted panel re-runs its own read-only load when its signal is raised; an
+   * unmounted one is only revealed by a track switch, because mounting *is* that
+   * track's read (its mount load). Either way the shell itself calls no service —
+   * it only decides which of the panel's two existing entry points the user's
+   * click maps onto.
    */
   const refreshSource = useCallback(
     (target: RuntimeTrack) => {
@@ -152,7 +192,7 @@ export default function RuntimePage() {
         setRefreshSignals((current) => ({ ...current, [target]: current[target] + 1 }));
         return;
       }
-      selectTrack(target);
+      selectTrack(target, { keepView: true });
     },
     [isMounted, selectTrack],
   );
@@ -195,7 +235,11 @@ export default function RuntimePage() {
 
   return (
     <>
-      <div className="runtime-shell" data-inactive-track={backgroundTrack ?? undefined}>
+      <div
+        className="runtime-shell"
+        data-inactive-track={backgroundTrack ?? undefined}
+        data-view={view}
+      >
         <div className="page-header">
           <div>
             <div className="page-title">{t("runtime.title")}</div>
@@ -204,31 +248,46 @@ export default function RuntimePage() {
           <RuntimeSourceBadges onRefresh={refreshSource} inPlace={mountedTracks} />
         </div>
 
-        <div className="tabs runtime-tabs" role="tablist" aria-label={t("runtime.track.label")}>
-          {RUNTIME_TRACKS.map((candidate) => {
-            const Icon = TRACK_ICON[candidate];
-            const selected = candidate === track;
-            return (
-              <button
-                key={candidate}
-                ref={(node) => {
-                  tabRefs.current[candidate] = node;
-                }}
-                id={tabDomId(candidate)}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={panelDomId(candidate)}
-                tabIndex={selected ? 0 : -1}
-                className={clsx("tab", "runtime-tab", selected && "active")}
-                onClick={() => selectTrack(candidate)}
-                onKeyDown={onTabKeyDown}
-              >
-                <Icon size={14} strokeWidth={1.9} />
-                <span>{t(TRACK_LABEL_KEY[candidate])}</span>
-              </button>
-            );
-          })}
+        {/* The view toggle sits *outside* the tablist: `role="tablist"` may only
+            contain tabs, and the button is not a third track. */}
+        <div className="runtime-trackbar">
+          <div className="tabs runtime-tabs" role="tablist" aria-label={t("runtime.track.label")}>
+            {RUNTIME_TRACKS.map((candidate) => {
+              const Icon = TRACK_ICON[candidate];
+              const selected = candidate === track;
+              return (
+                <button
+                  key={candidate}
+                  ref={(node) => {
+                    tabRefs.current[candidate] = node;
+                  }}
+                  id={tabDomId(candidate)}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  // While the compare view owns the panel area, it *is* the
+                  // visible tabpanel, so the tabs point at it (P6 a11y).
+                  aria-controls={inCompare ? RUNTIME_COMPARE_PANEL_ID : panelDomId(candidate)}
+                  tabIndex={selected ? 0 : -1}
+                  className={clsx("tab", "runtime-tab", selected && "active")}
+                  onClick={() => selectTrack(candidate)}
+                  onKeyDown={onTabKeyDown}
+                >
+                  <Icon size={14} strokeWidth={1.9} />
+                  <span>{t(TRACK_LABEL_KEY[candidate])}</span>
+                </button>
+              );
+            })}
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="runtime-view-toggle"
+            icon={inCompare ? <ArrowLeft size={13} /> : <Scale size={13} />}
+            onClick={inCompare ? leaveCompare : enterCompare}
+          >
+            {inCompare ? t("runtime.compare.exit") : t("runtime.compare.enter")}
+          </Button>
         </div>
 
         {backgroundTrack ? (
@@ -250,6 +309,19 @@ export default function RuntimePage() {
           </div>
         ) : null}
       </div>
+
+      {/* Compare view (P6): a sibling of the shell and of the panels, so it
+          inherits the `.page-fade > div` full-height treatment and the panels
+          stay the direct children global.css scopes its track layouts through.
+          It renders the session cache only — no service call, no timer — and the
+          panels keep their mount strategy untouched behind it. */}
+      {inCompare ? (
+        <RuntimeCompare
+          onRefresh={refreshSource}
+          inPlace={mountedTracks}
+          labelId={tabDomId(track)}
+        />
+      ) : null}
 
       {/* Two fixed slots, in this order: the hidden-panel rule in global.css is a
           sibling selector keyed on `data-inactive-track`, and keeping both slots
