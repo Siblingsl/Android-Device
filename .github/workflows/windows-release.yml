@@ -1,0 +1,105 @@
+name: Windows x64 release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "v-prefixed release version, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Windows x64 NSIS package
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install from lockfile
+        run: npm ci --ignore-scripts
+
+      - name: Validate release version
+        shell: pwsh
+        run: node scripts/check-release-version.mjs "$env:RELEASE_VERSION"
+
+      - name: Run TypeScript checks
+        run: npx tsc --noEmit
+
+      - name: Run frontend tests
+        run: npx vitest run
+
+      - name: Run src-tauri tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Run qemu-center tests
+        run: cargo test --locked --manifest-path qemu-center/Cargo.toml
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build NSIS installer
+        run: npx tauri build --bundles nsis
+
+      - name: Stage and checksum installer
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:GITHUB_WORKSPACE "release-staging"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          $installers = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)."
+          }
+          Copy-Item -LiteralPath $installers[0].FullName -Destination $staging
+          $releaseFile = Join-Path $staging "release-version.txt"
+          "version=$env:RELEASE_VERSION" | Set-Content -Encoding utf8 $releaseFile
+          $payload = @(Get-ChildItem -Path $staging -File | Where-Object { $_.Name -ne "SHA256SUMS.txt" })
+          $lines = foreach ($file in $payload) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash *$($file.Name)"
+          }
+          $lines | Set-Content -Encoding ascii (Join-Path $staging "SHA256SUMS.txt")
+
+      - name: Upload unsigned package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: redroid-device-center-${{ env.RELEASE_VERSION }}-windows-x64-unsigned
+          path: release-staging/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create draft GitHub release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:RELEASE_VERSION" `
+            --draft `
+            --title "Redroid Device Center $env:RELEASE_VERSION" `
+            --generate-notes `
+            release-staging/*
