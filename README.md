@@ -72,6 +72,12 @@ npm run tauri build
 | 设置 | 路径浏览 / 打开 / 单条或全部检测；自动启动设备清单（可清理失效项）；创建时默认加入自动启动 / 留在表单 |
 | 容器与节点 | 一个入口管理 Docker 与 QEMU/WHPX 两条轨道；可切换轨道、查看来源和只读对比 |
 
+安装和排障入口：
+
+- [Windows 干净机器安装](docs/getting-started/windows-clean.md)
+- [Docker 轨道](docs/getting-started/docker-track.md)
+- [QEMU/WHPX 轨道](docs/getting-started/qemu-whpx-track.md)
+
 ## 创建一台带 GApps 的虚机
 
 1. Windows：先在 **Docker** 页切自定义 binder 内核，再重新打开 Docker Desktop。  
