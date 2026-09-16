@@ -2215,3 +2215,21 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
 .runtime-bg-task { display: flex; align-items: center; gap: 8px; margin-top: 8px; border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); border-left-width: 3px; color: var(--ink); font-size: 12px; }
 .runtime-bg-task .create-spinner { color: var(--accent); }
 .runtime-bg-task-text { flex: 1 1 auto; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
+
+/* Source badges (merge spec §6.8, P5): read-only 数量 + 健康度 of each track,
+   rendered on the right of the shell's page header. Purely additive — the pills
+   reuse the shared `.badge` colours, so only the row, the two text slots and the
+   explicit-refresh affordance are new. */
+.runtime-badges { flex: 0 0 auto; justify-content: flex-end; flex-wrap: wrap; }
+.runtime-source { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 4px 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); font-size: 11px; }
+.runtime-source-track { color: var(--ink); font-weight: 700; }
+.runtime-source-count { color: var(--muted); }
+.runtime-source[data-level="fail"] .runtime-source-count { color: var(--danger); font-weight: 650; }
+.runtime-source-refresh { display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 50%; color: var(--muted); }
+.runtime-source-refresh:hover { color: var(--ink); background: var(--surface-tint); }
+
+/* Header dedup (P5): a track panel's own page header collapses to its action
+   row — same buttons, same handlers, only the title/subtitle block is gone
+   because the shell renders the page title once. Right-aligned and borderless,
+   so it reads as the panel toolbar instead of a second page header. */
+.runtime-panel-actions { flex: 0 0 auto; justify-content: flex-end; flex-wrap: wrap; }

@@ -50,6 +50,63 @@ export type TrackTaskInfo = {
 };
 
 /**
+ * Read-only source snapshots behind the merged page's badges (merge spec §6.8).
+ *
+ * Written by each track panel from data it already loaded — the shell never
+ * calls `docker_*` / `qemu_*` and never triggers a probe, it only renders what
+ * is in the cache. Every field is deliberately "unknown-able" (`null`): the
+ * badge must state a reason instead of a made-up `0` when a source is
+ * unavailable ("Docker 未启动" / "CLI 缺失" / "未读取").
+ */
+export type DockerSourceReading = {
+  /** Epoch ms of the read this snapshot came from. */
+  at: number;
+  /** `docker info` reachable and reporting a running engine. */
+  running: boolean | null;
+  /** Containers reported by `docker info`; only meaningful when `running`. */
+  containers: number | null;
+  /** Tool probe for the Docker CLI (`probeTool`). */
+  cliAvailable: boolean | null;
+  /** WSL/binder kernel readiness, `null` when the host has no WSL strategy. */
+  kernelBinderEnabled: boolean | null;
+};
+
+/** One host check tally of the QEMU `doctor` report (the cached 八项). */
+export type QemuCheckTally = {
+  /** Timestamp of the check itself, not of this snapshot. */
+  at: number;
+  total: number;
+  ok: number;
+  fail: number;
+  /** Checks with `status` neither `ok` nor `fail`. */
+  other: number;
+};
+
+export type QemuSourceReading = {
+  /** Epoch ms of the node-list read this snapshot came from (`0` = never). */
+  at: number;
+  /** Nodes from `vm list`, `null` until that read succeeded once. */
+  nodes: number | null;
+  /** Instances of `scope` from `redroid list`; `null` = not loaded. */
+  instances: number | null;
+  /** Node the instance count belongs to (the panel's selected node). */
+  scope: string;
+  /** Cached `doctor` result, `null` until the track ran one. */
+  checks: QemuCheckTally | null;
+  /** Last doctor failure, i.e. "CLI 缺失" with the raw text as the tooltip. */
+  cliError: string;
+};
+
+/** DOM ids wiring the shell's tablist to the panel roots (P5, a11y). */
+export function tabDomId(track: RuntimeTrack): string {
+  return `runtime-tab-${track}`;
+}
+
+export function panelDomId(track: RuntimeTrack): string {
+  return `runtime-panel-${track}`;
+}
+
+/**
  * Legacy runtime route → merged-page link.
  *
  * For navigation targets that are not literals in our own JSX: the Dashboard's

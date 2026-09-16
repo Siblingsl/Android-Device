@@ -75,9 +75,40 @@ export type DockerTrackPanelProps = {
    * instead of unmounting it (which would drop the task's local state).
    */
   onTaskChange?: (task: TrackTaskInfo | null) => void;
+  /**
+   * Merged-page header dedup (P5): `false` drops this panel's own page header —
+   * only the title/subtitle block — because the shell already renders the page
+   * title once. The header's actions (刷新 / 创建实例) are *not* part of what is
+   * dropped: they stay as the panel's top action row, so no capability is
+   * hidden. Defaults to `true`; the standalone `/docker` route is unchanged.
+   */
+  showHeader?: boolean;
+  /**
+   * a11y wiring for the shell's tablist (P5). The panel root *is* the tabpanel:
+   * global.css scopes this track's layout through `.page-fade > div`, so no
+   * wrapper element may be inserted around it. Left undefined on the standalone
+   * route, which then renders no tab/tabpanel relationship at all.
+   */
+  panelId?: string;
+  /** id of the tab whose `aria-controls` points at `panelId`. */
+  panelLabelId?: string;
+  /**
+   * Explicit refresh from the shell's source badge (P5): a bump re-runs this
+   * panel's own read-only status load. The shell never calls a service itself,
+   * and the initial value must not trigger anything — entering the page loads
+   * nothing but what this panel already loads on mount.
+   */
+  refreshSignal?: number;
 };
 
-export default function DockerTrackPanel({ active = true, onTaskChange }: DockerTrackPanelProps = {}) {
+export default function DockerTrackPanel({
+  active = true,
+  onTaskChange,
+  showHeader = true,
+  panelId,
+  panelLabelId,
+  refreshSignal,
+}: DockerTrackPanelProps = {}) {
   const { t } = useI18n();
   const storeSetStatusText = useAppStore((s) => s.setStatusText);
   // Status-line sourcing (merge spec §6.4): this track's status line is the
@@ -384,6 +415,39 @@ export default function DockerTrackPanel({ active = true, onTaskChange }: Docker
     return () => loadSequence.invalidate();
   }, []);
 
+  /**
+   * Read-only source snapshot for the shell's badge (merge spec §6.8). Built
+   * only from data this panel already loaded — no extra command, and the shell
+   * never queries anything itself. The deps change exactly when a read landed
+   * (`setInfo`/`setKernel`/`setTools` always store fresh objects), so the
+   * timestamp is the age of the reading, not of the last render.
+   */
+  const publishSource = useAppStore((s) => s.setDockerSource);
+  useEffect(() => {
+    if (!info && !kernel && !tools) return;
+    publishSource({
+      at: Date.now(),
+      running: info ? info.running : null,
+      containers: info ? info.containers.length : null,
+      cliAvailable: tools ? tools.docker.ok : null,
+      kernelBinderEnabled: kernel ? kernel.binderEnabled : null,
+    });
+  }, [info, kernel, tools, publishSource]);
+
+  /**
+   * Explicit refresh from the shell's badge (P5). A bump re-runs `load()`, i.e.
+   * the same read-only `docker info` + WSL kernel + tool probe this panel does
+   * on mount. The first value is recorded as already handled, so mounting the
+   * merged page never triggers an extra read.
+   */
+  const handledRefreshRef = useRef(refreshSignal ?? 0);
+  useEffect(() => {
+    const signal = refreshSignal ?? 0;
+    if (signal === handledRefreshRef.current) return;
+    handledRefreshRef.current = signal;
+    void load();
+  }, [refreshSignal, load]);
+
   useEffect(() => {
     let cancelled = false;
     void DeviceService.listSpoofProfiles()
@@ -508,43 +572,63 @@ export default function DockerTrackPanel({ active = true, onTaskChange }: Docker
     }
   };
 
+  /**
+   * Header actions, kept out of the title block so `showHeader={false}` (merged
+   * page) can drop only the title/subtitle and still render every capability:
+   * 刷新 (`load`) and 创建实例 (opens the create form, disabled while Docker is
+   * unavailable). Pure move — same buttons, same handlers, same order; only the
+   * wrapping class gained `runtime-panel-actions` for the collapsed layout.
+   */
+  const headerActions = (
+    <div className="row runtime-panel-actions">
+      <Button icon={<RefreshCw size={15} />} onClick={load}>
+        {t("common.refresh")}
+      </Button>
+      <Button
+        variant="primary"
+        icon={<Plus size={15} />}
+        disabled={Boolean(creatingTask) || (tools !== null && !tools.docker.ok)}
+        title={tools && !tools.docker.ok ? t("docker.dockerUnavailable", { text: tools.docker.text }) : undefined}
+        onClick={async () => {
+          try {
+            const port = await DeviceService.nextFreeAdbPort();
+            const redroids = (info?.containers ?? []).filter((c) => c.isRedroid);
+            let n = redroids.length + 1;
+            let name = `redroid-${n}`;
+            while (await DeviceService.checkInstanceName(name)) {
+              n += 1;
+              name = `redroid-${n}`;
+            }
+            setForm((f) => ({ ...f, name, adbPort: port }));
+          } catch {
+            /* keep defaults */
+          }
+          setShowCreate(true);
+        }}
+      >
+        {t("docker.createInstance")}
+      </Button>
+    </div>
+  );
+
   return (
-    <div>
-      <div className="page-header">
-        <div>
-          <div className="page-title">{t("docker.title")}</div>
-          <div className="page-subtitle">{t("docker.subtitle")}</div>
+    <div
+      id={panelId}
+      role={panelId ? "tabpanel" : undefined}
+      aria-labelledby={panelId ? panelLabelId : undefined}
+      tabIndex={panelId ? -1 : undefined}
+    >
+      {showHeader ? (
+        <div className="page-header">
+          <div>
+            <div className="page-title">{t("docker.title")}</div>
+            <div className="page-subtitle">{t("docker.subtitle")}</div>
+          </div>
+          {headerActions}
         </div>
-        <div className="row">
-          <Button icon={<RefreshCw size={15} />} onClick={load}>
-            {t("common.refresh")}
-          </Button>
-          <Button
-            variant="primary"
-            icon={<Plus size={15} />}
-            disabled={Boolean(creatingTask) || (tools !== null && !tools.docker.ok)}
-            title={tools && !tools.docker.ok ? t("docker.dockerUnavailable", { text: tools.docker.text }) : undefined}
-            onClick={async () => {
-              try {
-                const port = await DeviceService.nextFreeAdbPort();
-                const redroids = (info?.containers ?? []).filter((c) => c.isRedroid);
-                let n = redroids.length + 1;
-                let name = `redroid-${n}`;
-                while (await DeviceService.checkInstanceName(name)) {
-                  n += 1;
-                  name = `redroid-${n}`;
-                }
-                setForm((f) => ({ ...f, name, adbPort: port }));
-              } catch {
-                /* keep defaults */
-              }
-              setShowCreate(true);
-            }}
-          >
-            {t("docker.createInstance")}
-          </Button>
-        </div>
-      </div>
+      ) : (
+        headerActions
+      )}
 
       <div className="row" style={{ flexWrap: "wrap" }}>
         <ToolStatus kind="docker" hit={tools?.docker} />

@@ -31,12 +31,16 @@ vi.mock("../stores/appStore", () => ({
   useAppStore: (selector: (state: {
     setSelectedDeviceId: () => void;
     setStatusText: () => void;
+    // The panel also publishes a read-only source snapshot for the merged
+    // page's badges (P5); this standalone page test stubs the whole store.
+    setDockerSource: () => void;
     settings: null;
     saveSettings: () => Promise<void>;
   }) => unknown) =>
     selector({
       setSelectedDeviceId: () => {},
       setStatusText: () => {},
+      setDockerSource: () => {},
       settings: null,
       saveSettings: async () => {},
     }),

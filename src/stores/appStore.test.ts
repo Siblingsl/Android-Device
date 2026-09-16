@@ -227,3 +227,47 @@ describe("qemu cross-page task state", () => {
     expect(useAppStore.getState().qemuWaitVm).toBeNull();
   });
 });
+
+describe("merged page source cache (P5)", () => {
+  afterEach(() => {
+    useAppStore.setState({ runtimeSources: { docker: null, qemu: null } });
+  });
+
+  const dockerReading = {
+    at: 111,
+    running: true,
+    containers: 3,
+    cliAvailable: true,
+    kernelBinderEnabled: true,
+  };
+
+  it("publishes one track at a time and keeps the other track's reading", () => {
+    expect(useAppStore.getState().runtimeSources).toEqual({ docker: null, qemu: null });
+
+    useAppStore.getState().setQemuSource({
+      at: 222,
+      nodes: 1,
+      instances: null,
+      scope: "",
+      checks: null,
+      cliError: "",
+    });
+    useAppStore.getState().setDockerSource(dockerReading);
+
+    expect(useAppStore.getState().runtimeSources.docker).toEqual(dockerReading);
+    expect(useAppStore.getState().runtimeSources.qemu?.nodes).toBe(1);
+
+    // A later read replaces the previous snapshot of the same track only.
+    useAppStore.getState().setDockerSource({ ...dockerReading, at: 333, containers: 5 });
+    expect(useAppStore.getState().runtimeSources.docker?.containers).toBe(5);
+    expect(useAppStore.getState().runtimeSources.qemu?.nodes).toBe(1);
+  });
+
+  it("has no reset path: a reading survives the panel that published it", () => {
+    useAppStore.getState().setDockerSource(dockerReading);
+    // The merged shell mounts only the active track, so the badge for the other
+    // one reads this cache; nothing clears it on unmount (session-scoped, like
+    // the QEMU setup flag).
+    expect(useAppStore.getState().runtimeSources.docker).toEqual(dockerReading);
+  });
+});

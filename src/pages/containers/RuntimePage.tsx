@@ -1,16 +1,19 @@
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import clsx from "clsx";
 import { Container, LoaderCircle, Server } from "lucide-react";
 import DockerTrackPanel from "../tracks/DockerTrackPanel";
 import QemuTrackPanel from "../tracks/QemuTrackPanel";
+import RuntimeSourceBadges from "./RuntimeSourceBadges";
 import { Button } from "../../components/ui/Button";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
 import {
   RUNTIME_TRACKS,
   normalizeRuntimeTrack,
+  panelDomId,
   resolveRuntimeTrack,
+  tabDomId,
   type RuntimeTrack,
   type TrackTaskInfo,
 } from "../../lib/runtimeTrack";
@@ -91,6 +94,22 @@ export default function RuntimePage() {
   const hiddenMounted = Boolean(hiddenTask);
   const backgroundTrack: RuntimeTrack | null = hiddenMounted ? hidden : null;
 
+  /** Mounted = visible right now, or kept alive by a running long task. */
+  const isMounted = useCallback(
+    (candidate: RuntimeTrack) => candidate === track || Boolean(tasks[candidate]),
+    [track, tasks],
+  );
+  const mountedTracks = useMemo(
+    () => ({ docker: isMounted("docker"), qemu: isMounted("qemu") }),
+    [isMounted],
+  );
+
+  /** Bumped per track to ask a *mounted* panel for a fresh read-only load. */
+  const [refreshSignals, setRefreshSignals] = useState<Record<RuntimeTrack, number>>({
+    docker: 0,
+    qemu: 0,
+  });
+
   const rememberTrack = useCallback(
     (next: RuntimeTrack) => {
       // URL is temporary / shareable, the memory is cross-session. Best effort:
@@ -120,7 +139,47 @@ export default function RuntimePage() {
     [searchParams, setSearchParams, rememberTrack],
   );
 
+  /**
+   * Explicit refresh from a source badge (P5). A mounted panel re-runs its own
+   * read-only load when its signal is raised; an unmounted one is only revealed
+   * by a track switch, because mounting *is* that track's read (its mount load).
+   * Either way the shell itself calls no service — it only decides which of the
+   * panel's two existing entry points the user's click maps onto.
+   */
+  const refreshSource = useCallback(
+    (target: RuntimeTrack) => {
+      if (isMounted(target)) {
+        setRefreshSignals((current) => ({ ...current, [target]: current[target] + 1 }));
+        return;
+      }
+      selectTrack(target);
+    },
+    [isMounted, selectTrack],
+  );
+
+  /**
+   * Focus target of a keyboard *activation* (Enter / Space). Arrow-key
+   * navigation deliberately leaves focus on the tab — that is the roving
+   * tabindex behaviour the P2 tests pin — while activating a tab moves focus
+   * into the revealed panel (merge spec §6.7).
+   */
+  const [focusPanel, setFocusPanel] = useState<RuntimeTrack | null>(null);
+  useEffect(() => {
+    if (!focusPanel) return;
+    setFocusPanel(null);
+    // The panel root *is* the tabpanel (it has to stay the direct child of
+    // `.page-fade`, so the shell cannot wrap it in a host of its own) and it
+    // carries the id, which is why it is looked up instead of held by a ref.
+    document.getElementById(panelDomId(focusPanel))?.focus();
+  }, [focusPanel, track]);
+
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectTrack(track);
+      setFocusPanel(track);
+      return;
+    }
     const current = RUNTIME_TRACKS.indexOf(track);
     let nextIndex: number | null = null;
     if (event.key === "ArrowRight") nextIndex = (current + 1) % RUNTIME_TRACKS.length;
@@ -142,6 +201,7 @@ export default function RuntimePage() {
             <div className="page-title">{t("runtime.title")}</div>
             <div className="page-subtitle">{t("runtime.subtitle")}</div>
           </div>
+          <RuntimeSourceBadges onRefresh={refreshSource} inPlace={mountedTracks} />
         </div>
 
         <div className="tabs runtime-tabs" role="tablist" aria-label={t("runtime.track.label")}>
@@ -154,9 +214,11 @@ export default function RuntimePage() {
                 ref={(node) => {
                   tabRefs.current[candidate] = node;
                 }}
+                id={tabDomId(candidate)}
                 type="button"
                 role="tab"
                 aria-selected={selected}
+                aria-controls={panelDomId(candidate)}
                 tabIndex={selected ? 0 : -1}
                 className={clsx("tab", "runtime-tab", selected && "active")}
                 onClick={() => selectTrack(candidate)}
@@ -192,12 +254,30 @@ export default function RuntimePage() {
       {/* Two fixed slots, in this order: the hidden-panel rule in global.css is a
           sibling selector keyed on `data-inactive-track`, and keeping both slots
           in the tree (`null` when unmounted) is what stops React from remounting
-          a panel that has to stay mounted across a track switch. */}
+          a panel that has to stay mounted across a track switch.
+          Each panel also gets its a11y wiring here: the panel root is the
+          tabpanel (id + `aria-labelledby`, pointed at by its tab's
+          `aria-controls`) and `showHeader={false}` because the shell above
+          already renders the page title once. */}
       {track === "docker" || tasks.docker ? (
-        <DockerTrackPanel active={track === "docker"} onTaskChange={onDockerTask} />
+        <DockerTrackPanel
+          active={track === "docker"}
+          onTaskChange={onDockerTask}
+          showHeader={false}
+          panelId={panelDomId("docker")}
+          panelLabelId={tabDomId("docker")}
+          refreshSignal={refreshSignals.docker}
+        />
       ) : null}
       {track === "qemu" || tasks.qemu ? (
-        <QemuTrackPanel active={track === "qemu"} onTaskChange={onQemuTask} />
+        <QemuTrackPanel
+          active={track === "qemu"}
+          onTaskChange={onQemuTask}
+          showHeader={false}
+          panelId={panelDomId("qemu")}
+          panelLabelId={tabDomId("qemu")}
+          refreshSignal={refreshSignals.qemu}
+        />
       ) : null}
     </>
   );

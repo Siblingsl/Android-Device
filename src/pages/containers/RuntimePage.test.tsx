@@ -8,7 +8,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 // first keeps the cycle in the order the other page tests already rely on.
 import { useAppStore } from "../../stores/appStore";
 import RuntimePage from "./RuntimePage";
-import type { AppSettings, DockerInfo, QemuDoctorReport, QemuVmEntry, ShellResult } from "../../types";
+import type { AppSettings, DockerContainer, DockerInfo, QemuDoctorReport, QemuVmEntry, ShellResult } from "../../types";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -106,10 +106,52 @@ const dockerInfo: DockerInfo = {
 
 const doctorReport: QemuDoctorReport = { stateDir: "C:/QemuCenter", checks: [] };
 
-// Panel-internal subtitles: unique to each track, so they prove which panel is
-// mounted without depending on the shell's own labels.
-const DOCKER_PANEL = "Docker 状态、WSL 内核、镜像、容器与 Redroid 实例";
-const QEMU_PANEL = "QEMU/WHPX 轨道：节点（VM）→ 实例（redroid 容器）";
+/** All-eight-ready doctor report (the cached result the badge renders). */
+const doctorEight: QemuDoctorReport = {
+  stateDir: "C:/QemuCenter",
+  checks: Array.from({ length: 8 }, (_, i) => ({
+    id: `check-${i}`,
+    title: `Check ${i}`,
+    status: "ok",
+    detail: "",
+    fix: "",
+  })),
+};
+
+const vmFixture = (name: string): QemuVmEntry => ({
+  name,
+  vcpus: 4,
+  memMib: 4096,
+  accel: "whpx",
+  sshHostPort: 22300,
+  adbPorts: [24500, 24501],
+  adbAssignments: [],
+});
+
+const containerFixture = (name: string): DockerContainer => ({
+  id: name,
+  name,
+  image: "redroid/redroid:13.0.0-latest",
+  status: "Up 2 minutes",
+  ports: "0.0.0.0:5555->5555/tcp",
+  created: "2 minutes ago",
+  isRedroid: true,
+});
+
+/**
+ * Panel mount probe (P5): the panels no longer render their own page header in
+ * the merged shell, so their titles are gone. The tabpanel id the shell hands
+ * down is the stable marker — and asserting on it also proves the panel root is
+ * the direct child of `.page-fade` rather than being wrapped.
+ */
+function panelEl(track: "docker" | "qemu"): HTMLElement | null {
+  return document.getElementById(`runtime-panel-${track}`);
+}
+
+/** The source badge of one track, as the shell header renders it. */
+function badgeEl(track: "docker" | "qemu"): HTMLElement {
+  return document.querySelector(`.runtime-source[data-track="${track}"]`) as HTMLElement;
+}
 
 /** Shows the router's current location so tests can assert the deep link. */
 function LocationProbe() {
@@ -143,13 +185,13 @@ function activeTab() {
 }
 
 function expectOnlyDockerPanel() {
-  expect(screen.getByText(DOCKER_PANEL)).toBeTruthy();
-  expect(screen.queryByText(QEMU_PANEL)).toBeNull();
+  expect(panelEl("docker")).toBeTruthy();
+  expect(panelEl("qemu")).toBeNull();
 }
 
 function expectOnlyQemuPanel() {
-  expect(screen.getByText(QEMU_PANEL)).toBeTruthy();
-  expect(screen.queryByText(DOCKER_PANEL)).toBeNull();
+  expect(panelEl("qemu")).toBeTruthy();
+  expect(panelEl("docker")).toBeNull();
 }
 
 /** Direct children of the router outlet wrapper the panel must not be wrapped in. */
@@ -163,7 +205,7 @@ beforeEach(() => {
   // Deterministic language: the real provider resolves it from localStorage and
   // falls back to navigator.language (en-US under jsdom).
   localStorage.setItem("rdc.lang", "zh-CN");
-  useAppStore.setState({ settings: { ...baseSettings } });
+  useAppStore.setState({ settings: { ...baseSettings }, runtimeSources: { docker: null, qemu: null } });
   vi.mocked(probeTool).mockResolvedValue({ ok: true, text: "available" });
   vi.mocked(DeviceService.getSettings).mockResolvedValue({ ...baseSettings });
   vi.mocked(DeviceService.updateSettings).mockImplementation(async (settings) => settings);
@@ -229,12 +271,12 @@ describe("RuntimePage track resolution", () => {
   it("mounts only the active track's panel", async () => {
     const { unmount } = renderShell("/containers?track=docker");
     await flush();
-    expect(screen.queryByText(QEMU_PANEL)).toBeNull();
+    expect(panelEl("qemu")).toBeNull();
     unmount();
 
     renderShell("/containers?track=qemu");
     await flush();
-    expect(screen.queryByText(DOCKER_PANEL)).toBeNull();
+    expect(panelEl("docker")).toBeNull();
   });
 });
 
@@ -409,15 +451,15 @@ describe("RuntimePage lifecycle (P3)", () => {
     await drain();
     await startDockerCreate();
 
-    expect(screen.getByText(DOCKER_PANEL)).toBeTruthy();
+    expect(panelEl("docker")).toBeTruthy();
     expectCreateStillRunning();
 
     await switchTo("QEMU 节点");
 
     // Still mounted (hidden by CSS, not unmounted): the create's local state
     // must survive the switch.
-    expect(screen.getByText(DOCKER_PANEL)).toBeTruthy();
-    expect(screen.getByText(QEMU_PANEL)).toBeTruthy();
+    expect(panelEl("docker")).toBeTruthy();
+    expect(panelEl("qemu")).toBeTruthy();
     expect(inactiveTrack()).toBe("docker");
     const bar = backgroundBar();
     expect(bar?.textContent).toContain("本机 Docker 仍在执行");
@@ -429,7 +471,7 @@ describe("RuntimePage lifecycle (P3)", () => {
 
     expect(currentLocation()).toBe("/containers?track=docker");
     expect(inactiveTrack()).toBeNull();
-    expect(screen.queryByText(QEMU_PANEL)).toBeNull();
+    expect(panelEl("qemu")).toBeNull();
     // Same mount, not a fresh one: the create is still running in the panel.
     expectCreateStillRunning();
   });
@@ -442,7 +484,7 @@ describe("RuntimePage lifecycle (P3)", () => {
 
     await switchTo("QEMU 节点");
     expect(inactiveTrack()).toBe("docker");
-    expect(screen.getByText(DOCKER_PANEL)).toBeTruthy();
+    expect(panelEl("docker")).toBeTruthy();
 
     await act(async () => {
       create.resolve({ success: false, stdout: "", stderr: "boom", exitCode: 1 });
@@ -451,7 +493,7 @@ describe("RuntimePage lifecycle (P3)", () => {
     await drain();
     await drain();
 
-    expect(screen.queryByText(DOCKER_PANEL)).toBeNull();
+    expect(panelEl("docker")).toBeNull();
     expect(inactiveTrack()).toBeNull();
     expect(backgroundBar()).toBeNull();
   });
@@ -477,7 +519,7 @@ describe("RuntimePage lifecycle (P3)", () => {
 
     expect(vi.mocked(DeviceService.getCreateStage).mock.calls.length).toBe(callsAfterSwitch);
     // It is still mounted — the poll is paused, the panel was not dropped.
-    expect(screen.getByText(DOCKER_PANEL)).toBeTruthy();
+    expect(panelEl("docker")).toBeTruthy();
     expectCreateStillRunning();
   });
 
@@ -488,7 +530,7 @@ describe("RuntimePage lifecycle (P3)", () => {
     });
     renderShell("/containers?track=qemu");
     await drain();
-    expect(screen.getByText(QEMU_PANEL)).toBeTruthy();
+    expect(panelEl("qemu")).toBeTruthy();
 
     // Active + setup running: the 30s doctor poll runs (task-progress refresh).
     const before = vi.mocked(QemuService.doctor).mock.calls.length;
@@ -505,7 +547,7 @@ describe("RuntimePage lifecycle (P3)", () => {
     });
 
     expect(vi.mocked(QemuService.doctor).mock.calls.length).toBe(callsAfterSwitch);
-    expect(screen.getByText(QEMU_PANEL)).toBeTruthy();
+    expect(panelEl("qemu")).toBeTruthy();
     expect(backgroundBar()?.textContent).toContain("QEMU 节点 仍在执行");
   });
 
@@ -565,6 +607,251 @@ describe("RuntimePage lifecycle (P3)", () => {
   });
 });
 
+/**
+ * P5 (merge spec §6.7 / §6.8): one page header instead of two, read-only source
+ * badges that never probe the host on their own, and the tablist wiring.
+ */
+describe("RuntimePage header dedup (P5)", () => {
+  it("renders the page title once and no panel-owned header", async () => {
+    renderShell("/containers?track=docker");
+    await flush();
+
+    const titles = document.querySelectorAll(".page-title");
+    expect(titles).toHaveLength(1);
+    expect(titles[0].textContent).toBe("容器与节点");
+    expect(document.querySelectorAll(".page-subtitle")).toHaveLength(1);
+
+    expect(panelEl("docker")?.querySelector(".page-header")).toBeNull();
+    expect(screen.queryByText("Docker 管理")).toBeNull();
+    expect(screen.queryByText("Docker 状态、WSL 内核、镜像、容器与 Redroid 实例")).toBeNull();
+  });
+
+  it("keeps every header capability of both panels reachable", async () => {
+    renderShell("/containers?track=docker");
+    await flush();
+
+    // Docker: 刷新 (re-read) + 创建实例 (opens the create form) survive the
+    // header dedup in the panel's own action row.
+    const dockerActions = panelEl("docker")?.querySelector(".runtime-panel-actions") as HTMLElement;
+    expect(dockerActions).toBeTruthy();
+    expect(within(dockerActions).getByRole("button", { name: "刷新" })).toBeTruthy();
+    expect(within(dockerActions).getByRole("button", { name: "创建实例" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "QEMU 节点" }));
+    await flush();
+
+    // QEMU: 刷新 (vm list) + 重新体检 (the explicit doctor re-run) likewise.
+    expect(panelEl("qemu")?.querySelector(".page-header")).toBeNull();
+    const qemuActions = panelEl("qemu")?.querySelector(".runtime-panel-actions") as HTMLElement;
+    expect(qemuActions).toBeTruthy();
+    expect(within(qemuActions).getByRole("button", { name: "刷新" })).toBeTruthy();
+    expect(within(qemuActions).getByRole("button", { name: "重新体检" })).toBeTruthy();
+  });
+
+  it("keeps the panel's own header on the standalone route (rollback path)", async () => {
+    const { default: DockerTrackPanel } = await import("../tracks/DockerTrackPanel");
+    render(
+      <MemoryRouter>
+        <DockerTrackPanel />
+      </MemoryRouter>,
+    );
+    await flush();
+
+    // `showHeader` defaults to `true`: the legacy/nested mount renders exactly
+    // the header it always did, so P5 can be rolled back without touching them.
+    const titles = document.querySelectorAll(".page-title");
+    expect(titles).toHaveLength(1);
+    expect(titles[0].textContent).toBe("Docker 管理");
+    expect(screen.getByRole("button", { name: "创建实例" })).toBeTruthy();
+  });
+});
+
+describe("RuntimePage source badges (P5)", () => {
+  const TWELVE_MIN = 12 * 60_000;
+
+  async function settle() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  async function drain() {
+    for (let i = 0; i < 3; i += 1) await settle();
+  }
+
+  function cachedQemu(at: number) {
+    return {
+      at,
+      nodes: 1,
+      instances: 2,
+      scope: "node1",
+      checks: { at, total: 8, ok: 8, fail: 0, other: 0 },
+      cliError: "",
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(DeviceService.checkInstanceName).mockResolvedValue(false);
+    vi.mocked(DeviceService.checkAdbPort).mockResolvedValue(false);
+    vi.mocked(DeviceService.getCreateStage).mockResolvedValue("");
+  });
+
+  it("shows the cached check with its age and runs no check on entry", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    useAppStore.setState({ runtimeSources: { docker: null, qemu: cachedQemu(now - TWELVE_MIN) } });
+
+    renderShell("/containers?track=docker");
+    await drain();
+
+    // Hard constraint (spec §6.8, decision #5): entering the page must not run
+    // the WHPX doctor walk — the badge only renders what the cache holds.
+    expect(vi.mocked(QemuService.doctor).mock.calls.length).toBe(0);
+    const text = badgeEl("qemu").textContent ?? "";
+    expect(text).toContain("1 节点 / 2 实例");
+    expect(text).toContain("体检 8/8（12 分钟前）");
+  });
+
+  it("runs the check only after an explicit badge refresh on a mounted track", async () => {
+    vi.mocked(QemuService.doctor).mockResolvedValue(doctorEight);
+    vi.useFakeTimers();
+    renderShell("/containers?track=qemu");
+    await drain();
+
+    // The panel's own mount load is the only check so far, and it is the track's
+    // pre-existing behaviour — not something the badge asked for.
+    expect(vi.mocked(QemuService.doctor).mock.calls.length).toBe(1);
+    expect(badgeEl("qemu").textContent).toContain("体检 8/8（刚刚）");
+
+    fireEvent.click(screen.getByRole("button", { name: /刷新来源：QEMU 节点/ }));
+    await drain();
+
+    expect(vi.mocked(QemuService.doctor).mock.calls.length).toBe(2);
+    // Refreshed in place: the mounted panel re-ran its own read.
+    expect(currentLocation()).toBe("/containers?track=qemu");
+  });
+
+  it("mounts the other track when its badge is refreshed while unmounted", async () => {
+    vi.mocked(QemuService.doctor).mockResolvedValue(doctorEight);
+    vi.mocked(QemuService.vmList).mockResolvedValue([vmFixture("node1")]);
+    vi.mocked(QemuService.redroidList).mockResolvedValue([]);
+    vi.useFakeTimers();
+    renderShell("/containers?track=docker");
+    await drain();
+
+    expect(vi.mocked(QemuService.doctor).mock.calls.length).toBe(0);
+    expect(badgeEl("qemu").textContent).toContain("未检查");
+
+    // Unmounted track: the shell can only switch to it (it calls no service
+    // itself), and that mount is the read the user just asked for.
+    fireEvent.click(screen.getByRole("button", { name: /刷新来源：QEMU 节点/ }));
+    await drain();
+
+    expect(currentLocation()).toBe("/containers?track=qemu");
+    expect(vi.mocked(QemuService.doctor).mock.calls.length).toBe(1);
+    expect(badgeEl("qemu").textContent).toContain("体检 8/8（刚刚）");
+  });
+
+  it("shows the counts the tracks' own read-only lists reported", async () => {
+    vi.mocked(DeviceService.refreshDockerInfo).mockResolvedValue({
+      ...dockerInfo,
+      containers: [containerFixture("rdc-a"), containerFixture("rdc-b"), containerFixture("rdc-c")],
+    });
+    vi.mocked(QemuService.vmList).mockResolvedValue([vmFixture("node1"), vmFixture("node2")]);
+    vi.mocked(QemuService.redroidList).mockResolvedValue([]);
+
+    renderShell("/containers?track=docker");
+    await flush();
+
+    expect(badgeEl("docker").textContent).toContain("本机 Docker");
+    expect(badgeEl("docker").textContent).toContain("3 容器");
+    expect(badgeEl("docker").textContent).toContain("正常");
+
+    fireEvent.click(screen.getByRole("tab", { name: "QEMU 节点" }));
+    await flush();
+    expect(badgeEl("qemu").textContent).toContain("2 节点");
+  });
+
+  it("states the reason instead of 0 when Docker is not running", async () => {
+    vi.mocked(DeviceService.refreshDockerInfo).mockResolvedValue({
+      ...dockerInfo,
+      running: false,
+      containers: [],
+    });
+
+    renderShell("/containers?track=docker");
+    await flush();
+
+    const text = badgeEl("docker").textContent ?? "";
+    expect(text).toContain("Docker 未启动");
+    expect(text).not.toContain("0 容器");
+  });
+
+  it("states a missing CLI instead of 0 on both tracks", async () => {
+    vi.mocked(probeTool).mockResolvedValue({ ok: false, text: "not found" });
+    vi.mocked(QemuService.doctor).mockRejectedValue(new Error("qemu-center not found"));
+    vi.mocked(QemuService.vmList).mockRejectedValue(new Error("qemu-center not found"));
+
+    renderShell("/containers?track=docker");
+    await flush();
+    expect(badgeEl("docker").textContent).toContain("CLI 缺失");
+
+    fireEvent.click(screen.getByRole("tab", { name: "QEMU 节点" }));
+    await flush();
+
+    const text = badgeEl("qemu").textContent ?? "";
+    expect(text).toContain("CLI 缺失");
+    expect(text).toContain("未读取");
+    expect(text).not.toContain("0 节点");
+  });
+});
+
+describe("RuntimePage tablist a11y (P5)", () => {
+  it("ties each tab to its tabpanel without introducing a wrapper", async () => {
+    renderShell("/containers?track=docker");
+    await flush();
+
+    const dockerTab = screen.getByRole("tab", { name: "本机 Docker" });
+    expect(dockerTab.id).toBe("runtime-tab-docker");
+    expect(dockerTab.getAttribute("aria-controls")).toBe("runtime-panel-docker");
+
+    const panel = panelEl("docker") as HTMLElement;
+    expect(screen.getByRole("tabpanel")).toBe(panel);
+    expect(panel.getAttribute("aria-labelledby")).toBe("runtime-tab-docker");
+    // Programmatically focusable, but not an extra tab stop.
+    expect(panel.tabIndex).toBe(-1);
+
+    // Roving tabindex is untouched (P2): only the selected tab is tabbable.
+    expect(dockerTab.tabIndex).toBe(0);
+    expect(screen.getByRole("tab", { name: "QEMU 节点" }).tabIndex).toBe(-1);
+    expect(screen.getByRole("tab", { name: "本机 Docker" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "QEMU 节点" }).getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("moves focus into the revealed panel on keyboard activation", async () => {
+    renderShell("/containers?track=docker");
+    await flush();
+
+    const dockerTab = screen.getByRole("tab", { name: "本机 Docker" });
+    dockerTab.focus();
+    fireEvent.keyDown(dockerTab, { key: "Enter" });
+    await flush();
+    expect(document.activeElement).toBe(panelEl("docker"));
+
+    // Arrow-key navigation keeps focus on the tab (roving tabindex, P2); the
+    // following activation then moves it into the newly revealed panel.
+    dockerTab.focus();
+    fireEvent.keyDown(dockerTab, { key: "ArrowRight" });
+    await flush();
+    expect(currentLocation()).toBe("/containers?track=qemu");
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "QEMU 节点" }));
+
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Enter" });
+    await flush();
+    expect(document.activeElement).toBe(panelEl("qemu"));
+  });
+});
+
 describe("legacy routes", () => {
   it("redirects the old /docker bookmark onto the Docker track", async () => {
     window.location.hash = "#/docker";
@@ -578,6 +865,11 @@ describe("legacy routes", () => {
     // (global.css scopes each track's layout through exactly that depth).
     expect(document.querySelector(".app-shell")?.className).toContain("page-docker");
     expect(fadeChildren()).toHaveLength(2);
+    // The tabpanel is the panel root itself: P5 added no wrapper around it, so
+    // the `.page-fade > div` scoping global.css uses for each track still holds.
+    expect(fadeChildren()[1].getAttribute("role")).toBe("tabpanel");
+    expect(fadeChildren()[1].id).toBe("runtime-panel-docker");
+    expect(fadeChildren()[1].getAttribute("aria-labelledby")).toBe("runtime-tab-docker");
   });
 
   it("redirects the old /qemu bookmark onto the QEMU track", async () => {

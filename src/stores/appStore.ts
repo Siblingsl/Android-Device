@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AppSettings, DeviceInfo, SystemStatus } from "../types";
+import type { DockerSourceReading, QemuSourceReading } from "../lib/runtimeTrack";
 import { DeviceService } from "../services/deviceService";
 
 /**
@@ -90,6 +91,15 @@ interface AppState {
   qemuSetup: QemuSetupState | null;
   /** VM whose guest-SSH wait was interrupted by a page switch (null = none). */
   qemuWaitVm: string | null;
+  /**
+   * Session cache behind the merged page's source badges (merge spec §6.8).
+   * Session-only, like `qemuSetup`: a restart re-probes anyway. It has to live
+   * outside the panels because the shell renders both badges while only the
+   * active track is mounted — and re-entering `/containers` must show the last
+   * cached check with its timestamp instead of running one (the QEMU WHPX probe
+   * costs seconds and has timeout steps).
+   */
+  runtimeSources: { docker: DockerSourceReading | null; qemu: QemuSourceReading | null };
   /** pref: "light" | "dark" | "system" (system tracks prefers-color-scheme). */
   setTheme: (pref: ThemePref) => void;
   setDetailOpen: (open: boolean) => void;
@@ -97,6 +107,9 @@ interface AppState {
   setStatusText: (text: string) => void;
   setQemuSetup: (state: QemuSetupState | null) => void;
   setQemuWaitVm: (vm: string | null) => void;
+  /** Read-only publish from a track panel; never clears a previous reading. */
+  setDockerSource: (reading: DockerSourceReading) => void;
+  setQemuSource: (reading: QemuSourceReading) => void;
   addMonitorAlert: (alert: MonitorAlert) => void;
   dismissMonitorAlert: (id: string) => void;
   dismissMonitorAlerts: (ids: string[]) => void;
@@ -184,9 +197,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshing: false,
   qemuSetup: null,
   qemuWaitVm: null,
+  runtimeSources: { docker: null, qemu: null },
 
   setQemuSetup: (qemuSetup) => set({ qemuSetup }),
   setQemuWaitVm: (qemuWaitVm) => set({ qemuWaitVm }),
+  setDockerSource: (reading) =>
+    set((state) => ({ runtimeSources: { ...state.runtimeSources, docker: reading } })),
+  setQemuSource: (reading) =>
+    set((state) => ({ runtimeSources: { ...state.runtimeSources, qemu: reading } })),
 
   setTheme: (pref) => {
     const theme = resolvedTheme(pref);

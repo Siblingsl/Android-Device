@@ -24,6 +24,7 @@ import { createRequestSequence } from "../../lib/requestSequence";
 import type { TrackTaskInfo } from "../../lib/runtimeTrack";
 import { tStatic, useI18n } from "../../i18n";
 import type {
+  QemuDoctorCheck,
   QemuDoctorReport,
   QemuRedroidInstance,
   QemuVerifyReport,
@@ -138,6 +139,19 @@ function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** `ok` / `fail` / other tally of a doctor report (merge spec §6.8 badge). */
+function checkTally(checks: QemuDoctorCheck[]) {
+  let ok = 0;
+  let fail = 0;
+  let other = 0;
+  for (const check of checks) {
+    if (check.status === "ok") ok += 1;
+    else if (check.status === "fail") fail += 1;
+    else other += 1;
+  }
+  return { total: checks.length, ok, fail, other };
+}
+
 /**
  * Lifecycle contract with the merged-page shell (`pages/containers/RuntimePage`).
  * Both props are optional, so the standalone `/qemu` route renders the panel
@@ -157,14 +171,57 @@ export type QemuTrackPanelProps = {
    * instead of unmounting it (unmounting is what used to interrupt the wait).
    */
   onTaskChange?: (task: TrackTaskInfo | null) => void;
+  /**
+   * Merged-page header dedup (P5): `false` drops this panel's own page header —
+   * only the title/subtitle block — because the shell already renders the page
+   * title once. The header's actions (刷新 / 重新体检) are *not* dropped: they
+   * stay as the panel's top action row, so the explicit re-check stays reachable
+   * (and is still the only thing that runs a fresh doctor here). Defaults to
+   * `true`; the standalone `/qemu` route is unchanged.
+   */
+  showHeader?: boolean;
+  /**
+   * a11y wiring for the shell's tablist (P5). The panel root *is* the tabpanel:
+   * global.css scopes this track's layout through `.page-fade > div`, so no
+   * wrapper element may be inserted around it. Left undefined on the standalone
+   * route, which then renders no tab/tabpanel relationship at all.
+   */
+  panelId?: string;
+  /** id of the tab whose `aria-controls` points at `panelId`. */
+  panelLabelId?: string;
+  /**
+   * Explicit refresh from the shell's source badge (P5): a bump re-runs this
+   * panel's read-only loads (node list + the selected node's instances + the
+   * `doctor` check) because the user asked for it in so many words. The initial
+   * value is recorded as already handled: mounting the merged page never runs a
+   * check by itself.
+   */
+  refreshSignal?: number;
 };
 
-export default function QemuTrackPanel({ active = true, onTaskChange }: QemuTrackPanelProps = {}) {
+export default function QemuTrackPanel({
+  active = true,
+  onTaskChange,
+  showHeader = true,
+  panelId,
+  panelLabelId,
+  refreshSignal,
+}: QemuTrackPanelProps = {}) {
   const { t } = useI18n();
 
   const [doctor, setDoctor] = useState<QemuDoctorReport | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(true);
   const [doctorError, setDoctorError] = useState("");
+  /**
+   * Timestamps of the last *successful* read-only listings (P5 source badges).
+   * `0` means "not read in this mount yet", which is what keeps the badge from
+   * reporting a made-up `0 节点` / `0 实例` after a failed read (merge spec §6.8
+   * "不可用时必须写清原因").
+   */
+  const [doctorAt, setDoctorAt] = useState(0);
+  const [listAt, setListAt] = useState(0);
+  /** Node the currently held `instances` belong to ("" = unread/stale). */
+  const instancesForRef = useRef("");
   const [vms, setVms] = useState<QemuVmEntry[]>([]);
   const [vmsLoading, setVmsLoading] = useState(true);
   const [selectedVm, setSelectedVm] = useState("");
@@ -245,6 +302,7 @@ export default function QemuTrackPanel({ active = true, onTaskChange }: QemuTrac
       if (!mountedRef.current) return;
       setDoctor(report);
       setDoctorError("");
+      setDoctorAt(Date.now());
       if (!quiet) {
         appendLog([`$ qemu-center doctor --json`]);
         appendLog(report.checks.map((c) => `[${c.status}] ${c.id}: ${c.detail || c.title}`));
@@ -269,6 +327,7 @@ export default function QemuTrackPanel({ active = true, onTaskChange }: QemuTrac
         const list = await QemuService.vmList();
         if (!loadSequence.isCurrent(token)) return;
         setVms(list);
+        setListAt(Date.now());
         if (!quiet) {
           appendLog([`$ qemu-center vm list --json`, `${list.length} node(s)`]);
         }
@@ -294,17 +353,22 @@ export default function QemuTrackPanel({ active = true, onTaskChange }: QemuTrac
     async (vm: string, quiet = false) => {
       if (!vm) {
         setInstances([]);
+        instancesForRef.current = "";
         return;
       }
       setInstancesLoading(true);
       try {
         const list = await QemuService.redroidList(vm);
         setInstances(list);
+        // Only a successful list may be reported as a count (P5 badge): the
+        // catch below clears the list, and "cleared" must not read as "0".
+        instancesForRef.current = vm;
         if (!quiet) {
           appendLog([`$ qemu-center redroid list ${vm} --json`, `${list.length} instance(s)`]);
         }
       } catch (error) {
         setInstances([]);
+        instancesForRef.current = "";
         if (!quiet) appendLog([errText(error)]);
       } finally {
         setInstancesLoading(false);
@@ -317,6 +381,42 @@ export default function QemuTrackPanel({ active = true, onTaskChange }: QemuTrac
     void loadDoctor();
     void loadVms(false, true);
   }, [loadDoctor, loadVms]);
+
+  /**
+   * Read-only source snapshot for the shell's badge (merge spec §6.8). Built
+   * only from data this panel already loads. Every count is `null` until its
+   * own read succeeded, and the check tally carries the check's timestamp, so
+   * the shell can say "未读取" / "未检查" and "N 分钟前" instead of inventing a 0.
+   */
+  const publishSource = useAppStore((s) => s.setQemuSource);
+  useEffect(() => {
+    if (!listAt && !doctorAt && !doctorError) return;
+    publishSource({
+      at: listAt,
+      nodes: listAt ? vms.length : null,
+      instances:
+        selectedVm && instancesForRef.current === selectedVm ? instances.length : null,
+      scope: selectedVm,
+      checks: doctor && doctorAt ? { at: doctorAt, ...checkTally(doctor.checks) } : null,
+      cliError: doctorError,
+    });
+  }, [listAt, doctorAt, vms, instances, selectedVm, doctor, doctorError, publishSource]);
+
+  /**
+   * Explicit refresh from the shell's badge (P5): the user asked for fresh
+   * numbers, so the node list, the selected node's instances and the host check
+   * are all re-read. The initial value is recorded as already handled — nothing
+   * here runs unless the badge (or another caller) actually raises the signal.
+   */
+  const handledRefreshRef = useRef(refreshSignal ?? 0);
+  useEffect(() => {
+    const signal = refreshSignal ?? 0;
+    if (signal === handledRefreshRef.current) return;
+    handledRefreshRef.current = signal;
+    void loadDoctor();
+    void loadVms(true, true);
+    if (selectedVm) void loadInstances(selectedVm, true);
+  }, [refreshSignal, loadDoctor, loadVms, loadInstances, selectedVm]);
 
   useEffect(() => {
     if (!showInstanceForm) return;
@@ -864,28 +964,50 @@ export default function QemuTrackPanel({ active = true, onTaskChange }: QemuTrac
     ? `${t("qemu.nodes.wait.title")} · ${t("qemu.nodes.wait.remaining", { secs: waitRemaining })}`
     : "";
 
+  /**
+   * Header actions, kept out of the title block so `showHeader={false}` (merged
+   * page) can drop only the title/subtitle and still render every capability:
+   * 刷新 (`vm list`) and 重新体检 (`doctor` — the explicit re-check, and the only
+   * thing in this panel that runs a fresh host check outside its mount load).
+   * Pure move — same buttons, same handlers, same order; the wrapping class
+   * gained `runtime-panel-actions` for the collapsed layout.
+   */
+  const headerActions = (
+    <div className="row runtime-panel-actions">
+      <Button icon={<RefreshCw size={15} />} onClick={() => void loadVms(true)}>
+        {t("common.refresh")}
+      </Button>
+      <Button
+        icon={<Server size={15} />}
+        loading={doctorLoading}
+        onClick={() => void loadDoctor()}
+      >
+        {t("qemu.env.refresh")}
+      </Button>
+    </div>
+  );
+
   return (
-    <div className="page-qemu">
-      <div className="page-header">
-        <div>
-          <div className="page-title">
-            <Server size={16} strokeWidth={2} /> {t("qemu.title")}
+    <div
+      className="page-qemu"
+      id={panelId}
+      role={panelId ? "tabpanel" : undefined}
+      aria-labelledby={panelId ? panelLabelId : undefined}
+      tabIndex={panelId ? -1 : undefined}
+    >
+      {showHeader ? (
+        <div className="page-header">
+          <div>
+            <div className="page-title">
+              <Server size={16} strokeWidth={2} /> {t("qemu.title")}
+            </div>
+            <div className="page-subtitle">{t("qemu.subtitle")}</div>
           </div>
-          <div className="page-subtitle">{t("qemu.subtitle")}</div>
+          {headerActions}
         </div>
-        <div className="row">
-          <Button icon={<RefreshCw size={15} />} onClick={() => void loadVms(true)}>
-            {t("common.refresh")}
-          </Button>
-          <Button
-            icon={<Server size={15} />}
-            loading={doctorLoading}
-            onClick={() => void loadDoctor()}
-          >
-            {t("qemu.env.refresh")}
-          </Button>
-        </div>
-      </div>
+      ) : (
+        headerActions
+      )}
 
       {/* Pending-setup banner: the Rust CLI keeps running across page
           switches; this restores the loading truth after coming back. */}
