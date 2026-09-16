@@ -79,6 +79,7 @@ npm run tauri build
 - [QEMU/WHPX 轨道](docs/getting-started/qemu-whpx-track.md)
 - [兼容性矩阵](docs/compatibility.md)
 - [故障排查](docs/troubleshooting.md)
+- [贡献指南](CONTRIBUTING.md)
 
 ## 创建一台带 GApps 的虚机
 

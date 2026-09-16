@@ -1,0 +1,63 @@
+name: 功能故障
+description: 报告一个可以复现的功能问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先阅读 docs/troubleshooting.md，并删除日志中的账号、密钥、代理凭据和内部设备信息。
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      description: 填写应用版本或构建来源。
+      placeholder: 0.1.0-beta
+    validations:
+      required: true
+  - type: dropdown
+    id: track
+    attributes:
+      label: 运行轨道
+      options:
+        - Docker
+        - QEMU/WHPX
+        - ADB/设备控制
+        - 不确定
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 包括 Windows 版本和 build。
+      placeholder: Windows 11 24H2 / 26100.x
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按实际点击或命令顺序写出最小复现步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志与截图
+      description: 附脱敏后的错误文本、截图、readiness/doctor/verify 结果和相关日志路径。
+    validations:
+      required: true

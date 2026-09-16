@@ -1,0 +1,55 @@
+name: 安装或环境问题
+description: 报告 Docker、WSL2、WHPX、QEMU、ADB、镜像或 GApps 环境问题
+title: "[Environment] "
+labels:
+  - environment
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先阅读 docs/getting-started/ 和 docs/troubleshooting.md。不要上传私钥、代理凭据或未脱敏设备日志。
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: 主机环境
+      description: Windows 版本/build、CPU 架构和可用磁盘。
+    validations:
+      required: true
+  - type: dropdown
+    id: track
+    attributes:
+      label: 目标轨道
+      options:
+        - Docker
+        - QEMU/WHPX
+        - 两者都受影响
+        - 尚未选择
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依赖状态
+      description: 粘贴环境准备清单、doctor 或 verify 结果；请先脱敏。
+    validations:
+      required: true
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: 症状与已尝试操作
+      description: 写清现象、出现在哪一步、已经尝试过什么。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与截图
+      description: Docker 日志或 QEMU 的 qemu.log/console.log 路径和脱敏截图。
+    validations:
+      required: true

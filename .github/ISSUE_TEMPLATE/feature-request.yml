@@ -1,0 +1,36 @@
+name: 功能建议
+description: 提出一个有明确使用场景的改进建议
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 描述当前工作流中真正困难或重复的部分。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 描述期望的用户体验，不必预设具体实现。
+    validations:
+      required: true
+  - type: dropdown
+    id: track
+    attributes:
+      label: 影响轨道
+      options:
+        - Docker
+        - QEMU/WHPX
+        - 两条轨道
+        - 文档/社区
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 当前替代办法
+      description: 目前如何解决，代价是什么。
