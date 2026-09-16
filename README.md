@@ -2,7 +2,21 @@
 
 面向 Android 自动化开发、云手机控制、App 自动化测试的桌面管理平台。
 
-底层：Tauri 2 + React + TypeScript，通过 Docker 跑 Redroid，用 ADB / scrcpy 控制。
+当前公开版本定位为 **Windows x64 技术 Beta**。它提供两条运行轨道：本机 Docker Desktop，以及使用 QEMU/WHPX 承载 Redroid 的节点轨道。
+
+底层：Tauri 2 + React + TypeScript，通过 Docker 或 QEMU 节点运行 Redroid，用 ADB / scrcpy 控制。
+
+## 当前支持范围
+
+| 范围 | 状态 | 说明 |
+|---|---|---|
+| Windows x64 | Beta 目标 | 推荐的公开验证平台 |
+| Docker 轨道 | 可用 | 需要 Docker Desktop、WSL2/binder 和 Redroid 镜像 |
+| QEMU/WHPX 轨道 | 实验性 | 需要 WHPX、QEMU、Ubuntu cloud image 和节点置备 |
+| Windows ARM64 | 实验性 | 需要匹配架构的 WSL 内核和镜像，未作为稳定 Beta 承诺 |
+| macOS | 实验性 | 不属于首个 Windows Beta 的正式支持范围 |
+
+第一次使用请先完成环境准备，再选择一条轨道创建无 GApps 的基础设备；GApps、Root 和其他预装属于附加能力，有单独的版本与 ABI 限制。
 
 ## 启动
 
@@ -12,7 +26,7 @@ npm install
 npm run tauri dev
 ```
 
-只看前端（无 Docker / ADB 后端）：
+只看前端（浏览器预览，无 Docker / ADB / QEMU 后端）：
 
 ```powershell
 npm run dev
@@ -26,14 +40,20 @@ npm run tauri build
 
 产物在 `src-tauri\target\release\bundle\nsis\`。
 
-## 前置依赖
+## 开发依赖
 
 - Node.js 18+
 - Rust（rustup）
+
+以上依赖只用于从源码开发或构建。使用已发布的 Windows 安装包不需要安装 Node.js 或 Rust。
+
+## 运行依赖
+
 - Docker Desktop
 - ADB（platform-tools）
 - scrcpy
-- Windows + WSL2（Redroid 需要自定义 binder 内核）
+- Docker 轨道还需要 Windows + WSL2，以及 Redroid 可用的 binder 内核。
+- QEMU 轨道还需要 Windows Hypervisor Platform、QEMU、OpenSSH 客户端和 Ubuntu cloud image。
 
 **设置** 里可浏览 / 打开 / 检测 `docker`、`adb`、`scrcpy` 路径。Docker、Volumes、ADB 页顶部也会显示是否可用。
 
@@ -50,6 +70,7 @@ npm run tauri build
 | APK | 选文件批量安装；记住路径/勾选；全选在线；离线会确认；可复制结果 |
 | 日志 | 内存 + 按天落盘到设置中的日志目录 |
 | 设置 | 路径浏览 / 打开 / 单条或全部检测；自动启动设备清单（可清理失效项）；创建时默认加入自动启动 / 留在表单 |
+| 容器与节点 | 一个入口管理 Docker 与 QEMU/WHPX 两条轨道；可切换轨道、查看来源和只读对比 |
 
 ## 创建一台带 GApps 的虚机
 
