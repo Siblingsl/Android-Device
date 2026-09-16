@@ -80,6 +80,12 @@ describe("Signal Desk layout", () => {
     );
   });
 
+  it("keeps the Dashboard monitor card from collapsing in the fixed workbench", () => {
+    expect(styles).toMatch(
+      /\.page-dashboard \.dashboard-monitor-card\s*\{[^}]*flex:\s*0\s+0\s+auto;/s,
+    );
+  });
+
   it("keeps the Dashboard recent row on the same stat-grid rails", () => {
     // The 3-up recent row shares the stat rail: the same 7px gap token and
     // three equal columns, so every vertical split lines up with the rows above.

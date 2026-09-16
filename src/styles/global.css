@@ -160,6 +160,8 @@ a { color: inherit; text-decoration: none; }
 .page-dashboard .grid-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 0 0 auto; gap: var(--dashboard-grid-gap); margin-bottom: 0; }
 .page-dashboard .grid-2 { grid-template-columns: minmax(0, calc(var(--dashboard-stat-column) + var(--dashboard-stat-column) + var(--dashboard-grid-gap))) minmax(0, 1fr); flex: 1 1 200px; min-height: 175px; column-gap: var(--dashboard-grid-gap); }
 .page-dashboard .grid-3 { grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(0, 0.825fr)); flex: 1 1 160px; min-height: 145px; }
+.page-dashboard .dashboard-checklist-card,
+.page-dashboard .dashboard-monitor-card { flex: 0 0 auto; min-height: 110px; }
 
 /* Modules are bounded work areas separated by rules and title bands. */
 .module { --module-accent: var(--accent); position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-top: 2px solid var(--module-accent); border-radius: var(--radius); background: var(--surface); box-shadow: none; transition: border-color 140ms ease, box-shadow 140ms ease; }
