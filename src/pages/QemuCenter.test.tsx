@@ -525,6 +525,7 @@ describe("QemuCenterPage", () => {
     await flushLoads();
     fireEvent.click(screen.getByRole("button", { name: "启动" }));
     await waitFor(() => expect(QemuService.vmStart).toHaveBeenCalledWith("node1"));
+    await waitFor(() => expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(QemuService.vmStop).toHaveBeenCalledWith("node1"));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
