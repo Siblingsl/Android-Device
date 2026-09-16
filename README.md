@@ -77,6 +77,8 @@ npm run tauri build
 - [Windows 干净机器安装](docs/getting-started/windows-clean.md)
 - [Docker 轨道](docs/getting-started/docker-track.md)
 - [QEMU/WHPX 轨道](docs/getting-started/qemu-whpx-track.md)
+- [兼容性矩阵](docs/compatibility.md)
+- [故障排查](docs/troubleshooting.md)
 
 ## 创建一台带 GApps 的虚机
 
