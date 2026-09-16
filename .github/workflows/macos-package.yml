@@ -1,14 +1,10 @@
-name: macOS package
+name: Experimental macOS package
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "src/**"
-      - "src-tauri/**"
-      - "scripts/**"
-      - "package.json"
-      - "package-lock.json"
+
+permissions:
+  contents: read
 
 jobs:
   package:
@@ -56,6 +52,6 @@ jobs:
       - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: redroid-device-center-${{ matrix.os }}
+          name: redroid-device-center-${{ matrix.os }}-experimental
           path: src-tauri/target/**/release/bundle/**
           if-no-files-found: error
