@@ -137,7 +137,7 @@ export function LogsPage() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">{t("logs.title")}</div>
+          <h1 className="page-title">{t("logs.title")}</h1>
           <div className="page-subtitle">{t("logs.subtitle")}</div>
           <div className="row" style={{ gap: 12, marginTop: 6, fontSize: 12 }}>
             {(

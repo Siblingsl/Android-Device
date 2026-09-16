@@ -242,7 +242,7 @@ export default function RuntimePage() {
       >
         <div className="page-header">
           <div>
-            <div className="page-title">{t("runtime.title")}</div>
+            <h1 className="page-title">{t("runtime.title")}</h1>
             <div className="page-subtitle">{t("runtime.subtitle")}</div>
           </div>
           <RuntimeSourceBadges onRefresh={refreshSource} inPlace={mountedTracks} />

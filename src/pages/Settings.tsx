@@ -179,7 +179,7 @@ export function SettingsPage() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">{t("settings.title")}</div>
+          <h1 className="page-title">{t("settings.title")}</h1>
           <div className="page-subtitle">{t("settings.subtitle")}</div>
         </div>
         {dirty && (
@@ -234,8 +234,9 @@ export function SettingsPage() {
             <Card title={t("settings.card.appearance")}>
               <div className="form-grid">
                 <div className="field">
-                  <label>{t("settings.theme")}</label>
+                  <label htmlFor="settings-theme">{t("settings.theme")}</label>
                   <select
+                    id="settings-theme"
                     value={form.theme || "system"}
                     onChange={(e) => set("theme", e.target.value === "system" ? null : e.target.value)}
                   >
@@ -248,8 +249,9 @@ export function SettingsPage() {
                   </div>
                 </div>
                 <div className="field">
-                  <label>{t("common.language")}</label>
+                  <label htmlFor="settings-language">{t("common.language")}</label>
                   <select
+                    id="settings-language"
                     value={lang}
                     onChange={(e) => {
                       setLang(e.target.value as "zh-CN" | "en-US");
@@ -313,16 +315,16 @@ export function SettingsPage() {
                   </div>
                 </div>
                 <div className="field">
-                  <label>{t("settings.updateChannel")}</label>
-                  <select value={form.updateChannel || "stable"} onChange={(e) => set("updateChannel", e.target.value as "stable" | "beta")}>
+                  <label htmlFor="settings-update-channel">{t("settings.updateChannel")}</label>
+                  <select id="settings-update-channel" value={form.updateChannel || "stable"} onChange={(e) => set("updateChannel", e.target.value as "stable" | "beta")}>
                     <option value="stable">{t("settings.updateChannel.stable")}</option>
                     <option value="beta">{t("settings.updateChannel.beta")}</option>
                   </select>
                   <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{t("settings.updateChannelHint")}</div>
                 </div>
                 <div className="field" style={{ gridColumn: "1 / -1" }}>
-                  <label>{t("settings.proxy")}</label>
-                  <input value={form.proxy} onChange={(e) => set("proxy", e.target.value)} placeholder="http://127.0.0.1:7890" />
+                  <label htmlFor="settings-proxy">{t("settings.proxy")}</label>
+                  <input id="settings-proxy" value={form.proxy} onChange={(e) => set("proxy", e.target.value)} placeholder="http://127.0.0.1:7890" />
                   <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                     {form.proxy.trim()
                       ? /^https?:\/\/\S+$/i.test(form.proxy.trim())
@@ -357,9 +359,10 @@ export function SettingsPage() {
                 const hit = kind === "exe" && toolKind ? tools[toolKind] : undefined;
                 return (
                   <div className="field" key={key}>
-                    <label>{t(label)}</label>
+                    <label htmlFor={`settings-${key}`}>{t(label)}</label>
                     <div className="row">
                       <input
+                        id={`settings-${key}`}
                         style={{ flex: 1 }}
                         value={value}
                         onChange={(e) => set(key, e.target.value)}
@@ -538,8 +541,9 @@ export function SettingsPage() {
           <div className="grid-2">
             <Card className="track-card" title={t("settings.card.track")}>
               <div className="field">
-                <label>{t("settings.defaultTrack")}</label>
+                <label htmlFor="settings-default-track">{t("settings.defaultTrack")}</label>
                 <select
+                  id="settings-default-track"
                   value={form.defaultTrack || "docker"}
                   onChange={(e) => set("defaultTrack", e.target.value)}
                 >

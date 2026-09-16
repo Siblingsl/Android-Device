@@ -175,7 +175,7 @@ export function AdbPage() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">{t("adb.page.title")}</div>
+          <h1 className="page-title">{t("adb.page.title")}</h1>
           <div className="page-subtitle">{t("adb.page.subtitle")}</div>
         </div>
         <Button icon={<RefreshCw size={15} />} onClick={() => void load()}>

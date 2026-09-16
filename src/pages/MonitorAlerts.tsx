@@ -165,7 +165,7 @@ export function MonitorAlertsPage() {
             <span className="monitor-alert-signal-dot" />
             {t("monitor.sessionOnly")}
           </div>
-          <div className="page-title">{t("monitor.title")}</div>
+          <h1 className="page-title">{t("monitor.title")}</h1>
           <div className="page-subtitle">{t("monitor.subtitle")}</div>
         </div>
         <div className="monitor-alert-header-mark" aria-hidden="true">

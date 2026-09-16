@@ -329,13 +329,13 @@ export function AppLayout() {
   return (
     <div className={clsx("app-shell", `page-${pageKey}`, detailOpen && "detail-open")}>
       <Sidebar />
-      <div className="main-area">
+      <main className="main-area">
         <div className="content">
           <div key={location.pathname} className="page-fade">
             <Outlet />
           </div>
         </div>
-      </div>
+      </main>
       <DetailPanel />
       <StatusBar />
     </div>

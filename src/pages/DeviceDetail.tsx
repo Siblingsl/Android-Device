@@ -509,9 +509,9 @@ export function DeviceDetail() {
             {t("detail.back")}
           </Button>
           <div className="detail-context-identity">
-            <div className="page-title" style={{ fontSize: 22 }}>
+            <h1 className="page-title" style={{ fontSize: 22 }}>
               {device.name}
-            </div>
+            </h1>
             <div className="page-subtitle mono">{device.serial}</div>
           </div>
           <span className={`detail-context-state ${online ? "is-online" : ""}`}>

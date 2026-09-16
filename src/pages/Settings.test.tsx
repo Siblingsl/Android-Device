@@ -133,3 +133,47 @@ describe("SettingsPage default runtime track", () => {
     expect(saved.dockerPath).toBe("docker");
   });
 });
+
+describe("SettingsPage accessible form labels", () => {
+  beforeEach(() => {
+    __state.settings = { ...baseSettings };
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("associates the visible labels with the general settings selects", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "通用" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("combobox", { name: "主题" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "更新通道" })).toBeTruthy();
+  });
+
+  it("associates the advanced runtime track label with its select", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openAdvancedTab();
+
+    expect(screen.getByRole("combobox", { name: "默认运行轨道" })).toBeTruthy();
+  });
+});

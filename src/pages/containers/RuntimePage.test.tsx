@@ -618,6 +618,7 @@ describe("RuntimePage header dedup (P5)", () => {
 
     const titles = document.querySelectorAll(".page-title");
     expect(titles).toHaveLength(1);
+    expect(titles[0].tagName).toBe("H1");
     expect(titles[0].textContent).toBe("容器与节点");
     expect(document.querySelectorAll(".page-subtitle")).toHaveLength(1);
 
@@ -860,6 +861,7 @@ describe("legacy routes", () => {
 
     expect(window.location.hash).toBe("#/containers?track=docker");
     expectOnlyDockerPanel();
+    expect(document.querySelector("main")).toBeTruthy();
     // The shell keeps handing the active track's page scope class to
     // `.app-shell`, and the panel root stays the direct child of `.page-fade`
     // (global.css scopes each track's layout through exactly that depth).

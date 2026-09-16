@@ -170,7 +170,7 @@ export function ApkPage() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">{t("apk.page.title")}</div>
+          <h1 className="page-title">{t("apk.page.title")}</h1>
           <div className="page-subtitle">{t("apk.page.subtitle")}</div>
         </div>
       </div>

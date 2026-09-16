@@ -981,7 +981,7 @@ export function Devices() {
     <div className="devices-workbench">
       <div className="page-header devices-header-rail">
         <div>
-          <div className="page-title">{t("devices.page.title")}</div>
+          <h1 className="page-title">{t("devices.page.title")}</h1>
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
         <div className="row devices-header-actions">

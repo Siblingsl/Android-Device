@@ -640,7 +640,7 @@ export default function DockerTrackPanel({
       {showHeader ? (
         <div className="page-header">
           <div>
-            <div className="page-title">{t("docker.title")}</div>
+            <h1 className="page-title">{t("docker.title")}</h1>
             <div className="page-subtitle">{t("docker.subtitle")}</div>
           </div>
           {headerActions}

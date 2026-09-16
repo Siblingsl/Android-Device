@@ -1014,9 +1014,9 @@ export default function QemuTrackPanel({
       {showHeader ? (
         <div className="page-header">
           <div>
-            <div className="page-title">
+            <h1 className="page-title">
               <Server size={16} strokeWidth={2} /> {t("qemu.title")}
-            </div>
+            </h1>
             <div className="page-subtitle">{t("qemu.subtitle")}</div>
           </div>
           {headerActions}

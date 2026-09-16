@@ -113,7 +113,7 @@ export function Dashboard() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">Dashboard</div>
+          <h1 className="page-title">Dashboard</h1>
           <div className="page-subtitle">{t("dashboard.subtitle")}</div>
         </div>
       </div>

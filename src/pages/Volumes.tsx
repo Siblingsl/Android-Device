@@ -159,7 +159,7 @@ export function VolumesPage() {
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">{t("volumes.page.title")}</div>
+          <h1 className="page-title">{t("volumes.page.title")}</h1>
           <div className="page-subtitle">{t("volumes.page.subtitle")}</div>
         </div>
         <div className="row">
