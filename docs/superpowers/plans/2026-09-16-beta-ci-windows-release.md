@@ -98,6 +98,7 @@ node --test scripts/check-release-version.test.mjs
 
 ```powershell
 git add scripts/check-release-version.mjs
+git add scripts/check-release-version.test.mjs
 git commit -m "ci: 增加发布版本一致性检查"
 ```
 
