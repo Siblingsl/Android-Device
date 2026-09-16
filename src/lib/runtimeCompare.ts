@@ -283,7 +283,7 @@ function sideView(
     scope: source.scope,
     instances: list,
     cells: sideCells(
-      { available, unavailable, detail, instances: list, otherInstances, health },
+      { track, available, unavailable, detail, instances: list, otherInstances, health },
       t,
       now,
     ),
@@ -300,6 +300,7 @@ function sideView(
  */
 function sideCells(
   input: {
+    track: RuntimeTrack;
     available: boolean;
     unavailable: string;
     detail: string;
@@ -356,7 +357,7 @@ function sideCells(
     };
   }
   for (const metric of RESOURCE_METRICS) {
-    cells[metric] = resourceMetricCell(metric, input.instances, now, t);
+    cells[metric] = resourceMetricCell(metric, input.instances, now, input.track, t);
   }
   return cells;
 }
@@ -412,6 +413,7 @@ function resourceMetricCell(
   metric: (typeof RESOURCE_METRICS)[number],
   instances: CompareInstanceView[],
   now: number,
+  track: RuntimeTrack,
   t: CompareTranslator,
 ): CompareCell {
   if (instances.length === 0) {
@@ -453,7 +455,12 @@ function resourceMetricCell(
     return {
       kind: "unavailable",
       reason: t("runtime.compare.metricUnavailable"),
-      detail: t("runtime.compare.metricSource", { metric: t(COMPARE_METRIC_LABEL_KEY[metric]) }),
+      detail: t(
+        track === "qemu"
+          ? "runtime.compare.metricSource.qemu"
+          : "runtime.compare.metricSource.docker",
+        { metric: t(COMPARE_METRIC_LABEL_KEY[metric]) },
+      ),
     };
   }
 
@@ -474,7 +481,12 @@ function resourceMetricCell(
   return {
     kind: "value",
     text: text + partial,
-    detail: t("runtime.compare.metricSource", { metric: t(COMPARE_METRIC_LABEL_KEY[metric]) }),
+    detail: t(
+      track === "qemu"
+        ? "runtime.compare.metricSource.qemu"
+        : "runtime.compare.metricSource.docker",
+      { metric: t(COMPARE_METRIC_LABEL_KEY[metric]) },
+    ),
     complete: missing === 0,
   };
 }

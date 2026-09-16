@@ -1,7 +1,7 @@
 # AI 续接文档 — 下一步任务清单
 
 > **🚨 本文件是项目进度锚点：AI 每次开工前必读（入口见根目录 `AGENTS.md`）。**
-> 更新时间：2026-09-16 11:35 · 更新者：AutoCoder（本轮会话）
+> 更新时间：2026-09-16 14:00 · 更新者：Codex（本轮会话）
 > 分支：`codex/qemu-presets`（已推送 origin）
 > **生命周期**：§二 待办清单全部完成后 → 删除本文件（提交信息写明「清单已清空，删除续接文档」）。
 
@@ -14,8 +14,8 @@
 | 套件 | 现状 |
 |---|---|
 | `npx tsc --noEmit` | 0 错误 |
-| `npx vitest run` | **57 文件 / 417 用例全绿** |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | 207 通过 / 0 失败 |
+| `npx vitest run` | **57 文件 / 422 用例全绿** |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 212 通过 / 0 失败 |
 | `cargo test --manifest-path qemu-center/Cargo.toml` | 188 + 3 通过 / 0 失败 |
 | `npm run build` | 成功（仅一条既有 chunk 体积警告，非错误） |
 
@@ -27,7 +27,9 @@
 - **WHPX guest 卡死缓解**：`-cpu max,-svm,-vmx` + guest 串口日志。相应文件：`state/vms/<name>/qemu.log`（QEMU stderr）与 `state/vms/<name>/console.log`（guest 串口）。
 - **容器与节点页合并 P1–P7（自动化部分）**：轨道面板抽取 → 合并页外壳与路由 → 生命周期治理 → 侧边栏单一入口 → 来源徽标 / 去重页头 / a11y → 跨轨对比视图 → 依赖方向守卫测试。
   - 方案文档：`docs/superpowers/specs/2026-09-16-docker-qemu-page-merge.md`
-- 提交序列：`28626e4` → `d5f130c` → `077af77` → `564f0b1` → `a182695` → `15d614e`
+- **首次启动体检增强**：readiness 现在返回四态 status、轨道归属、详细原因；覆盖 Android 镜像引用、目标 ABI、GApps 路径及 Android/ABI 兼容性；Dashboard 支持显式重新检查，仍不进入 20 秒统计刷新。
+- **P6b 跨轨运行指标**：Docker 与 QEMU 既有只读详情读取携带 CPU 配额、内存配额、磁盘 SizeRw、StartedAt/FinishedAt；对比视图聚合真实值，区分不限、部分可用、无指标，不用 0 兜底。
+- 提交序列：`28626e4` → `d5f130c` → `077af77` → `564f0b1` → `a182695` → `15d614e` → `d1aaf24` → `f7b0192`
 
 ---
 
@@ -39,16 +41,6 @@
 - 前置：`npm run tauri dev` 启动应用；QEMU 节点 node1 运行；Docker Desktop 运行
 - 本轮已铺好的环境：node1 已启动（doctor **8 ok / 0 fail / 0 unknown**；实例 `qc-r1`(A14) 与 `qc-r13`(A13) 均 boot=1 且宿主 adb 均为 `device`）；Docker 引擎已启动
 - 验收：清单 C / D / E 三节逐条勾选；发现的问题记入本节或新开条目
-
-### ★ P6b 对比视图补齐 4 个只读指标（**需用户显式授权改后端**）
-
-现状：对比视图中 **CPU 配额 / 内存配额 / 磁盘 / 启动耗时** 显示「不可用（无数据源）」（刻意不显示 0）。
-补齐所需（**全部只读**）：
-
-- 本机 Docker（`src-tauri/src/services/docker.rs`）：`docker inspect`（`HostConfig.NanoCpus` / `Memory`、`State.StartedAt`）、`docker system df`（磁盘）；若要做「实际占用」需 `docker stats --no-stream`——注意 `refresh_docker_info` 目前固定回 0.0，因为 Windows 上 stats 是已知卡顿源，改动前先评估性能。
-- QEMU（`qemu-center/`）：经既有 SSH 通道在 guest 内执行同类**只读**命令。
-- 前端只消费缓存快照（`appStore.runtimeSources`），保持「外壳与对比视图零服务调用、零定时器」不变量。
-- 验收：只读白名单测试；4 列出现真实数值或明确原因；不得出现 0 兜底。
 
 ### 其它已识别待办（低优先）
 

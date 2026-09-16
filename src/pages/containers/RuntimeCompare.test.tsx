@@ -769,6 +769,7 @@ describe("compare view unavailable semantics (P6)", () => {
       }
     }
     expect(cell(onlyGroup(), "cpuQuota", "docker").getAttribute("title")).toContain("docker inspect");
+    expect(cell(onlyGroup(), "disk", "qemu").getAttribute("title")).toContain("guest");
   });
 
   it("calls an unanswered node a missing reading, not 0 running", async () => {
