@@ -1,46 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Activity, AlertTriangle, BellRing, Box, Cpu, MemoryStick, Smartphone, Wifi } from "lucide-react";
+import { Activity, Box, Cpu, MemoryStick, Smartphone, Wifi } from "lucide-react";
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
-import type { DashboardData, ReadinessItem } from "../types";
+import type { DashboardData } from "../types";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import { createRequestSequence } from "../lib/requestSequence";
-import { resolveRuntimeLink } from "../lib/runtimeTrack";
-import { monitorAlertMessageKey, summarizeMonitorAlerts } from "../lib/monitorAlerts";
-
-type ReadinessStatus = NonNullable<ReadinessItem["status"]>;
-const READINESS_STATUSES: ReadinessStatus[] = [
-  "ready",
-  "action_required",
-  "unsupported",
-  "unknown",
-];
-
-function readinessStatus(item: ReadinessItem): ReadinessStatus {
-  if (item.status && READINESS_STATUSES.includes(item.status)) return item.status;
-  return item.done ? "ready" : "action_required";
-}
 
 export function Dashboard() {
   const { t } = useI18n();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  /** First-use readiness checklist; null means the first probe has not landed. */
-  const [checklist, setChecklist] = useState<ReadinessItem[] | null>(null);
-  const [checklistLoading, setChecklistLoading] = useState(false);
-  const [checklistError, setChecklistError] = useState("");
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
-  const monitorAlerts = useAppStore((s) => s.monitorAlerts);
   const navigate = useNavigate();
   const loadSequence = useRef(createRequestSequence()).current;
   const loadingRequest = useRef<number | null>(null);
-  const checklistRequest = useRef(0);
 
   const load = async (soft = false) => {
     const token = loadSequence.begin();
@@ -83,36 +62,6 @@ export function Dashboard() {
     };
   }, []);
 
-  // Onboarding checklist: fetched once per mount (its probes shell out, so it
-  // deliberately does NOT ride the 20s dashboard tick). The explicit button
-  // below is the only additional trigger.
-  const loadChecklist = async () => {
-    const token = ++checklistRequest.current;
-    setChecklistLoading(true);
-    setChecklistError("");
-    try {
-      const items = await DeviceService.readinessChecklist();
-      if (checklistRequest.current !== token) return;
-      setChecklist(items);
-    } catch (e) {
-      if (checklistRequest.current !== token) return;
-      setChecklistError(e instanceof Error ? e.message : t("dashboard.checklist.error"));
-    } finally {
-      if (checklistRequest.current === token) setChecklistLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadChecklist();
-    return () => {
-      checklistRequest.current += 1;
-    };
-  }, []);
-
-  const pendingChecklist = checklist?.filter((item) => readinessStatus(item) !== "ready") ?? [];
-  const monitorAlertSummary = summarizeMonitorAlerts(monitorAlerts);
-  const recentMonitorAlerts = monitorAlerts.slice(0, 3);
-
   return (
     <div>
       <div className="page-header">
@@ -121,69 +70,6 @@ export function Dashboard() {
           <div className="page-subtitle">{t("dashboard.subtitle")}</div>
         </div>
       </div>
-
-      {checklist !== null && checklist.length > 0 && (
-        <Card
-          className="dashboard-checklist-card"
-          title={
-            pendingChecklist.length > 0
-              ? t("dashboard.checklist.title", { n: pendingChecklist.length })
-              : t("dashboard.checklist.readyTitle")
-          }
-          action={
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={checklistLoading}
-              aria-label={t("dashboard.checklist.recheck")}
-              onClick={() => void loadChecklist()}
-            >
-              {checklistLoading ? t("dashboard.checklist.checking") : t("dashboard.checklist.recheck")}
-            </Button>
-          }
-        >
-          {checklistError ? <div className="dashboard-checklist-error">{checklistError}</div> : null}
-          <div className="row dashboard-checklist-row" style={{ flexWrap: "wrap", gap: 8 }}>
-            {checklist.map((item) => (
-              <div key={item.id} className={"dashboard-checklist-chip is-" + readinessStatus(item)}>
-                <span
-                  className={
-                    "badge " +
-                    (readinessStatus(item) === "ready"
-                      ? "success"
-                      : readinessStatus(item) === "unsupported"
-                        ? "info"
-                        : readinessStatus(item) === "unknown"
-                          ? ""
-                          : "warn")
-                  }
-                  title={item.detail || undefined}
-                >
-                  {readinessStatus(item) === "ready" ? "✓" : "○"}{" "}
-                  {t("dashboard.checklist.status." + readinessStatus(item))}
-                </span>
-                <div className="dashboard-checklist-chip-text">
-                  <span className="dashboard-checklist-chip-title">{item.title}</span>
-                  {item.track ? (
-                    <span className="muted dashboard-checklist-chip-track">
-                      {t("dashboard.checklist.track." + item.track)}
-                    </span>
-                  ) : null}
-                  {readinessStatus(item) !== "ready" && item.hint ? (
-                    <span className="muted dashboard-checklist-chip-hint">{item.hint}</span>
-                  ) : null}
-                  {item.detail ? <span className="muted dashboard-checklist-chip-detail">{item.detail}</span> : null}
-                </div>
-                {readinessStatus(item) !== "ready" && readinessStatus(item) !== "unsupported" && (
-                  <Button size="sm" variant="ghost" onClick={() => navigate(resolveRuntimeLink(item.cta))}>
-                    {t("dashboard.checklist.go")}
-                  </Button>
-                )}
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
 
       <div className="grid-stats">
         {loading && !data ? (
@@ -225,66 +111,6 @@ export function Dashboard() {
           </>
         )}
       </div>
-
-      <Card
-        className="dashboard-monitor-card"
-        title={t("dashboard.card.monitorAlerts")}
-        action={
-          <Button size="sm" variant="ghost" onClick={() => navigate("/monitor")}>
-            {t("dashboard.monitor.viewAll")}
-          </Button>
-        }
-      >
-        <div className="dashboard-monitor-summary">
-          <div className="dashboard-monitor-total">
-            <div className="dashboard-monitor-total-icon" aria-hidden="true">
-              <BellRing size={20} />
-            </div>
-            <div>
-              <div className="muted dashboard-monitor-eyebrow">{t("monitor.sessionOnly")}</div>
-              <div className="dashboard-monitor-total-value">
-                {t("dashboard.monitor.total", { n: monitorAlertSummary.total })}
-              </div>
-              <div className="muted dashboard-monitor-total-hint">
-                {t("dashboard.monitor.breakdown", {
-                  warning: monitorAlertSummary.warning,
-                  critical: monitorAlertSummary.critical,
-                })}
-              </div>
-            </div>
-          </div>
-          {recentMonitorAlerts.length > 0 ? (
-            <div className="dashboard-monitor-alert-list" aria-label={t("dashboard.monitor.recent")}>
-              {recentMonitorAlerts.map((alert) => (
-                <button
-                  key={alert.id}
-                  type="button"
-                  className={`dashboard-monitor-alert-row ${alert.severity ?? "warning"}`}
-                  onClick={() => {
-                    setSelected(alert.deviceId);
-                    navigate(`/devices/${encodeURIComponent(alert.deviceId)}`);
-                  }}
-                >
-                  <AlertTriangle size={15} aria-hidden="true" />
-                  <span className="dashboard-monitor-alert-copy">
-                    <span className="dashboard-monitor-alert-device">{alert.deviceName || alert.deviceId}</span>
-                    <span className="muted dashboard-monitor-alert-message">
-                      {t(monitorAlertMessageKey(alert.kind), {
-                        threshold: alert.alertThreshold ?? "—",
-                      })}
-                    </span>
-                  </span>
-                  <span className="dashboard-monitor-alert-severity">
-                    {t(`monitor.severity.${alert.severity ?? "warning"}`)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="dashboard-monitor-empty">{t("dashboard.monitor.empty")}</div>
-          )}
-        </div>
-      </Card>
 
       <div className="grid-2">
         <Card

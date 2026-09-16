@@ -80,11 +80,7 @@ describe("Signal Desk layout", () => {
     );
   });
 
-  it("keeps the Dashboard monitor card from collapsing in the fixed workbench", () => {
-    expect(styles).toMatch(
-      /\.page-dashboard \.dashboard-monitor-card\s*\{[^}]*flex:\s*0\s+0\s+auto;/s,
-    );
-  });
+
 
   it("keeps the Dashboard recent row on the same stat-grid rails", () => {
     // The 3-up recent row shares the stat rail: the same 7px gap token and
@@ -126,7 +122,7 @@ describe("Signal Desk layout", () => {
     expect(read("src/pages/Terminal.tsx")).toContain("TerminalSessionService.subscribe");
   });
 
-  it("keeps the persisted monitor alert workspace reachable", () => {
+  it("keeps monitor alerts out of Dashboard while preserving their workspace", () => {
     const app = read("src/App.tsx");
     const sidebar = read("src/components/layout/Sidebar.tsx");
     const dashboard = read("src/pages/Dashboard.tsx");
@@ -134,7 +130,8 @@ describe("Signal Desk layout", () => {
     expect(app).toContain('<Route path="monitor" element={<MonitorAlertsPage />} />');
     expect(sidebar).not.toContain('to: "/monitor"');
     expect(sidebar).not.toContain('key: "common.nav.monitor"');
-    expect(dashboard).toContain('dashboard.card.monitorAlerts');
-    expect(dashboard).toContain('navigate("/monitor")');
+    expect(dashboard).not.toContain('dashboard.card.monitorAlerts');
+    expect(dashboard).not.toContain('navigate("/monitor")');
+    expect(read("src/pages/MonitorAlerts.tsx")).toContain("monitorAlerts");
   });
 });
