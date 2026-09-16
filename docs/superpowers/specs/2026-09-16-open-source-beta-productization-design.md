@@ -199,16 +199,23 @@ README 首屏只回答四件事：
 
 ## 7. 工作包 3：首次启动环境引导
 
+当前项目已经有 Dashboard 的 `readiness_checklist`，并通过 `src-tauri/src/services/readiness.rs` 检查 Docker、ADB、scrcpy、WHPX、qemu-center 和 Ubuntu cloud image。这个工作包不是重新造一套检测，而是把现有清单扩展成完整的首用引导。
+
 这是唯一需要单独取得后端改动授权的主要工作包。
 
 ### 7.1 复用边界
 
-- 复用 QEMU `doctor --json` 和现有 Docker/ADB/路径检查。
+- 复用 QEMU `doctor --json`、现有 `readiness_checklist` 和 Docker/ADB/路径检查。
+- 保留现有 Dashboard 清单的轻量、一次性探测语义；不要把昂贵或易卡顿的探测加入定时刷新。
 - 前端消费结构化快照，不在页面外壳或对比视图里发服务调用和定时器。
 - 检测结果必须携带状态、原因、轨道、版本/路径信息和建议动作。
 - “修复”动作首版优先打开官方入口、显示安装说明或复制安全命令，不默认自动修改系统。
 
-### 7.2 依赖状态模型
+### 7.2 需要补齐的状态范围
+
+现有清单覆盖基础宿主工具，但还没有把 GApps、Android 镜像版本、ABI、设备档案和 Docker/QEMU 轨道可用性完整表达出来。扩展时优先补充这些信息，并保持旧调用方可兼容；不改变现有 `ReadinessItem` 的稳定字段含义，除非同步更新 TypeScript、Rust 和测试。
+
+### 7.3 依赖状态模型
 
 统一使用以下语义：
 
@@ -219,7 +226,7 @@ README 首屏只回答四件事：
 
 禁止用 `0`、空字符串或普通绿色徽标表示 `unknown`。
 
-### 7.3 首台设备路径
+### 7.4 首台设备路径
 
 将“无 GApps 基础 Redroid”作为最快成功路径；GApps、Root、LSPosed、Shamiko、设备伪装作为经过版本和 ABI 检查的可选路径。这样新用户可以先验证运行环境，再决定是否承担高级预装的额外限制。
 
