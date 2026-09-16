@@ -206,7 +206,7 @@ export function VolumesPage() {
             {rdcAll.length === 0 ? (
               <>
                 {t("volumes.empty.none")}
-                <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => navigate("/docker")}>
+                <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => navigate("/containers?track=docker")}>
                   {t("common.panel.goCreate")}
                 </Button>
               </>
@@ -308,7 +308,7 @@ export function VolumesPage() {
                           } catch {
                             /* ignore */
                           }
-                          navigate("/docker");
+                          navigate("/containers?track=docker");
                         }}
                       >
                         {t("volumes.openInstance")}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
 // Evaluated before the page tree on purpose: `appStore` and `i18n` form an
@@ -593,16 +593,31 @@ describe("legacy routes", () => {
     expect(children[1].classList.contains("page-qemu")).toBe(true);
   });
 
-  it("keeps the unchanged sidebar entries landing on their track", async () => {
+  it("lands the single sidebar entry on the remembered track", async () => {
     window.location.hash = "#/containers?track=qemu";
     render(<App />);
     await flush();
     expectOnlyQemuPanel();
 
-    fireEvent.click(screen.getByRole("link", { name: "Docker" }));
+    // P4: one entry for both tracks. It points at the bare merged route — the
+    // landing track comes from `?track=` > remembered `defaultTrack` > docker,
+    // so the link itself hard-codes no track. The remembered track in this
+    // fixture is the docker default, which is where a bare `/containers` lands.
+    const entry = screen.getByRole("link", { name: "容器与节点" });
+    expect(entry.getAttribute("href")).toBe("#/containers");
+    fireEvent.click(entry);
     await flush();
 
-    expect(window.location.hash).toBe("#/containers?track=docker");
+    expect(window.location.hash).toBe("#/containers");
     expectOnlyDockerPanel();
+
+    // …and the legacy routes are not offered as entries any more.
+    const nav = screen.getByRole("navigation", { name: "Primary navigation" });
+    const hrefs = within(nav)
+      .getAllByRole("link")
+      .map((link) => link.getAttribute("href"));
+    expect(hrefs.filter((href) => href?.startsWith("#/containers"))).toHaveLength(1);
+    expect(hrefs).not.toContain("#/docker");
+    expect(hrefs).not.toContain("#/qemu");
   });
 });

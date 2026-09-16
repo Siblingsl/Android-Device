@@ -69,7 +69,7 @@ export function StatusBar() {
           className={status?.dockerRunning ? "ok" : "bad"}
           title={t("common.status.openDocker")}
           style={status?.dockerRunning ? undefined : { textDecoration: "underline" }}
-          onClick={() => navigate("/docker")}
+          onClick={() => navigate("/containers?track=docker")}
         >
           Docker {status?.dockerRunning ? t("common.status.dockerRunning") : t("common.status.dockerNotRunning")}
         </button>
@@ -108,7 +108,7 @@ export function StatusBar() {
           title={deviceCount === 0 ? t("common.status.goCreateInstance") : t("common.status.openDevices")}
           className={online === 0 ? "bad" : undefined}
           style={online === 0 ? { textDecoration: "underline" } : undefined}
-          onClick={() => navigate(deviceCount === 0 ? "/docker" : "/devices")}
+          onClick={() => navigate(deviceCount === 0 ? "/containers?track=docker" : "/devices")}
         >
           {deviceCount === 0
             ? t("common.status.deviceCount", { n: 0 })

@@ -35,6 +35,11 @@ export const qemuZh: Record<string, string> = {
   "qemu.presets.running": "正在准备镜像、安装预装并验证启动（可能需要较长时间，请等待完成）…",
   "qemu.presets.upgraded": "实例 {name} 已升级 · {serial}",
   "qemu.presets.restored": "实例 {name} 已恢复到升级前",
+  // Kept on purpose (page-merge spec §6.6): the sidebar's QEMU entry is now the
+  // single `common.nav.containers`, but the legacy `/qemu` route keeps
+  // redirecting, so this label is still the one older pages/tests resolve.
+  // Removable once the legacy routes' grace period ends and nothing references
+  // the old entry.
   "common.nav.qemu": "QEMU 节点",
 
   "qemu.title": "QEMU 节点",
@@ -220,6 +225,11 @@ export const qemuEn: Record<string, string> = {
   "qemu.presets.running": "Preparing the image, installing presets and verifying startup (this may take a while; wait for completion)…",
   "qemu.presets.upgraded": "Instance {name} upgraded · {serial}",
   "qemu.presets.restored": "Instance {name} restored to before the upgrade",
+  // Kept on purpose (page-merge spec §6.6): the sidebar's QEMU entry is now the
+  // single `common.nav.containers`, but the legacy `/qemu` route keeps
+  // redirecting, so this label is still the one older pages/tests resolve.
+  // Removable once the legacy routes' grace period ends and nothing references
+  // the old entry.
   "common.nav.qemu": "QEMU Nodes",
 
   "qemu.title": "QEMU Nodes",

@@ -2,11 +2,10 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Smartphone,
-  Container,
+  Boxes,
   Cable,
   Package,
   Database,
-  Server,
   ScrollText,
   Settings,
 } from "lucide-react";
@@ -16,11 +15,15 @@ import { useI18n } from "../../i18n";
 const items = [
   { to: "/", icon: LayoutDashboard, key: "common.nav.dashboard" },
   { to: "/devices", icon: Smartphone, key: "common.nav.devices" },
-  { to: "/docker", icon: Container, key: "common.nav.docker" },
+  // One entry for both runtime tracks (page-merge spec §6.1, decision #4). The
+  // link carries no `?track=`: the merged page resolves the landing track from
+  // `?track=` > remembered `defaultTrack` > docker, so neither track is
+  // privileged here. The legacy `/docker` / `/qemu` routes stay as redirects
+  // for bookmarks — deliberately not as sidebar entries.
+  { to: "/containers", icon: Boxes, key: "common.nav.containers" },
   { to: "/adb", icon: Cable, key: "common.nav.adb" },
   { to: "/apk", icon: Package, key: "common.nav.apk" },
   { to: "/volumes", icon: Database, key: "common.nav.volumes" },
-  { to: "/qemu", icon: Server, key: "common.nav.qemu" },
   { to: "/logs", icon: ScrollText, key: "common.nav.logs" },
   { to: "/settings", icon: Settings, key: "common.nav.settings" },
 ];
@@ -59,7 +62,9 @@ export function Sidebar() {
                 )}
               </NavLink>
             ))}
-            {items.slice(2, 8).map((item) => (
+            {/* Everything between the two lead items and the trailing settings
+                entry, which has its own slot in `topbar-actions`. */}
+            {items.slice(2, -1).map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

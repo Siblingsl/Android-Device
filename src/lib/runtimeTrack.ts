@@ -48,3 +48,18 @@ export type TrackTaskInfo = {
   /** Short description of what is running, e.g. "正在探测 Docker…". */
   label: string;
 };
+
+/**
+ * Legacy runtime route → merged-page link.
+ *
+ * For navigation targets that are not literals in our own JSX: the Dashboard's
+ * first-use checklist navigates to `ReadinessItem.cta`, which the backend
+ * (`src-tauri/src/services/readiness.rs`) still emits as `/docker` / `/qemu`.
+ * Resolving it here keeps every in-app click on the merged route (P4) while the
+ * redirects in `App.tsx` stay reserved for bookmarks and external docs.
+ * Any other target is returned untouched.
+ */
+export function resolveRuntimeLink(to: string): string {
+  const track = to === "/docker" || to === "/qemu" ? (to.slice(1) as RuntimeTrack) : null;
+  return track ? `${RUNTIME_ROUTE}?track=${track}` : to;
+}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { Dashboard } from "./Dashboard";
 import type { DashboardData, ReadinessItem } from "../types";
 
@@ -17,6 +17,12 @@ vi.mock("../stores/appStore", () => ({
 }));
 
 const { DeviceService } = await import("../services/deviceService");
+
+/** Shows the router's current location so tests can assert a jump target. */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -155,5 +161,29 @@ describe("Dashboard readiness checklist", () => {
     // Clicking the jump routes to the checklist target.
     fireEvent.click(screen.getAllByRole("button", { name: "去处理" })[0]);
     expect(screen.getByText("adb-page-probe")).toBeTruthy();
+  });
+
+  it("resolves a legacy checklist target onto the merged runtime route", async () => {
+    // The backend still emits `/docker` / `/qemu` as `ReadinessItem.cta`
+    // (readiness.rs, untouched this round); P4 sends those clicks to the merged
+    // page instead of bouncing off the redirect.
+    vi.mocked(DeviceService.readinessChecklist).mockResolvedValue([
+      item("docker", false, "/docker"),
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/containers" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "去处理" })[0]);
+    expect(screen.getByTestId("location").textContent).toBe("/containers?track=docker");
   });
 });

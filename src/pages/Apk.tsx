@@ -303,7 +303,7 @@ export function ApkPage() {
           {devices.length === 0 ? (
             <div className="empty-state">
               {t("devices.empty.noDevices")}
-              <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => navigate("/docker")}>
+              <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => navigate("/containers?track=docker")}>
                 {t("common.panel.goCreate")}
               </Button>
             </div>

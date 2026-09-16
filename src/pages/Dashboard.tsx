@@ -10,6 +10,7 @@ import type { DashboardData, ReadinessItem } from "../types";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import { createRequestSequence } from "../lib/requestSequence";
+import { resolveRuntimeLink } from "../lib/runtimeTrack";
 
 export function Dashboard() {
   const { t } = useI18n();
@@ -109,7 +110,7 @@ export function Dashboard() {
                   ) : null}
                 </div>
                 {!item.done && (
-                  <Button size="sm" variant="ghost" onClick={() => navigate(item.cta)}>
+                  <Button size="sm" variant="ghost" onClick={() => navigate(resolveRuntimeLink(item.cta))}>
                     {t("dashboard.checklist.go")}
                   </Button>
                 )}
@@ -128,7 +129,7 @@ export function Dashboard() {
           ))
         ) : (
           <>
-            <StatCard icon={<Box size={18} />} label="Docker" value={data?.status.dockerRunning ? t("common.status.dockerRunning") : t("common.status.dockerOff")} hint={data?.status.dockerVersion} ok={data?.status.dockerRunning} onClick={() => navigate("/docker")} />
+            <StatCard icon={<Box size={18} />} label="Docker" value={data?.status.dockerRunning ? t("common.status.dockerRunning") : t("common.status.dockerOff")} hint={data?.status.dockerVersion} ok={data?.status.dockerRunning} onClick={() => navigate("/containers?track=docker")} />
             <StatCard icon={<Wifi size={18} />} label="ADB" value={data?.status.adbRunning ? t("common.status.adbOk") : t("dashboard.adbError")} hint={data?.status.adbVersion} ok={data?.status.adbRunning} onClick={() => navigate("/adb")} />
             <StatCard
               icon={<Smartphone size={18} />}
@@ -205,7 +206,7 @@ export function Dashboard() {
           ) : (
             <div className="empty-state">
               {t("dashboard.empty.noDevices")}
-              <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => navigate("/docker")}>
+              <Button size="sm" variant="ghost" style={{ marginLeft: 8 }} onClick={() => navigate("/containers?track=docker")}>
                 {t("common.panel.goCreate")}
               </Button>
             </div>
@@ -221,7 +222,7 @@ export function Dashboard() {
                   className="notice"
                   style={{ width: "100%", textAlign: "left" }}
                   onClick={() => {
-                    if (n.includes("Docker")) navigate("/docker");
+                    if (n.includes("Docker")) navigate("/containers?track=docker");
                     else if (n.includes("ADB")) navigate("/adb");
                     else if (n.includes("设备")) navigate("/devices");
                     else navigate("/logs");

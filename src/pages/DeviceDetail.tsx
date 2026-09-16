@@ -1333,7 +1333,7 @@ function Overview({ device, onOpenTab }: { device: DeviceInfo; onOpenTab: (tab: 
                 } catch {
                   /* ignore */
                 }
-                navigate("/docker");
+                navigate("/containers?track=docker");
               }}
             >
               {t("detail.overview.openContainer")}
@@ -4180,7 +4180,7 @@ function DeviceSettings({
               } catch {
                 /* ignore */
               }
-              navigate("/docker");
+              navigate("/containers?track=docker");
             }}
           >
             {t("detail.settings.openInstance")}

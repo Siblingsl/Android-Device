@@ -1943,7 +1943,7 @@ export function Devices() {
           <div className="empty-state">
             {t("devices.empty.noDevices")}
             <div className="row" style={{ justifyContent: "center", marginTop: 10 }}>
-              <Button size="sm" variant="primary" onClick={() => navigate("/docker")}>
+              <Button size="sm" variant="primary" onClick={() => navigate("/containers?track=docker")}>
                 {t("common.panel.goCreate")}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => navigate("/adb")}>

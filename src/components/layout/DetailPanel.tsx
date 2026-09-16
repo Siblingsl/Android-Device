@@ -42,7 +42,7 @@ export function DetailPanel() {
           <Info
             label="Docker"
             value={status?.dockerRunning ? status.dockerVersion : t("common.status.dockerOff")}
-            onClick={() => navigate("/docker")}
+            onClick={() => navigate("/containers?track=docker")}
           />
           <Info label="ADB" value={status?.adbVersion || "-"} onClick={() => navigate("/adb")} />
           <Info
@@ -103,7 +103,7 @@ export function DetailPanel() {
             <div className="muted" style={{ fontSize: 13 }}>
               {t("common.panel.noDevice")}
               <div style={{ marginTop: 10 }}>
-                <Button size="sm" variant="primary" onClick={() => navigate("/docker")}>
+                <Button size="sm" variant="primary" onClick={() => navigate("/containers?track=docker")}>
                   {t("common.panel.goCreate")}
                 </Button>
               </div>
