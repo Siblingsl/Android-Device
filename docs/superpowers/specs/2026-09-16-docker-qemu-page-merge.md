@@ -29,7 +29,7 @@
 | 耦合点 | 位置 | 为什么是问题 |
 | --- | --- | --- |
 | 各自独立轮询 | `Docker.tsx:183`、`QemuCenter.tsx:338` 的 `setInterval` | 两面板同时挂载会变双份轮询 |
-| 共享全局状态行 | `appStore.statusText`（两页都写） | 合并后会互相覆写 |
+| 共享全局状态行 | `appStore.statusText`（**实测更正：只有 Docker 轨道的面板写它**；QEMU 轨道用的是面板内独立状态行） | 合并后 Docker 侧写入会覆盖页脚上其它来源的消息（调度器、自动启动等） |
 | QEMU 长任务全局态 | `appStore.qemuSetup{running,step,startedAt,refreshing}`、`qemuWaitVm`（注释原文：VM whose guest-SSH wait was interrupted by a page switch） | 仓库已处理过"切页打断长任务"，合并不得让其退化 |
 | 共享 UI 基元 | `Card/Button/Skeleton`、`askConfirm`、`copyText`、`createRequestSequence`、`useI18n` | 说明公共外壳成本低、风格已统一 |
 | 显示规格预设 | `lib/displaySpec.ts` | 已属公共资产，无需合并 |
@@ -119,7 +119,7 @@
 | 默认（无长任务） | 只挂载活跃轨道，非活跃轨道不渲染不轮询 | 零双份轮询（两轨各有 interval） |
 | 有长任务时切轨 | 该轨道保持挂载但隐藏，并显示常驻条 | 复用既有 `qemuSetup.running` / `qemuWaitVm` / Docker 的 `creatingTask`，禁止清空进行中状态 |
 | 隐藏期间轮询 | 降频或暂停业务轮询，只保留任务进度所需刷新 | 避免双份轮询 |
-| 状态行 | 各轨渲染自己的状态行；若必须共用 `appStore.statusText`，写入时带来源标签 | 现状两页写同一字段会互相覆写 |
+| 状态行 | 只在**真正共享的那条线**（Docker 侧写入的页脚 `appStore.statusText`）加来源标签；QEMU 侧状态行在面板内、来源自明，不改动 | 实测只有 Docker 侧写共享字段；给唯一共享线加标签即可消除"看不出谁在说话"，且不会破坏 QEMU 既有断言 |
 | 日志面板 | 各自独立（已决策） | 内容与格式不同 |
 
 ### 6.5 与 Device Center 的边界
@@ -220,6 +220,7 @@
 | 4 | 旧路由是否保留二级项 | 只做重定向，不保留二级项 | 侧边栏单一入口；旧路径永久重定向；深链仍可用 `?track=` |
 | 5 | 来源徽标口径 | 数量 + 健康度 | 读缓存体检结果并标时间戳；禁止每次进页现场体检 |
 | 6 | 是否做跨轨对比视图 | 要做 | 新增只读聚合视图（P6）；严格无写操作、按需采集 |
+| 新增 2026-09-16 | 状态行来源化的范围 | 只标注真正共享的页脚线（Docker 侧）；QEMU 侧保持面板内独立状态行 | 实测更正：`setStatusText`(appStore) 在 `DockerTrackPanel` 命中 1 次、`QemuTrackPanel` 命中 0 次（HEAD 版 `QemuCenter.tsx` 同样 0 次） |
 
 实施过程中若出现新的取舍，追加到本节并标注「新增」与日期。
 

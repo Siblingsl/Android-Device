@@ -5,6 +5,7 @@ import { StatusBar } from "./StatusBar";
 import { DetailPanel } from "./DetailPanel";
 import { useAppStore } from "../../stores/appStore";
 import { DeviceService } from "../../services/deviceService";
+import { RUNTIME_ROUTE, resolveRuntimeTrack } from "../../lib/runtimeTrack";
 import { tStatic } from "../../i18n";
 import clsx from "clsx";
 import { listen } from "@tauri-apps/api/event";
@@ -120,11 +121,19 @@ export function AppLayout() {
   const devices = useAppStore((s) => s.devices);
   const language = useAppStore((s) => s.settings?.language);
   const closeToTray = useAppStore((s) => Boolean(s.settings?.closeToTray));
+  const defaultTrack = useAppStore((s) => s.settings?.defaultTrack);
   const booted = useRef(false);
   const restoredArrangementIds = useRef(new Set<string>());
+  // `/containers` is the merged page: `.app-shell` keeps carrying the active
+  // track's page scope class (`page-docker` / `page-qemu`) so the per-track
+  // layout rules in global.css — grid columns, scroll container, the QEMU card
+  // flex/overflow fixes — apply to the mounted panel exactly as on the old
+  // routes. Every other route is unaffected.
   const pageKey = location.pathname.startsWith("/devices/")
     ? "device-detail"
-    : location.pathname.split("/")[1] || "dashboard";
+    : location.pathname === RUNTIME_ROUTE
+      ? resolveRuntimeTrack(new URLSearchParams(location.search).get("track"), defaultTrack)
+      : location.pathname.split("/")[1] || "dashboard";
 
   useEffect(() => {
     if (language) document.documentElement.lang = language;

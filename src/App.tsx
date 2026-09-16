@@ -3,13 +3,12 @@ import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/Dashboard";
 import { Devices } from "./pages/Devices";
 import { DeviceDetail } from "./pages/DeviceDetail";
-import { DockerPage } from "./pages/Docker";
+import RuntimePage from "./pages/containers/RuntimePage";
 import { AdbPage } from "./pages/Adb";
 import { ApkPage } from "./pages/Apk";
 import { VolumesPage } from "./pages/Volumes";
 import { LogsPage } from "./pages/Logs";
 import { SettingsPage } from "./pages/Settings";
-import { QemuCenterPage } from "./pages/QemuCenter";
 import { DeviceWindowPage } from "./pages/DeviceWindow";
 import { I18nProvider } from "./i18n";
 
@@ -26,11 +25,15 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="devices" element={<Devices />} />
             <Route path="devices/:id" element={<DeviceDetail />} />
-            <Route path="docker" element={<DockerPage />} />
+            {/* Merged "containers & nodes" page; the track lives in ?track=. */}
+            <Route path="containers" element={<RuntimePage />} />
+            {/* Old deep links / bookmarks keep working: they land on the track
+                they used to be. Kept permanently — no sidebar entries. */}
+            <Route path="docker" element={<Navigate to="/containers?track=docker" replace />} />
+            <Route path="qemu" element={<Navigate to="/containers?track=qemu" replace />} />
             <Route path="adb" element={<AdbPage />} />
             <Route path="apk" element={<ApkPage />} />
             <Route path="volumes" element={<VolumesPage />} />
-            <Route path="qemu" element={<QemuCenterPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

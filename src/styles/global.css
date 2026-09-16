@@ -2108,8 +2108,9 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
   .device-monitor-runtime { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* ---- QEMU Center page (src/pages/QemuCenter.tsx) ----
-   Page-scoped only: `.page-qemu` lives on `.app-shell` (route key) so every
+/* ---- QEMU Center page (src/pages/tracks/QemuTrackPanel.tsx) ----
+   Page-scoped only: `.page-qemu` lives on `.app-shell` (route key; the merged
+   `/containers` page maps its active track onto that same class) so every
    rule below stays inside this page and never touches the shared .module/.table
    primitives. */
 .page-qemu .page-title { display: flex; align-items: center; gap: 7px; }
@@ -2184,3 +2185,33 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
 @media (max-width: 900px) {
   .page-settings .page-fade .settings-tabpanel > .grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- Merged containers page shell (src/pages/containers/RuntimePage.tsx) ----
+   The shell renders the page header + track switcher as a *sibling* of the
+   track panel, never as a wrapper: the `.page-docker` / `.page-qemu` rules
+   scope through `.page-fade > div`, so the panel root has to stay that direct
+   child. That makes the shell block a `.page-fade > div` too, so it needs the
+   generic full-height flex item rule opted out at matching specificity
+   (`.content > .page-fade > div`), otherwise the two blocks split the page
+   height between them. The strip reuses the shared .tabs/.tab primitives like
+   the Settings page does. */
+.content > .page-fade > .runtime-shell { flex: 0 0 auto; height: auto; }
+.runtime-tabs { flex: 0 0 auto; }
+.runtime-tab { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
+
+/* Mount strategy (merge spec §6.4, P3): a track whose long task is still
+   running stays mounted behind the other track and is only taken out of
+   layout here. `display: none` is what the spec asks for — no second scroll
+   container and no extra layout box, unlike visibility/offscreen tricks. The
+   shell is the only element that can carry the hook, because a wrapper element
+   around a panel would break the `.page-fade > div` scoping above; the shell
+   also renders the Docker panel first and the QEMU panel second, which is what
+   these sibling selectors rely on (the Docker panel root carries no class of
+   its own, so it is matched as "any following div that is not the QEMU one"). */
+.runtime-shell[data-inactive-track="docker"] ~ div:not(.page-qemu) { display: none; }
+.runtime-shell[data-inactive-track="qemu"] ~ .page-qemu { display: none; }
+
+/* Background-task bar: same visual family as the QEMU pending-setup banner. */
+.runtime-bg-task { display: flex; align-items: center; gap: 8px; margin-top: 8px; border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); border-left-width: 3px; color: var(--ink); font-size: 12px; }
+.runtime-bg-task .create-spinner { color: var(--accent); }
+.runtime-bg-task-text { flex: 1 1 auto; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
