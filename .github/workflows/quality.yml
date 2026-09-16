@@ -65,3 +65,30 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+  qemu-center:
+    name: QEMU center checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master (2026-09-08)
+        with:
+          toolchain: stable
+
+      - name: Cache QEMU center dependencies
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-qemu-center-${{ hashFiles('qemu-center/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-qemu-center-
+
+      - name: Run QEMU center tests
+        run: cargo test --locked --manifest-path qemu-center/Cargo.toml
