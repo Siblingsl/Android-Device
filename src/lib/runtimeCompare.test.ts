@@ -232,8 +232,7 @@ describe("unavailable semantics (spec §6.8: 不得显示 0)", () => {
     });
 
     // One side readable, the other not: the group exists and every cell of the
-    // missing side states its reason (gap metrics keep saying 无数据源, which is
-    // true whatever the track does).
+    // missing side states its reason, including the resource metrics.
     const one = build(
       dockerReading([row("rdc-1")]),
       qemuReading(null, { cliError: "qemu-center not found", instances: null }),
@@ -242,7 +241,7 @@ describe("unavailable semantics (spec §6.8: 不得显示 0)", () => {
     expect(qemuSide.cells.instances).toMatchObject({ kind: "unavailable", reason: "CLI 缺失" });
     expect(qemuSide.cells.running).toMatchObject({ kind: "unavailable", reason: "CLI 缺失" });
     expect(zeroFree(qemuSide.cells.instances)).toBe(true);
-    expect(qemuSide.cells.cpuQuota).toMatchObject({ kind: "noSource" });
+    expect(qemuSide.cells.cpuQuota).toMatchObject({ kind: "unavailable", reason: "CLI 缺失" });
     expect(one.groups[0].sides.docker.cells.instances).toMatchObject({ kind: "count", text: "1" });
   });
 
@@ -260,9 +259,9 @@ describe("unavailable semantics (spec §6.8: 不得显示 0)", () => {
     expect(view.groups).toEqual([]);
   });
 
-  it("marks the four unsourced metrics on both tracks and names what they need", () => {
-    expect(NO_SOURCE_METRICS).toEqual(["cpuQuota", "memQuota", "disk", "bootTime"]);
-    for (const metric of NO_SOURCE_METRICS) {
+  it("does not keep the four resource metrics in the no-source bucket", () => {
+    expect(NO_SOURCE_METRICS).toEqual([]);
+    for (const metric of ["cpuQuota", "memQuota", "disk", "bootTime"] as const) {
       expect(COMPARE_METRICS).toContain(metric);
       expect(COMPARE_METRIC_LABEL_KEY[metric]).toBeTruthy();
       expect(noSourceHintKey(metric)).toBe(`runtime.compare.gap.${metric}`);
@@ -270,14 +269,81 @@ describe("unavailable semantics (spec §6.8: 不得显示 0)", () => {
     }
 
     const view = build(dockerReading([row("rdc-1")]), null);
+    const cells = view.groups[0].sides.docker.cells;
+    for (const metric of ["cpuQuota", "memQuota", "disk", "bootTime"] as const) {
+      expect(cells[metric]).toMatchObject({
+        kind: "unavailable",
+        reason: "不可用（本次读取无指标）",
+      });
+    }
+  });
+
+  it("renders read-only resource metrics from the instance snapshot", () => {
+    const view = build(
+      dockerReading([
+        row("rdc-1", {
+          metrics: {
+            cpuQuotaCores: 2,
+            cpuUnlimited: false,
+            memoryQuotaBytes: 4 * 1024 * 1024 * 1024,
+            memoryUnlimited: false,
+            diskBytes: 1024 * 1024,
+            startedAt: "2026-09-16T10:00:00.000Z",
+            finishedAt: "2026-09-16T10:01:00.000Z",
+          },
+        }),
+      ]),
+      null,
+    );
+
+    expect(view.groups[0].sides.docker.cells.cpuQuota).toMatchObject({ kind: "value", text: "2 vCPU" });
+    expect(view.groups[0].sides.docker.cells.memQuota).toMatchObject({ kind: "value", text: "4 GiB" });
+    expect(view.groups[0].sides.docker.cells.disk).toMatchObject({ kind: "value", text: "1 MiB" });
+    expect(view.groups[0].sides.docker.cells.bootTime).toMatchObject({ kind: "value", text: "1 分钟" });
+  });
+
+  it("keeps unlimited quotas, partial reads, zero disk and running duration explicit", () => {
+    const view = buildCompareView(
+      {
+        docker: dockerReading([
+          row("limited", {
+            metrics: {
+              cpuQuotaCores: 2,
+              cpuUnlimited: false,
+              memoryQuotaBytes: null,
+              memoryUnlimited: true,
+              diskBytes: 0,
+              startedAt: "2026-09-16T10:00:00.000Z",
+              finishedAt: null,
+            },
+          }),
+          row("partial", { metrics: null }),
+        ]),
+        qemu: null,
+      },
+      HEALTH,
+      t,
+      Date.parse("2026-09-16T10:02:00.000Z"),
+    );
+
+    const cells = view.groups[0].sides.docker.cells;
+    expect(cells.cpuQuota).toMatchObject({ kind: "value", text: "2 vCPU · 部分可用：1/2 个实例", complete: false });
+    expect(cells.memQuota).toMatchObject({ kind: "value", text: "不限 · 部分可用：1/2 个实例", complete: false });
+    expect(cells.disk).toMatchObject({ kind: "value", text: "0 B · 部分可用：1/2 个实例", complete: false });
+    expect(cells.bootTime).toMatchObject({ kind: "value", text: "2 分钟 · 部分可用：1/2 个实例", complete: false });
+  });
+
+  it("reports missing metrics without inventing resource zeros", () => {
+    const view = build(
+      dockerReading([row("rdc-13")]),
+      qemuReading([row("qc-13")]),
+    );
+    // The rows have no inspect metrics, so the read is explicitly unavailable.
     for (const track of ["docker", "qemu"] as const) {
-      const cells = view.groups[0].sides[track].cells;
-      for (const metric of NO_SOURCE_METRICS) {
-        expect(cells[metric]).toEqual({
-          kind: "noSource",
-          hint: runtimeZh[`runtime.compare.gap.${metric}`],
-        });
-      }
+      expect(view.groups[0].sides[track].cells.disk).toMatchObject({
+        kind: "unavailable",
+        reason: "不可用（本次读取无指标）",
+      });
     }
   });
 

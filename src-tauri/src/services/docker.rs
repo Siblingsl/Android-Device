@@ -5,7 +5,8 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
 use crate::models::{
-    CreateInstanceRequest, DockerContainer, DockerImage, DockerInfo, DockerVolume, ShellResult,
+    CreateInstanceRequest, DockerContainer, DockerImage, DockerInfo, DockerVolume, RuntimeMetrics,
+    ShellResult,
 };
 use crate::services::{adb, cache, cloak, log, settings, util};
 
@@ -225,10 +226,109 @@ pub fn list_containers(all: bool) -> Vec<DockerContainer> {
                 ports: p.get(4).unwrap_or(&"").to_string(),
                 created: p.get(5).unwrap_or(&"").to_string(),
                 is_redroid,
+                metrics: None,
             }
         })
         .collect();
     enrich_stopped_container_ports(&mut containers);
+    containers
+}
+
+/// Parse the stable, read-only fields returned by `docker inspect --size`.
+/// Missing fields stay unknown; a reported zero quota is an explicit
+/// unlimited resource, not a fake numeric value for the UI.
+fn parse_runtime_metrics(inspected: &serde_json::Value) -> Option<RuntimeMetrics> {
+    let host = inspected.get("HostConfig").and_then(|v| v.as_object());
+    let state = inspected.get("State").and_then(|v| v.as_object());
+    let mut measured = false;
+
+    let (cpu_quota_cores, cpu_unlimited) = match host.and_then(|v| v.get("NanoCpus")).and_then(|v| v.as_u64()) {
+        Some(nano) => {
+            measured = true;
+            if nano == 0 {
+                (None, Some(true))
+            } else {
+                (Some(nano as f64 / 1_000_000_000.0), Some(false))
+            }
+        }
+        None => (None, None),
+    };
+    let (memory_quota_bytes, memory_unlimited) = match host.and_then(|v| v.get("Memory")).and_then(|v| v.as_u64()) {
+        Some(bytes) => {
+            measured = true;
+            if bytes == 0 {
+                (None, Some(true))
+            } else {
+                (Some(bytes), Some(false))
+            }
+        }
+        None => (None, None),
+    };
+    let disk_bytes = inspected.get("SizeRw").and_then(|v| v.as_u64()).map(|bytes| {
+        measured = true;
+        bytes
+    });
+
+    let clean_time = |key: &str| {
+        let value = state.and_then(|v| v.get(key)).and_then(|v| v.as_str())?.trim();
+        if value.is_empty() || value.starts_with("0001-01-01") {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    };
+    let started_at = clean_time("StartedAt");
+    let finished_at = clean_time("FinishedAt");
+    measured |= started_at.is_some() || finished_at.is_some();
+
+    measured.then_some(RuntimeMetrics {
+        cpu_quota_cores,
+        cpu_unlimited,
+        memory_quota_bytes,
+        memory_unlimited,
+        disk_bytes,
+        started_at,
+        finished_at,
+    })
+}
+
+/// Enrich only the DockerInfo path. The generic device-list path intentionally
+/// stays fast and does not pay for inspect --size on every refresh.
+fn enrich_runtime_metrics(containers: &mut [DockerContainer]) {
+    let names: Vec<String> = containers
+        .iter()
+        .filter(|c| c.is_redroid)
+        .map(|c| c.name.trim_start_matches('/').to_string())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    let mut args: Vec<String> = vec!["inspect".into(), "--size".into()];
+    args.extend(names);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = util::run_command_timeout(&docker_bin(), &refs, Duration::from_secs(20));
+    if !result.success {
+        return;
+    }
+    let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&result.stdout) else {
+        return;
+    };
+    for container in containers.iter_mut().filter(|c| c.is_redroid) {
+        let clean_name = container.name.trim_start_matches('/');
+        let Some(entry) = entries.iter().find(|entry| {
+            entry.get("Name").and_then(|v| v.as_str()).map(|name| name.trim_start_matches('/') == clean_name)
+                .unwrap_or(false)
+                || entry.get("Id").and_then(|v| v.as_str()) == Some(container.id.as_str())
+        }) else {
+            continue;
+        };
+        container.metrics = parse_runtime_metrics(entry);
+    }
+}
+
+fn list_containers_with_runtime_metrics(all: bool) -> Vec<DockerContainer> {
+    let mut containers = list_containers(all);
+    enrich_runtime_metrics(&mut containers);
     containers
 }
 
@@ -2962,7 +3062,7 @@ fn info_cached(use_cache: bool) -> DockerInfo {
         },
         images: if running { list_images() } else { vec![] },
         containers: if running {
-            list_containers(true)
+            list_containers_with_runtime_metrics(true)
         } else {
             vec![]
         },
@@ -2986,6 +3086,7 @@ mod tests {
             ports: ports.to_string(),
             created: String::new(),
             is_redroid: true,
+            metrics: None,
         }
     }
 
@@ -3068,6 +3169,45 @@ mod tests {
     #[test]
     fn container_stats_rejects_empty_identifier() {
         assert!(container_stats(" ").is_none());
+    }
+
+    #[test]
+    fn runtime_metrics_parse_limits_size_and_timestamps() {
+        let inspected = serde_json::json!({
+            "HostConfig": { "NanoCpus": 2_000_000_000u64, "Memory": 4_294_967_296u64 },
+            "SizeRw": 1_048_576u64,
+            "State": {
+                "StartedAt": "2026-09-16T10:00:00.000000000Z",
+                "FinishedAt": "2026-09-16T10:01:00.000000000Z"
+            }
+        });
+        let metrics = parse_runtime_metrics(&inspected).expect("inspect data should be usable");
+        assert_eq!(metrics.cpu_quota_cores, Some(2.0));
+        assert_eq!(metrics.cpu_unlimited, Some(false));
+        assert_eq!(metrics.memory_quota_bytes, Some(4_294_967_296));
+        assert_eq!(metrics.memory_unlimited, Some(false));
+        assert_eq!(metrics.disk_bytes, Some(1_048_576));
+        assert_eq!(metrics.started_at.as_deref(), Some("2026-09-16T10:00:00.000000000Z"));
+        assert_eq!(metrics.finished_at.as_deref(), Some("2026-09-16T10:01:00.000000000Z"));
+    }
+
+    #[test]
+    fn runtime_metrics_keep_unlimited_distinct_from_missing() {
+        let unlimited = serde_json::json!({
+            "HostConfig": { "NanoCpus": 0, "Memory": 0 },
+            "SizeRw": 0,
+            "State": { "StartedAt": "0001-01-01T00:00:00Z", "FinishedAt": "0001-01-01T00:00:00Z" }
+        });
+        let metrics = parse_runtime_metrics(&unlimited).expect("explicit inspect fields are data");
+        assert_eq!(metrics.cpu_quota_cores, None);
+        assert_eq!(metrics.cpu_unlimited, Some(true));
+        assert_eq!(metrics.memory_quota_bytes, None);
+        assert_eq!(metrics.memory_unlimited, Some(true));
+        assert_eq!(metrics.disk_bytes, Some(0));
+        assert_eq!(metrics.started_at, None);
+        assert_eq!(metrics.finished_at, None);
+
+        assert!(parse_runtime_metrics(&serde_json::json!({})).is_none());
     }
 }
 

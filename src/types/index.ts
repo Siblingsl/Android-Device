@@ -245,6 +245,17 @@ export interface DockerVolume {
   adbSerial?: string;
 }
 
+/** Read-only Docker/QEMU metrics carried by an instance snapshot. */
+export interface RuntimeMetrics {
+  cpuQuotaCores: number | null;
+  cpuUnlimited: boolean | null;
+  memoryQuotaBytes: number | null;
+  memoryUnlimited: boolean | null;
+  diskBytes: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
 export interface DockerContainer {
   id: string;
   name: string;
@@ -253,6 +264,7 @@ export interface DockerContainer {
   ports: string;
   created: string;
   isRedroid: boolean;
+  metrics?: RuntimeMetrics | null;
 }
 
 export interface DockerInfo {
@@ -567,7 +579,7 @@ export interface DashboardData {
 
 /** One row of the Dashboard first-use readiness checklist. */
 export interface ReadinessItem {
-  /** docker | adb | scrcpy | whpx | qemu-bin | cloud-image */
+  /** docker | adb | scrcpy | whpx | qemu-bin | cloud-image | android-image | abi | gapps */
   id: string;
   title: string;
   done: boolean;
@@ -575,6 +587,12 @@ export interface ReadinessItem {
   hint: string;
   /** Frontend route the "go fix" button navigates to. */
   cta: string;
+  /** Newer backends distinguish actionable, unsupported and unknown probes. */
+  status?: "ready" | "action_required" | "unsupported" | "unknown";
+  /** shared | docker | qemu */
+  track?: "shared" | "docker" | "qemu";
+  /** Concrete probe result or compatibility explanation. */
+  detail?: string;
 }
 
 /** WSL2 custom binder kernel (Redroid + Docker Desktop) */
@@ -718,6 +736,7 @@ export interface QemuRedroidInstance {
   androidVersion?: string;
   image?: string;
   rollbackAvailable?: boolean;
+  metrics?: RuntimeMetrics | null;
 }
 
 export interface QemuAdbMapping {

@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::models::RuntimeMetrics;
 use crate::services::adb;
 
 /// Upper bound for one CLI invocation (setup all / image download / DISM).
@@ -129,6 +130,8 @@ pub struct QemuRedroidInstance {
     pub image: String,
     #[serde(default)]
     pub rollback_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<RuntimeMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -844,6 +847,7 @@ pub fn parse_redroid_list_json(raw: &str) -> Result<Vec<QemuRedroidInstance>, St
             android_version: String::new(),
             image: String::new(),
             rollback_available: false,
+            metrics: None,
         })
         .collect())
 }

@@ -135,6 +135,28 @@ pub struct DockerInfo {
     pub memory_usage: f64,
 }
 
+/// Read-only per-container runtime metrics used by the cross-track comparison.
+/// `None` means Docker did not report that field; the explicit `*_unlimited`
+/// flags distinguish a known unlimited resource from an unreadable quota.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeMetrics {
+    #[serde(default)]
+    pub cpu_quota_cores: Option<f64>,
+    #[serde(default)]
+    pub cpu_unlimited: Option<bool>,
+    #[serde(default)]
+    pub memory_quota_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_unlimited: Option<bool>,
+    #[serde(default)]
+    pub disk_bytes: Option<u64>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DockerImage {
@@ -170,6 +192,8 @@ pub struct DockerContainer {
     pub ports: String,
     pub created: String,
     pub is_redroid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<RuntimeMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -412,6 +412,7 @@ export default function QemuTrackPanel({
             image: instance.image ?? "",
             status: instance.status,
             host: selectedVm,
+            metrics: instance.metrics ?? null,
           }))
         : null,
     });

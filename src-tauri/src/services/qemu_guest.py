@@ -70,6 +70,9 @@ class Docker:
     def inspect(self, name):
         return json.loads(self.cli("inspect", name))[0]
 
+    def inspect_size(self, name):
+        return json.loads(self.cli("inspect", "--size", name))[0]
+
     def exists(self, name):
         return subprocess.run(["docker", "inspect", name], stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL, timeout=30).returncode == 0
@@ -340,13 +343,64 @@ def restore(docker, request):
     print("[restore] Original instance restored; upgraded data retained in " + retained)
 
 
+def runtime_metrics(inspected):
+    """Project only stable, read-only docker inspect --size fields."""
+    host = inspected.get("HostConfig") or {}
+    state = inspected.get("State") or {}
+    measured = False
+
+    nano = host.get("NanoCpus")
+    if isinstance(nano, int):
+        measured = True
+        cpu_quota = None if nano == 0 else nano / 1_000_000_000
+        cpu_unlimited = nano == 0
+    else:
+        cpu_quota = None
+        cpu_unlimited = None
+
+    memory = host.get("Memory")
+    if isinstance(memory, int):
+        measured = True
+        memory_quota = None if memory == 0 else memory
+        memory_unlimited = memory == 0
+    else:
+        memory_quota = None
+        memory_unlimited = None
+
+    disk = inspected.get("SizeRw")
+    if isinstance(disk, int):
+        measured = True
+        disk_bytes = disk
+    else:
+        disk_bytes = None
+
+    def clean_time(value):
+        value = str(value or "").strip()
+        return None if not value or value.startswith("0001-01-01") else value
+
+    started_at = clean_time(state.get("StartedAt"))
+    finished_at = clean_time(state.get("FinishedAt"))
+    measured = measured or started_at is not None or finished_at is not None
+    if not measured:
+        return None
+    return {
+        "cpuQuotaCores": cpu_quota,
+        "cpuUnlimited": cpu_unlimited,
+        "memoryQuotaBytes": memory_quota,
+        "memoryUnlimited": memory_unlimited,
+        "diskBytes": disk_bytes,
+        "startedAt": started_at,
+        "finishedAt": finished_at,
+    }
+
+
 def details(docker, request):
     rows = []
     for instance in request.get("names") or []:
         name = "qc-" + instance
         if not docker.exists(name):
             continue
-        inspected = docker.inspect(name)
+        inspected = docker.inspect_size(name)
         version = ""
         try:
             # Cached immutable version label for derived images; fallback to file probe.
@@ -354,7 +408,8 @@ def details(docker, request):
         except (ValueError, RuntimeError):
             pass
         rows.append({"instance": instance, "androidVersion": version, "image": inspected["Config"]["Image"],
-                     "rollbackAvailable": docker.exists(name + "-preupgrade")})
+                     "rollbackAvailable": docker.exists(name + "-preupgrade"),
+                     "metrics": runtime_metrics(inspected)})
     print(json.dumps(rows))
 
 
@@ -403,4 +458,3 @@ if __name__ == "__main__":
     except Exception as error:
         print("[error] " + str(error), file=sys.stderr)
         sys.exit(1)
-

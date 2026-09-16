@@ -3,16 +3,16 @@
  *
  * Input: the two session snapshots the track panels publish into
  * `appStore.runtimeSources`. Output: Android-version groups whose metric cells
- * are either a number that the snapshot actually carries, or a *stated reason*
- * (`不可用（无数据源）` / `Docker 未启动` / `CLI 缺失` / `未读取`) — never a
- * made-up `0`.
+ * are either a value the snapshot actually carries, or a stated reason such as
+ * `不可用（本次读取无指标）` / `Docker 未启动` / `CLI 缺失` / `未读取` — never
+ * a made-up `0`.
  *
  * Nothing in this module (or in `pages/containers/RuntimeCompare.tsx`) calls a
  * service or schedules a timer: the data is whatever the panels' own existing
  * read-only loads already published, and a refresh is the user asking a panel
  * to re-run that load (the shell's `refreshSignal` delegation).
  *
- * 指标来源表 (see `COMPARE_METRICS` / `NO_SOURCE_METRICS`):
+ * 指标来源表 (see `COMPARE_METRICS` / `RESOURCE_METRICS`):
  *   - 实例数 / 运行中 ← `DockerSourceReading.instances` (from
  *     `DeviceService.refreshDockerInfo` → `DockerInfo.containers`) and
  *     `QemuSourceReading.instanceRows` (from `QemuService.redroidList(vm)`).
@@ -20,9 +20,8 @@
  *     `DeviceService.getWslKernelStatus` + `probeTool` for Docker; the cached
  *     `QemuService.doctor` tally / CLI error for QEMU), shared verbatim through
  *     `pages/containers/RuntimeSourceBadges`.
- *   - CPU 配额 / 内存配额 / 磁盘 / 启动耗时 ← no source this round; the panel
- *     reads that would fill them are listed on `NO_SOURCE_METRICS` and are *not*
- *     implemented by P6 (it adds no backend command).
+ *   - CPU 配额 / 内存配额 / 磁盘 / 启动耗时 ← per-instance read-only metrics
+ *     enriched by the existing Docker and guest detail reads.
  */
 import type {
   DockerSourceReading,
@@ -61,28 +60,17 @@ export const COMPARE_METRIC_LABEL_KEY: Record<CompareMetricId, string> = {
 };
 
 /**
- * Metrics with no data source in *either* track as of P6. They render as
- * 「不可用（无数据源）」 and are listed with the read that would fill them:
- *
- *   - `cpuQuota` / `memQuota`: neither `docker ps -a` (host) nor
- *     `qemu-center redroid list` (node) reports the instance's quota — it lives
- *     in `docker inspect` (host: `HostConfig.NanoCpus` / `Memory`) and in the
- *     guest-side preset state. Filling it needs one read-only extra call:
- *     a `docker inspect` on the host and an equivalent read over the existing
- *     guest SSH channel.
- *   - `disk`: same two reads (container size / guest `docker system df`).
- *   - `bootTime`: `docker ps` CreatedAt is a container *age*, not a boot
- *     duration; the honest value needs the guest's own start timestamps.
- *
- * P6 deliberately implements none of them: adding a backend command is out of
- * scope for this round, and a `0` in these cells would be a lie.
+ * Kept as an additive export for callers that used the P6 placeholder
+ * vocabulary. P6b now supplies all four metrics from the instance snapshots.
  */
-export const NO_SOURCE_METRICS: readonly CompareMetricId[] = [
+export const NO_SOURCE_METRICS: readonly CompareMetricId[] = [];
+
+const RESOURCE_METRICS = [
   "cpuQuota",
   "memQuota",
   "disk",
   "bootTime",
-];
+] as const satisfies readonly CompareMetricId[];
 
 /** i18n key of the hint explaining what a no-source metric would need. */
 export function noSourceHintKey(metric: CompareMetricId): string {
@@ -141,9 +129,11 @@ export const UNKNOWN_VERSION_KEY = "unknown";
 export type CompareCell =
   /** A number the snapshot carries; `share` (0..1) drives the bar, null = none. */
   | { kind: "count"; text: string; share: number | null; note: string }
+  /** A read-only resource aggregate backed by one or more instance metrics. */
+  | { kind: "value"; text: string; detail: string; complete: boolean }
   /** A stated state (health summary); `level` reuses the badge palette. */
   | { kind: "text"; text: string; level: CompareLevel; detail: string }
-  /** The metric has no data source in this build (see `NO_SOURCE_METRICS`). */
+  /** Legacy placeholder shape; current builders use `value` or `unavailable`. */
   | { kind: "noSource"; hint: string }
   /** The track has no usable reading: reason + raw detail, never a 0. */
   | { kind: "unavailable"; reason: string; detail: string };
@@ -157,6 +147,8 @@ export type CompareInstanceView = {
   running: boolean | null;
   /** Raw status text, verbatim (tooltip). */
   status: string;
+  /** Read-only resource/start metrics, when inspect returned them. */
+  metrics: RuntimeInstanceRow["metrics"];
 };
 
 export type CompareSideView = {
@@ -265,6 +257,7 @@ function instanceView(row: RuntimeInstanceRow): CompareInstanceView {
     versionLabel: instanceVersionLabel(row),
     running: instanceRunState(row.status),
     status: row.status,
+    metrics: row.metrics ?? null,
   };
 }
 
@@ -276,6 +269,7 @@ function sideView(
   otherInstances: number,
   health: CompareHealth,
   t: CompareTranslator,
+  now: number,
 ): CompareSideView {
   const available = "rows" in source;
   const list = available ? instances : [];
@@ -291,6 +285,7 @@ function sideView(
     cells: sideCells(
       { available, unavailable, detail, instances: list, otherInstances, health },
       t,
+      now,
     ),
   };
 }
@@ -299,9 +294,9 @@ function sideView(
  * Metric cells of one side of one group.
  *
  * Precedence, in order (so a cell never shows a number it cannot back):
- *   1. no data source at all      → `noSource`   (true whatever the track does)
- *   2. track snapshot unusable    → `unavailable` with the track's reason
- *   3. value from the snapshot    → `count` / `text` (a real `0` allowed here)
+ *   1. track snapshot unusable    → `unavailable` with the track's reason
+ *   2. value from the snapshot    → `count` / `text` / `value`
+ *   3. a missing per-instance field → `unavailable` with its source reason
  */
 function sideCells(
   input: {
@@ -313,11 +308,9 @@ function sideCells(
     health: CompareHealth;
   },
   t: CompareTranslator,
+  now: number,
 ): Record<CompareMetricId, CompareCell> {
   const cells = {} as Record<CompareMetricId, CompareCell>;
-  for (const metric of NO_SOURCE_METRICS) {
-    cells[metric] = { kind: "noSource", hint: t(noSourceHintKey(metric)) };
-  }
   cells.health = {
     kind: "text",
     text: input.health.text,
@@ -329,6 +322,7 @@ function sideCells(
     const reason = { kind: "unavailable" as const, reason: input.unavailable, detail: input.detail };
     cells.instances = reason;
     cells.running = reason;
+    for (const metric of RESOURCE_METRICS) cells[metric] = reason;
     return cells;
   }
 
@@ -352,16 +346,137 @@ function sideCells(
       reason: t("runtime.compare.statusUnknown"),
       detail: statuses.join(" · "),
     };
-    return cells;
+  } else {
+    const unknown = total - known;
+    cells.running = {
+      kind: "count",
+      text: t("runtime.compare.runningRatio", { running, total }),
+      share: total > 0 ? running / total : null,
+      note: unknown > 0 ? t("runtime.compare.runningUnknown", { count: unknown }) : "",
+    };
   }
-  const unknown = total - known;
-  cells.running = {
-    kind: "count",
-    text: t("runtime.compare.runningRatio", { running, total }),
-    share: total > 0 ? running / total : null,
-    note: unknown > 0 ? t("runtime.compare.runningUnknown", { count: unknown }) : "",
-  };
+  for (const metric of RESOURCE_METRICS) {
+    cells[metric] = resourceMetricCell(metric, input.instances, now, t);
+  }
   return cells;
+}
+
+function numberText(value: number): string {
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function bytesText(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${numberText(value)} ${units[index]}`;
+}
+
+function durationText(ms: number, t: CompareTranslator): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return t("runtime.compare.duration.seconds", { n: seconds });
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) {
+    return remainder
+      ? t("runtime.compare.duration.minutesSeconds", { m: minutes, s: remainder })
+      : t("runtime.compare.duration.minutes", { n: minutes });
+  }
+  const hours = Math.floor(minutes / 60);
+  const minuteRemainder = minutes % 60;
+  return minuteRemainder
+    ? t("runtime.compare.duration.hoursMinutes", { h: hours, m: minuteRemainder })
+    : t("runtime.compare.duration.hours", { n: hours });
+}
+
+function startDurationMs(
+  metrics: NonNullable<CompareInstanceView["metrics"]>,
+  now: number,
+): number | null {
+  if (!metrics.startedAt) return null;
+  const started = Date.parse(metrics.startedAt);
+  if (!Number.isFinite(started)) return null;
+  const finished = metrics.finishedAt ? Date.parse(metrics.finishedAt) : now;
+  if (!Number.isFinite(finished) || finished < started) return null;
+  return finished - started;
+}
+
+function resourceMetricCell(
+  metric: (typeof RESOURCE_METRICS)[number],
+  instances: CompareInstanceView[],
+  now: number,
+  t: CompareTranslator,
+): CompareCell {
+  if (instances.length === 0) {
+    return { kind: "unavailable", reason: t("runtime.compare.noInstances"), detail: "" };
+  }
+
+  const cpuValues: string[] = [];
+  const memoryValues: string[] = [];
+  const diskValues: number[] = [];
+  const bootValues: number[] = [];
+  for (const instance of instances) {
+    const metrics = instance.metrics;
+    if (!metrics) continue;
+    if (metric === "cpuQuota") {
+      if (metrics.cpuUnlimited === true) cpuValues.push(t("runtime.compare.unlimited"));
+      else if (metrics.cpuQuotaCores !== null && metrics.cpuQuotaCores !== undefined && Number.isFinite(metrics.cpuQuotaCores) && metrics.cpuQuotaCores > 0) {
+        cpuValues.push(t("runtime.compare.value.cpu", { value: numberText(metrics.cpuQuotaCores) }));
+      }
+    } else if (metric === "memQuota") {
+      if (metrics.memoryUnlimited === true) memoryValues.push(t("runtime.compare.unlimited"));
+      else if (metrics.memoryQuotaBytes !== null && metrics.memoryQuotaBytes !== undefined && Number.isFinite(metrics.memoryQuotaBytes) && metrics.memoryQuotaBytes > 0) {
+        memoryValues.push(bytesText(metrics.memoryQuotaBytes));
+      }
+    } else if (metric === "disk") {
+      if (metrics.diskBytes !== null && metrics.diskBytes !== undefined && Number.isFinite(metrics.diskBytes) && metrics.diskBytes >= 0) {
+        diskValues.push(metrics.diskBytes);
+      }
+    } else {
+      const duration = startDurationMs(metrics, now);
+      if (duration !== null) bootValues.push(duration);
+    }
+  }
+
+  const known = metric === "cpuQuota" ? cpuValues.length
+    : metric === "memQuota" ? memoryValues.length
+      : metric === "disk" ? diskValues.length
+        : bootValues.length;
+  if (known === 0) {
+    return {
+      kind: "unavailable",
+      reason: t("runtime.compare.metricUnavailable"),
+      detail: t("runtime.compare.metricSource", { metric: t(COMPARE_METRIC_LABEL_KEY[metric]) }),
+    };
+  }
+
+  const missing = instances.length - known;
+  const partial = missing > 0 ? ` · ${t("runtime.compare.metricPartial", { known, total: instances.length })}` : "";
+  let text: string;
+  if (metric === "cpuQuota") {
+    text = [...new Set(cpuValues)].join(" · ");
+  } else if (metric === "memQuota") {
+    text = [...new Set(memoryValues)].join(" · ");
+  } else if (metric === "disk") {
+    text = bytesText(diskValues.reduce((sum, value) => sum + value, 0));
+  } else {
+    const average = bootValues.reduce((sum, value) => sum + value, 0) / bootValues.length;
+    const formatted = durationText(average, t);
+    text = bootValues.length > 1 ? t("runtime.compare.average", { value: formatted }) : formatted;
+  }
+  return {
+    kind: "value",
+    text: text + partial,
+    detail: t("runtime.compare.metricSource", { metric: t(COMPARE_METRIC_LABEL_KEY[metric]) }),
+    complete: missing === 0,
+  };
 }
 
 /**
@@ -372,6 +487,7 @@ export function buildCompareView(
   readings: { docker: DockerSourceReading | null; qemu: QemuSourceReading | null },
   health: Record<RuntimeTrack, CompareHealth>,
   t: CompareTranslator,
+  now = Date.now(),
 ): CompareView {
   const sources: Record<RuntimeTrack, TrackRows> = {
     docker: dockerRows(readings.docker, t),
@@ -428,6 +544,7 @@ export function buildCompareView(
         bucket[other].length,
         health[track],
         t,
+        now,
       );
     }
 

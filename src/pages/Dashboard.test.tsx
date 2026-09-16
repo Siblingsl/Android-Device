@@ -106,6 +106,8 @@ describe("Dashboard readiness checklist", () => {
     vi.useFakeTimers();
     vi.mocked(DeviceService.getDashboard).mockReset();
     vi.mocked(DeviceService.getDashboard).mockResolvedValue(dashboard("ok", 5));
+    vi.mocked(DeviceService.readinessChecklist).mockReset();
+    vi.mocked(DeviceService.readinessChecklist).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -121,9 +123,10 @@ describe("Dashboard readiness checklist", () => {
     cta,
   });
 
-  it("hides the whole card when every checklist item is done", async () => {
+  it("keeps a recheck entry and marks every ready item as available", async () => {
     vi.mocked(DeviceService.readinessChecklist).mockResolvedValue([
-      item("docker", true), item("adb", true),
+      { ...item("docker", true), status: "ready", track: "docker", detail: "Docker is ready" },
+      { ...item("adb", true), status: "ready", track: "shared" },
     ]);
     render(
       <MemoryRouter>
@@ -134,8 +137,51 @@ describe("Dashboard readiness checklist", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(screen.queryByText(/首次使用待办/)).toBeNull();
-    expect(screen.queryByText("docker")).toBeNull();
+    expect(screen.getByText("首次使用环境已准备")).toBeTruthy();
+    expect(screen.getAllByText(/环境已就绪/).length).toBe(2);
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeTruthy();
+  });
+
+  it("renders unsupported and unknown with different labels and details", async () => {
+    vi.mocked(DeviceService.readinessChecklist).mockResolvedValue([
+      { ...item("scrcpy", false, "/settings"), status: "unsupported", track: "shared", detail: "Not supported here" },
+      { ...item("whpx", false, "/qemu"), status: "unknown", track: "qemu", detail: "Probe timed out" },
+    ]);
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getAllByText(/不支持/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/无法判定/).length).toBeGreaterThan(0);
+    expect(screen.getByText("Not supported here")).toBeTruthy();
+    expect(screen.getByText("Probe timed out")).toBeTruthy();
+  });
+
+  it("rechecks only the readiness snapshot when the user asks", async () => {
+    vi.mocked(DeviceService.readinessChecklist)
+      .mockResolvedValueOnce([item("docker", false)])
+      .mockResolvedValueOnce([item("docker", true)]);
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.readinessChecklist).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.readinessChecklist).toHaveBeenCalledTimes(2);
   });
 
   it("renders pending items with hints and a per-item jump", async () => {

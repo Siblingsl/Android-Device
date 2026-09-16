@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{json, Value};
-use crate::models::CreateInstanceRequest;
+use crate::models::{CreateInstanceRequest, RuntimeMetrics};
 use crate::services::{adb, cloak, preset, qemu, spoof, traces, util};
 use qemu::{QemuCliOutput, QemuRedroidCreateRequest, QemuRedroidInstance, QemuVmEntry};
 
@@ -279,6 +279,10 @@ pub fn enrich(vm: &str, rows: &mut [QemuRedroidInstance]) {
             row.android_version = detail["androidVersion"].as_str().unwrap_or("").into();
             row.image = detail["image"].as_str().unwrap_or("").into();
             row.rollback_available = detail["rollbackAvailable"].as_bool().unwrap_or(false);
+            row.metrics = detail
+                .get("metrics")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<RuntimeMetrics>(value).ok());
         }
     }
 }

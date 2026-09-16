@@ -754,7 +754,7 @@ describe("compare view unavailable semantics (P6)", () => {
     expect(compareEl().textContent).not.toContain("3 个实例");
   });
 
-  it("renders 不可用（无数据源） for the metrics no read can fill — never 0", async () => {
+  it("renders a precise unavailable reason when the snapshot has no metrics — never 0", async () => {
     await renderWithSnapshots("/containers?track=docker&view=compare", {
       docker: dockerReading([dockerRow("rdc-1")]),
       qemu: qemuReading([qemuRow("qc-1")]),
@@ -763,14 +763,12 @@ describe("compare view unavailable semantics (P6)", () => {
     for (const metric of ["cpuQuota", "memQuota", "disk", "bootTime"]) {
       for (const track of ["docker", "qemu"] as const) {
         const el = cell(onlyGroup(), metric, track);
-        expect(el.textContent).toBe("不可用（无数据源）");
-        expect(el.getAttribute("data-cell")).toBe("no-source");
+        expect(el.textContent).toBe("不可用（本次读取无指标）");
+        expect(el.getAttribute("data-cell")).toBe("unavailable");
         expect(el.textContent).not.toContain("0");
       }
     }
-    // The hint names the read that would fill the gap (not implemented in P6).
     expect(cell(onlyGroup(), "cpuQuota", "docker").getAttribute("title")).toContain("docker inspect");
-    expect(cell(onlyGroup(), "disk", "qemu").getAttribute("title")).toContain("guest");
   });
 
   it("calls an unanswered node a missing reading, not 0 running", async () => {

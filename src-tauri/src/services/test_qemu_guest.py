@@ -54,6 +54,41 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SDK"):
             guest.android_version("ro.build.version.release=14\n")
 
+    def test_runtime_metrics_preserve_limits_size_and_timestamps(self):
+        inspected = {
+            "HostConfig": {"NanoCpus": 2_000_000_000, "Memory": 4_294_967_296},
+            "SizeRw": 1_048_576,
+            "State": {
+                "StartedAt": "2026-09-16T10:00:00.000000000Z",
+                "FinishedAt": "2026-09-16T10:01:00.000000000Z",
+            },
+        }
+        self.assertEqual(guest.runtime_metrics(inspected), {
+            "cpuQuotaCores": 2.0,
+            "cpuUnlimited": False,
+            "memoryQuotaBytes": 4_294_967_296,
+            "memoryUnlimited": False,
+            "diskBytes": 1_048_576,
+            "startedAt": "2026-09-16T10:00:00.000000000Z",
+            "finishedAt": "2026-09-16T10:01:00.000000000Z",
+        })
+
+    def test_runtime_metrics_keep_unlimited_distinct_from_missing(self):
+        self.assertEqual(guest.runtime_metrics({
+            "HostConfig": {"NanoCpus": 0, "Memory": 0},
+            "SizeRw": 0,
+            "State": {"StartedAt": "0001-01-01T00:00:00Z", "FinishedAt": "0001-01-01T00:00:00Z"},
+        }), {
+            "cpuQuotaCores": None,
+            "cpuUnlimited": True,
+            "memoryQuotaBytes": None,
+            "memoryUnlimited": True,
+            "diskBytes": 0,
+            "startedAt": None,
+            "finishedAt": None,
+        })
+        self.assertIsNone(guest.runtime_metrics({}))
+
     def test_wrong_target_version_never_stops_current_instance(self):
         docker = FakeDocker()
         with patch.object(guest, "image_version", return_value="13"), \

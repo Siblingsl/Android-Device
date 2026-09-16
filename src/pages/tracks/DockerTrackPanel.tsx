@@ -447,6 +447,7 @@ export default function DockerTrackPanel({
               image: container.image,
               status: container.status,
               host: "",
+              metrics: container.metrics ?? null,
             }))
         : null,
     });

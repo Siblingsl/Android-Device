@@ -265,6 +265,17 @@ function MetricCell({
       </span>
     );
   }
+  if (cell.kind === "value") {
+    return (
+      <span
+        className={`runtime-compare-value${cell.complete ? "" : " runtime-compare-partial"}`}
+        data-cell="value"
+        title={cell.detail}
+      >
+        {cell.text}
+      </span>
+    );
+  }
   if (cell.kind === "text") {
     return (
       <span className={LEVEL_CLASS[cell.level]} data-cell="text" title={cell.detail}>

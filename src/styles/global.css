@@ -1624,6 +1624,15 @@ textarea { border-radius: 6px !important; background: var(--surface-tint); }
 .dashboard-checklist-chip-text { display: flex; flex-direction: column; min-width: 0; }
 .dashboard-checklist-chip-title { font-weight: 650; font-size: 12px; }
 .dashboard-checklist-chip-hint { font-size: 11px; }
+.dashboard-checklist-chip-track,
+.dashboard-checklist-chip-detail { font-size: 10px; }
+.dashboard-checklist-chip-detail { max-width: min(520px, 58vw); }
+.dashboard-checklist-error { margin-bottom: 8px; color: var(--danger); }
+@media (max-width: 720px) {
+  .dashboard-checklist-chip { align-items: flex-start; flex-wrap: wrap; }
+  .dashboard-checklist-chip-text { flex: 1 1 180px; }
+  .dashboard-checklist-chip-detail { max-width: 100%; }
+}
 .device-session-row {
   position: relative;
   min-width: 0;

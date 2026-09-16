@@ -1,3 +1,5 @@
+import type { RuntimeMetrics } from "../types";
+
 /**
  * Track selection for the merged containers page (`/containers`).
  *
@@ -69,6 +71,8 @@ export type RuntimeInstanceRow = {
   status: string;
   /** Host node of the instance (QEMU track); `""` for the local Docker track. */
   host: string;
+  /** Optional read-only resource/start metrics from Docker inspect. */
+  metrics?: RuntimeMetrics | null;
 };
 
 /**
