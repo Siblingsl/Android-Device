@@ -25,6 +25,8 @@ vi.mock("../services/deviceService", () => ({
     vmRestore: vi.fn(),
     guestWait: vi.fn(),
     redroidCreate: vi.fn(),
+    redroidUpgrade: vi.fn(),
+    redroidRestore: vi.fn(),
     redroidList: vi.fn(),
     adbList: vi.fn(),
     verify: vi.fn(),
@@ -35,6 +37,9 @@ vi.mock("../services/deviceService", () => ({
     listDevices: vi.fn(async () => []),
     getSettings: vi.fn(async () => null),
     updateSettings: vi.fn(async (s: unknown) => s),
+    getLocalGappsPath: vi.fn(async () => "C:/assets/gapps.zip"),
+    getMagiskAssets: vi.fn(async () => ({ magiskOk: true, lsposedOk: true, shamikoOk: true })),
+    listSpoofProfiles: vi.fn(async () => [{ id: "captured-phone", model: "My phone" }]),
   },
 }));
 vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn(async () => true) }));
@@ -402,7 +407,7 @@ describe("QemuCenterPage", () => {
     const createButtons = screen.getAllByRole("button", { name: "创建实例" });
     fireEvent.click(createButtons[createButtons.length - 1]);
     await waitFor(() =>
-      expect(QemuService.redroidCreate).toHaveBeenCalledWith({
+      expect(QemuService.redroidCreate).toHaveBeenCalledWith(expect.objectContaining({
         vm: "node1",
         name: "r1",
         cpus: 1,
@@ -410,11 +415,90 @@ describe("QemuCenterPage", () => {
         width: 720,
         height: 1280,
         dpi: 320,
-      }),
+      })),
     );
     await waitFor(() => expect(screen.getByText("127.0.0.1:24501")).toBeTruthy());
     fireEvent.click(screen.getAllByRole("button", { name: "复制 Serial" })[0]);
     await waitFor(() => expect(copyText).toHaveBeenCalled());
+  });
+
+  it("locks upgrade version and preserves runtime settings while surfacing failures", async () => {
+    vi.mocked(QemuService.redroidList).mockResolvedValue([{ ...instancesFixture[0], androidVersion: "13", image: "redroid:13", rollbackAvailable: true }]);
+    vi.mocked(QemuService.redroidUpgrade).mockResolvedValue({ success: false, exitCode: 1, stdout: "", stderr: "GApps architecture mismatch: arm64" });
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "升级预装" }));
+    expect(screen.getByLabelText("实例名称").getAttribute("value")).toBe("r1");
+    expect((screen.getByLabelText("Android 版本") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText(/保留数据/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "开始升级" }));
+    await waitFor(() => expect(QemuService.redroidUpgrade).toHaveBeenCalledWith(expect.objectContaining({ vm: "node1", name: "r1", androidVersion: "13" })));
+    expect(QemuService.redroidCreate).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.querySelector(".qemu-status-line")?.textContent).toContain("GApps architecture mismatch: arm64"));
+    expect(screen.getByLabelText("实例名称")).toBeTruthy();
+  });
+
+  it("requires Magisk for dependent presets and sends multiline module paths", async () => {
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getAllByRole("button", { name: "创建实例" })[0]);
+    await waitFor(() => expect((screen.getByLabelText("本地 GApps ZIP 路径") as HTMLInputElement).value).toBe("C:/assets/gapps.zip"));
+    expect((screen.getByLabelText("LSPosed") as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText("Magisk + Zygisk"));
+    fireEvent.click(screen.getByLabelText("LSPosed"));
+    fireEvent.click(screen.getByLabelText("DeviceCloak"));
+    fireEvent.click(screen.getByLabelText("GApps（x86_64）"));
+    fireEvent.change(screen.getByLabelText("额外模块 ZIP（每行一个路径）"), { target: { value: "C:/a.zip\n\n C:/b.zip " } });
+    const buttons = screen.getAllByRole("button", { name: "创建实例" });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(QemuService.redroidCreate).toHaveBeenCalledWith(expect.objectContaining({ installMagisk: true, installLsposed: true, installCloak: true, installGapps: true, gappsZip: "C:/assets/gapps.zip", moduleZips: ["C:/a.zip", "C:/b.zip"] })));
+  });
+
+  it("restores only instances with a saved upgrade rollback", async () => {
+    vi.mocked(QemuService.redroidList).mockResolvedValue([{ ...instancesFixture[0], rollbackAvailable: true }]);
+    vi.mocked(QemuService.redroidRestore).mockResolvedValue(cliOk());
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "恢复升级前" }));
+    await waitFor(() => expect(QemuService.redroidRestore).toHaveBeenCalledWith("node1", "r1"));
+  });
+
+  it("clears dependent options when Magisk is removed and accepts custom profile IDs", async () => {
+    renderPage();
+    await flushLoads();
+    expect((screen.getByRole("button", { name: "恢复升级前" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getAllByRole("button", { name: "创建实例" })[0]);
+    fireEvent.click(screen.getByLabelText("Magisk + Zygisk"));
+    fireEvent.change(screen.getByLabelText("设备配置 ID（可选择或输入自定义 ID）"), { target: { value: "my-custom-phone" } });
+    fireEvent.click(screen.getByLabelText("清理系统环境痕迹"));
+    fireEvent.click(screen.getByLabelText("LSPosed"));
+    fireEvent.click(screen.getByLabelText("Magisk + Zygisk"));
+    expect((screen.getByLabelText("LSPosed") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("清理系统环境痕迹") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("设备配置 ID（可选择或输入自定义 ID）") as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByLabelText("Magisk + Zygisk"));
+    fireEvent.change(screen.getByLabelText("设备配置 ID（可选择或输入自定义 ID）"), { target: { value: "my-custom-phone" } });
+    const buttons = screen.getAllByRole("button", { name: "创建实例" });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(QemuService.redroidCreate).toHaveBeenCalledWith(expect.objectContaining({ spoofProfileId: "my-custom-phone" })));
+  });
+
+  it("prevents repeated upgrade submissions while installation is running", async () => {
+    let complete!: (output: QemuCliOutput) => void;
+    vi.mocked(QemuService.redroidUpgrade).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "升级预装" }));
+    expect(screen.getByText(/后端会检查 Android 版本一致/)).toBeTruthy();
+    const submit = screen.getByRole("button", { name: "开始升级" });
+    act(() => {
+      submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await waitFor(() => expect(QemuService.redroidUpgrade).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/可能需要较长时间/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { complete(cliOk()); });
   });
 
   it("appends command lines to the collapsible log panel", async () => {

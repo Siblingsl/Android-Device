@@ -114,6 +114,17 @@ pub fn redroid_create_args(spec: &RedroidSpec) -> Vec<String> {
     a
 }
 
+/// Guest-only bind mounts and cgroup settings for a prepared device profile.
+pub fn redroid_create_args_with_mounts(spec: &RedroidSpec, binds: &[String], cgroup_parent: Option<&str>) -> Vec<String> {
+    let mut args = redroid_create_args(spec);
+    let image_index = args.len() - 5;
+    let mut options = vec!["--restart".into(), "unless-stopped".into()];
+    for bind in binds { options.extend(["--volume".into(), bind.clone()]); }
+    if let Some(parent) = cgroup_parent { options.extend(["--cgroup-parent".into(), parent.into()]); }
+    args.splice(image_index..image_index, options);
+    args
+}
+
 /// Docker `--cpus` wants `2` not `2.0`; keep one decimal only when needed.
 fn format_cpus(cpus: f64) -> String {
     if (cpus.fract()).abs() < f64::EPSILON {
@@ -190,6 +201,16 @@ pub fn defaults_for_node(node_vcpus: u16, node_mem_mib: u32) -> InstanceDefaults
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_mounts_are_options_before_image_and_auto_restart_is_enabled() {
+        let args = redroid_create_args_with_mounts(&spec(), &["/guest/cpuinfo:/proc/cpuinfo:ro".into()], Some("system.slice"));
+        let image = args.iter().position(|s| s == "redroid/redroid:14.0.0-latest").unwrap();
+        let bind = args.iter().position(|s| s == "/guest/cpuinfo:/proc/cpuinfo:ro").unwrap();
+        assert!(bind < image);
+        assert!(args.windows(2).any(|a| a == ["--restart", "unless-stopped"]));
+        assert!(args.windows(2).any(|a| a == ["--cgroup-parent", "system.slice"]));
+    }
 
     fn spec() -> RedroidSpec {
         RedroidSpec {

@@ -247,6 +247,8 @@ pub fn run() {
             qemu_vm_restore,
             qemu_guest_wait,
             qemu_redroid_create,
+            qemu_redroid_upgrade,
+            qemu_redroid_restore,
             qemu_redroid_list,
             qemu_adb_list,
             qemu_verify,

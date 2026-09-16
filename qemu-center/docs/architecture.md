@@ -59,6 +59,8 @@ CLI (main.rs)
   │                vm::allocate_port_block / next_free_port       ──► ssh/qmp/adb 端口
   │                vm::save_registry(atomic temp+rename)          ──► state.json
   ├─ vm start ───► vm::qemu_command(LaunchOptions{detach})  ──► exec::spawn_detached (Win)
+  │                   · Accel::Whpx → 追加 `-cpu max,-svm,-vmx`（vm::WHPX_CPU_SPEC：防 WHPX guest 挂死）
+  │                   · 两种加速器都追加 `-serial file:vms/<name>/console.log`（guest 串口现场）
   │                                                              exec::run_command (-daemonize, POSIX)
   ├─ vm stop ────► vm::qmp_stop_frames()  ──► TcpStream 到 <qmp_port>
   ├─ vm snap/clone ─► vm::qemu_img_snapshot_create / qemu_img_create_overlay
@@ -69,7 +71,7 @@ CLI (main.rs)
   └─ verify ─────► 7 × (命令拼装 + 纯判定)；每项独立 PASS/FAIL/UNTESTED
 ```
 
-设计原则：**每个对外动作都拆成"纯拼装/纯判定"与"运行时执行"两半**。纯函数被单测覆盖（162 个用例），运行时半边在本环境不可验证——README 的"诚实边界"表逐项标注了哪一半是哪种状态。
+设计原则：**每个对外动作都拆成"纯拼装/纯判定"与"运行时执行"两半**。纯函数被单测覆盖（191 个用例：188 lib + 3 bin），运行时半边在本环境不可验证——README 的"诚实边界"表逐项标注了哪一半是哪种状态。
 
 ### 关键设计取舍
 
@@ -77,6 +79,8 @@ CLI (main.rs)
 |---|---|---|
 | cloud-init 种子载体 | **自写零依赖 FAT16 镜像**（`fat.rs`：64 MiB 裸 FAT16 卷、卷标 `CIDATA`、VFAT LFN 存小写文件名，`-drive file=<seed.img>,if=virtio,format=raw,read-only=on` 挂普通 virtio 盘） | 载体三步演进，前两步均真机证伪：①自写 ISO9660 目录记录强制大写（`USER-DATA.;1`），guest 的 cloud-init NoCloud 找不到小写 `user-data`，种子被整体忽略；②QEMU VVFAT（`file=fat:<dir>`）保留小写名但**卷标固定 `QEMU VVFAT` 不可配置**，`ds-identify` 的 `LABEL=cidata` blkid 扫描不命中 → cloud-init 完全不激活（真机 console：零 cloud-init 日志 + networkd-wait-online 卡死）。③自写 FAT16 在用户真机全链路验证通过（cloud-init done / Docker 29.1.3 active / SSH 公钥 OK）。`iso.rs`/`seed_files` 保留为库 API 与测试资产 |
 | WHPX 探测 | 两段式：CIM `Win32_OptionalFeature`（非管理员可查）+ 真实 `-accel whpx -machine q35 -S` 探测（8 秒超时） | 功能开关为 Enabled 不代表可用（可能与其他 hypervisor 冲突）；实际探测才是硬证据。`-S` 保证不真跑 CPU；q35 探针成功时 QEMU 不退出，超时被杀即 Available |
+| **WHPX 下的 CPU 模型** | **钉死 `-cpu max,-svm,-vmx`**（`vm::WHPX_CPU_SPEC`，仅 `Accel::Whpx`；TCG 保持 QEMU 默认模型） | 真机实证（i5-11400H / Win11 / QEMU 11.1 / WHPX）：无 `-cpu` 时默认模型暴露宿主背不了的嵌套虚拟化位（`CPUID[eax=80000001h].ECX.svm`），guest 被 `WHPX: Unexpected VP exit code 4` 刷屏并挂死（node1 一天卡死 3 次）。加显式掩码（唯一变量）后异常计数归零、`boot_completed=1`、数据卷完好。redroid 不需要嵌套虚拟化 → `-svm,-vmx` 无功能损失；TCG 纯软件模拟不触发该故障，加掩码只会白丢特性 |
+| **guest 串口现场** | 两种加速器都加 `-serial file:<vm_dir>/console.log`（`vm::console_log_path` 由磁盘路径派生，`qemu_path_arg` 统一 `/` 分隔） | `qemu.log` 只有 QEMU 自己的 stdout/stderr（VP exit 那类），guest 内核/Android 控制台另走 chardev；卡死在网络起来之前时没有它就没有事后现场。`-serial` 与 `-display none`/QMP 互不干扰；`vm start` 打印该路径 |
 | Windows 后台运行 | argv **不含** `-daemonize`，改由 `exec::spawn_detached`（`DETACHED_PROCESS \| CREATE_NEW_PROCESS_GROUP \| CREATE_NO_WINDOW`） | QEMU 的 `-daemonize` 是 POSIX-only（fork）；`Detach::Daemonize` 保留给 Linux/macOS 宿主 |
 | 停止 VM | 每 VM 一个 QMP TCP 端点，`qmp_capabilities` → `system_powerdown` | 零依赖可用 std `TcpStream` 实现优雅关机；代价：guest 若不响应 ACPI 需手动杀进程（CLI 明示） |
 | 端口分配 | 每 VM 一段**连续** adb 端口块 + 独立 ssh/qmp 端口；全局扫描注册表去重；禁用 5555–6000 | 连续块让 `hostfwd` 列表可读；启动时一次性声明（slirp 不能热加规则）；与 Docker 轨道端口零冲突 |
@@ -231,3 +235,10 @@ pub trait DeviceRuntime: Send + Sync {
 - ✅ 纯函数已测：`nsis_portable_command`（`/D=` 末位）、`validate_portable_target`（空格拒绝）、`parse_weilnetz_listing`（目录页解析）、`portable_qemu_plan`、`candidate_qemu_dirs_with`（追加顺序/去重）、`default_portable_state_dir` / `args_with_portable_state_dir`（桥接钉路径）。
 - ⚠️ 运行时未验证：目录页实际 HTML 结构（解析器按"名字模式任意位置 + 数字日期最大者"设计，对 href/链接文本/引号风格不敏感，但没有真实的本次抓取做端到端验证）；NSIS `/S /D=` 在真实机器上的静默安装行为；安装器清单是否要求 UAC（可能弹一次，产物仍只落项目内）。
 - ⚠️ 若上游把安装器改名（非 `qemu-w64-setup-<8+位数字>.exe`），解析返回 `None` 并以清晰错误提示改用 `--machine` 或手工安装 —— 不猜测、不静默降级。
+
+### 诚实边界（WHPX 卡死修复 + 串口日志）
+
+- ✅ 纯函数已测（新增 6 例，见 `vm::tests`）：WHPX 变体 `-cpu` 存在且恰为 `max,-svm,-vmx`；**TCG 变体必须没有 `-cpu`、也不含 `svm`/`vmx` 字样**（防掩码误伤）；两种加速器都带 `-serial file:C:/qc/vms/node1/console.log` 且 `-display none` / `-qmp` 保持不变；无 seed.img 时串口仍在；`console_log_path` / `vm_console_log_path` 的派生（含裸文件名不 panic）；Windows 反斜杠盘路径渲染成 `/` 分隔。
+- ⚠️ 运行时未验证（但**有真机旁证**）：本 CLI 自己拉起的 `vm start` 尚未在真机复跑。修复的真机证据来自 AutoCoder 手工拉起的、参数与本 CLI 现在的 argv 等价的 QEMU（`-cpu max,-svm,-vmx` 唯一变量：`Unexpected VP exit code 4` 计数满屏 → 0，guest 正常启动到 `boot_completed=1`）。掩码本身**不改变 guest 可见 CPU 的其余特性集**这一点只在 `max` 语义上成立，未逐位对比过 `-cpu max` 与默认模型。
+- ⚠️ `-serial file:` 的实际写盘行为（QEMU 打开 chardev 时是覆盖还是追加、文件何时 flush）未在本环境验证；按"保留最近一次启动的日志"使用，跨启动历史不保证累积。
+- ⚠️ 路径分隔符：`-serial` 的值走 `qemu_path_arg` 统一成 `/`（Windows 文件 API 与 QEMU 选项解析都接受）；`-drive file=` 的盘路径保持原样渲染（那是在真机上已验证可用的形态，本轮刻意不改）。

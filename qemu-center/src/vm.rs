@@ -42,6 +42,41 @@ pub const STATE_VERSION: u32 = 1;
 /// Bug A — use this id as their `device` argument.
 pub const DISK_DEVICE_ID: &str = "disk0";
 
+/// CPU model pinned for [`Accel::Whpx`] runs (`-cpu <this>`).
+///
+/// **Why this exists — real-machine evidence, not theory.** On the user's host
+/// (Intel i5-11400H, Windows 11, QEMU 11.1, WHPX) the guest hung three times in
+/// one day. `state/vms/node1/qemu.log` was a screenful of:
+///
+/// ```text
+/// WHPX: Unexpected VP exit code 4
+/// WHPX: Unexpected VP exit code 4
+/// warning: host doesn't support requested feature: CPUID[eax=80000001h].ECX.svm [bit 2]
+/// warning: Ignoring request for interrupt vector 0
+/// ```
+///
+/// The launch argv carried no `-cpu`, so QEMU used its default model, which
+/// advertises AMD `svm` / Intel `vmx` nested-virtualisation bits this host does
+/// not implement. WHPX then faults ("Unexpected VP exit code 4") every time
+/// the guest touches them, and the guest wedges.
+///
+/// A/B run with exactly one variable changed — the explicit
+/// `-cpu max,-svm,-vmx`: "Unexpected VP exit" dropped from a screenful to
+/// **0**, the guest booted normally, redroid containers came up on their own
+/// and `boot_completed=1` (Android 13) was reached with the data volume
+/// intact. `max` keeps the widest usable feature set; `-svm,-vmx` masks the
+/// nested-virtualisation bits the hypervisor cannot back. redroid does not
+/// need nested virtualisation, so nothing is lost.
+///
+/// [`Accel::Tcg`] deliberately keeps QEMU's default model: TCG emulates the
+/// nested-virt bits in software without the WHPX fault, and the mask would
+/// only hide features for no gain.
+pub const WHPX_CPU_SPEC: &str = "max,-svm,-vmx";
+
+/// Filename of the per-VM guest serial console log, written next to the disk
+/// (`<vm_dir>/console.log`) — see [`console_log_path`].
+pub const CONSOLE_LOG_FILENAME: &str = "console.log";
+
 /// Host port ranges this allocator must never hand out. 5555–6000 is the RDC
 /// Docker track's ADB range (see src-tauri/src/services/docker.rs
 /// `suggest_free_adb_port`: 5555..6000).
@@ -177,11 +212,19 @@ pub fn qemu_command(o: &LaunchOptions) -> Vec<String> {
         "q35".into(),
         "-accel".into(),
         o.accel.as_qemu_arg().into(),
-        "-m".into(),
-        format!("{}", o.mem_mib),
-        "-smp".into(),
-        format!("{}", o.vcpus),
     ];
+    // WHPX only: pin the CPU model. Without it QEMU's default model exposes
+    // nested-virtualisation bits the host cannot back, and the guest hangs on
+    // a flood of "WHPX: Unexpected VP exit code 4" — see [`WHPX_CPU_SPEC`] for
+    // the real-machine A/B evidence. TCG keeps QEMU's default model.
+    if o.accel == Accel::Whpx {
+        a.push("-cpu".into());
+        a.push(WHPX_CPU_SPEC.into());
+    }
+    a.push("-m".into());
+    a.push(format!("{}", o.mem_mib));
+    a.push("-smp".into());
+    a.push(format!("{}", o.vcpus));
     // Data disk: qcow2 overlay (usually backed by the Ubuntu cloud image).
     // `id=` is what QMP addresses the live disk by (`blockdev-snapshot-internal-sync`
     // in [`DISK_DEVICE_ID`]); auto-generated node names are not stable.
@@ -214,6 +257,15 @@ pub fn qemu_command(o: &LaunchOptions) -> Vec<String> {
     // Headless: no display at all (redroid is driven via adb/scrcpy on the host).
     a.push("-display".into());
     a.push("none".into());
+    // Guest serial console → `<vm_dir>/console.log` (same directory as the
+    // disk). Independent of `-display none`: it is a chardev writing the guest
+    // kernel / Android console to a file, and it is the only post-mortem view
+    // into a guest that hung before its network came up — the WHPX freezes
+    // behind [`WHPX_CPU_SPEC`] left a qemu.log full of VP exits and nothing
+    // about what the guest was doing. Both accelerators get it: a hang under
+    // TCG needs the same evidence.
+    a.push("-serial".into());
+    a.push(format!("file:{}", qemu_path_arg(&console_log_path(&o.disk))));
     // Per-VM QMP socket for `vm stop` (`system_powerdown`).
     a.push("-qmp".into());
     a.push(format!(
@@ -559,6 +611,40 @@ pub fn vm_qemu_log_path(state_dir: &Path, name: &str) -> PathBuf {
     vm_dir(state_dir, name).join("qemu.log")
 }
 
+/// Host-side path of a VM's guest serial console log, derived from the disk
+/// path so it always lands in the same directory: `<vm_dir>/console.log`.
+///
+/// [`qemu_command`] hands this to `-serial file:<path>`; the guest
+/// kernel/Android console is written there by QEMU, independently of the
+/// `qemu.log` that captures QEMU's *own* stdout/stderr. A bare filename (disk
+/// given with no parent directory) degrades to a relative `console.log`
+/// instead of panicking.
+pub fn console_log_path(disk: &Path) -> PathBuf {
+    match disk.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join(CONSOLE_LOG_FILENAME),
+        _ => PathBuf::from(CONSOLE_LOG_FILENAME),
+    }
+}
+
+/// Convenience wrapper around [`console_log_path`] for the standard layout
+/// (`vms/<name>/disk.qcow2` → `vms/<name>/console.log`).
+pub fn vm_console_log_path(state_dir: &Path, name: &str) -> PathBuf {
+    console_log_path(&vm_disk_path(state_dir, name))
+}
+
+/// Render a host path for use **inside** a QEMU option value (after `file:` /
+/// `file=`) with `/` separators.
+///
+/// Backslashes do work in QEMU's Windows file handling (`-drive
+/// file=C:\...\disk.qcow2` is the verified form), but `Path::join` happily
+/// produces mixed `\`+`/` output, and `/` is accepted by every Windows file
+/// API QEMU can reach — so new option values are emitted the unambiguous way.
+/// The `-drive` disk/seed arguments keep their existing rendering untouched:
+/// those are the forms already proven on the user's real machine.
+fn qemu_path_arg(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 /// Load the registry; a missing file is an empty registry (first run).
 pub fn load_registry(state_dir: &Path) -> Result<Registry, String> {
     let path = registry_path(state_dir);
@@ -804,6 +890,14 @@ mod tests {
         a.join(" ")
     }
 
+    /// Value that follows `flag` in an argv (`-cpu` → `max,-svm,-vmx`), or
+    /// `None` when the flag is absent. Takes the first occurrence.
+    fn flag_value(argv: &[String], flag: &str) -> Option<String> {
+        argv.iter()
+            .position(|a| a == flag)
+            .and_then(|i| argv.get(i + 1).cloned())
+    }
+
     // --- command assembly ---
 
     #[test]
@@ -811,10 +905,12 @@ mod tests {
         let cmd = qemu_command(&opts());
         assert_eq!(cmd[0], "qemu-system-x86_64");
         let s = joined(&cmd);
+        println!("WHPX argv: {s}");
         for expect in [
             "-name qemu-center-node1",
             "-machine q35",
             "-accel whpx",
+            "-cpu max,-svm,-vmx",
             "-m 4096",
             "-smp 4",
             "file=C:/qc/vms/node1/disk.qcow2,if=virtio,format=qcow2,cache=writeback",
@@ -822,6 +918,7 @@ mod tests {
             "-device virtio-rng-pci",
             "-device virtio-net-pci,netdev=net0",
             "-display none",
+            "-serial file:C:/qc/vms/node1/console.log",
             "-qmp tcp:127.0.0.1:23300,server=on,wait=off",
         ] {
             assert!(s.contains(expect), "missing {expect:?} in {s}");
@@ -830,6 +927,101 @@ mod tests {
         assert!(s.contains("hostfwd=tcp::22300-:22"));
         assert!(s.contains("hostfwd=tcp::24500-:24500"));
         assert!(s.contains("hostfwd=tcp::24501-:24501"));
+    }
+
+    /// The WHPX hang fix, as an argv assertion: real-machine evidence showed a
+    /// guest wedged behind "WHPX: Unexpected VP exit code 4" (plus the
+    /// `CPUID[eax=80000001h].ECX.svm` warning) when QEMU ran its default CPU
+    /// model; pinning `max,-svm,-vmx` — the only variable in the A/B — took the
+    /// counter to 0. Losing this flag is a regression to that hang.
+    #[test]
+    fn whpx_pins_cpu_model_masking_nested_virt() {
+        assert_eq!(WHPX_CPU_SPEC, "max,-svm,-vmx");
+        let cmd = qemu_command(&opts());
+        assert_eq!(flag_value(&cmd, "-cpu").as_deref(), Some(WHPX_CPU_SPEC));
+        // Positioned as a compact `-accel whpx -cpu ...` pair.
+        let s = joined(&cmd);
+        assert!(s.contains("-accel whpx -cpu max,-svm,-vmx"), "in {s}");
+    }
+
+    /// The mask is WHPX-only and must not leak into the TCG variant.
+    #[test]
+    fn tcg_keeps_the_default_cpu_model() {
+        let mut o = opts();
+        o.accel = Accel::Tcg;
+        let cmd = qemu_command(&o);
+        let s = joined(&cmd);
+        println!("TCG argv: {s}");
+        assert_eq!(flag_value(&cmd, "-cpu"), None, "in {s}");
+        assert!(!s.contains("svm"), "TCG must not carry the WHPX mask: {s}");
+        assert!(!s.contains("vmx"), "TCG must not carry the WHPX mask: {s}");
+    }
+
+    /// `-serial file:<vm_dir>/console.log` on both accelerators, without
+    /// disturbing `-display none` or the QMP endpoint.
+    #[test]
+    fn serial_console_log_lands_next_to_the_disk_for_both_accels() {
+        for accel in [Accel::Whpx, Accel::Tcg] {
+            let mut o = opts();
+            o.accel = accel;
+            let cmd = qemu_command(&o);
+            let s = joined(&cmd);
+            assert_eq!(
+                flag_value(&cmd, "-serial").as_deref(),
+                Some("file:C:/qc/vms/node1/console.log"),
+                "-serial wrong for {accel:?}"
+            );
+            assert!(s.contains("-display none"), "display disturbed for {accel:?}");
+            assert!(
+                s.contains("-qmp tcp:127.0.0.1:23300,server=on,wait=off"),
+                "QMP disturbed for {accel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn console_log_path_follows_the_disk_directory() {
+        assert_eq!(
+            console_log_path(Path::new("C:/qc/vms/node1/disk.qcow2")),
+            PathBuf::from("C:/qc/vms/node1/console.log")
+        );
+        assert_eq!(
+            vm_console_log_path(Path::new("C:/qc"), "node1"),
+            PathBuf::from("C:/qc/vms/node1/console.log")
+        );
+        // Relative/malformed disks must not panic and must not escape the cwd.
+        assert_eq!(console_log_path(Path::new("disk.qcow2")), PathBuf::from("console.log"));
+        assert_eq!(console_log_path(Path::new("")), PathBuf::from("console.log"));
+    }
+
+    /// Real-machine shape: the state dir is a Windows path with backslashes, so
+    /// `Path::join` yields `...\node1\console.log`. QEMU must receive it in the
+    /// `/`-separated form (see [`qemu_path_arg`]) — never a mixed `\`+`/` path.
+    #[cfg(windows)]
+    #[test]
+    fn serial_renders_a_windows_disk_path_with_forward_slashes() {
+        let mut o = opts();
+        o.disk =
+            PathBuf::from(r"F:\code\project\Android-Device\qemu-center\state\vms\node1\disk.qcow2");
+        let cmd = qemu_command(&o);
+        assert_eq!(
+            flag_value(&cmd, "-serial").as_deref(),
+            Some("file:F:/code/project/Android-Device/qemu-center/state/vms/node1/console.log")
+        );
+    }
+
+    /// `-serial` is a chardev, not a display: a VM launched without any seeded
+    /// disk must still get its console log.
+    #[test]
+    fn serial_is_present_without_a_seed_image() {
+        let mut o = opts();
+        o.seed_image = None;
+        o.accel = Accel::Tcg;
+        let cmd = qemu_command(&o);
+        assert_eq!(
+            flag_value(&cmd, "-serial").as_deref(),
+            Some("file:C:/qc/vms/node1/console.log")
+        );
     }
 
     #[test]

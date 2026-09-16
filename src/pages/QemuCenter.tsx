@@ -16,7 +16,7 @@ import {
 import { Card } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
-import { QemuService } from "../services/deviceService";
+import { DeviceService, QemuService } from "../services/deviceService";
 import { useAppStore } from "../stores/appStore";
 import { askConfirm } from "../lib/dialogs";
 import { copyText } from "../lib/clipboard";
@@ -27,6 +27,9 @@ import type {
   QemuRedroidInstance,
   QemuVerifyReport,
   QemuVmEntry,
+  QemuRedroidCreateRequest,
+  MagiskAssets,
+  SpoofProfileSummary,
 } from "../types";
 
 /** Max lines kept in the log panel (oldest dropped). */
@@ -58,6 +61,22 @@ type InstanceForm = {
   width: string;
   height: string;
   dpi: string;
+  image: string;
+  androidVersion: string;
+  installGapps: boolean;
+  gappsZip: string;
+  installMagisk: boolean;
+  installLsposed: boolean;
+  installShamiko: boolean;
+  installCloak: boolean;
+  installNativeCloak: boolean;
+  nativeCloakZip: string;
+  moduleZips: string;
+  spoofProfileId: string;
+  spoofProfile: string;
+  spoofAbilist: boolean;
+  hidePackages: string;
+  cleanTraces: boolean;
 };
 
 const initialNodeForm: NodeForm = {
@@ -76,6 +95,22 @@ const initialInstanceForm: InstanceForm = {
   width: "720",
   height: "1280",
   dpi: "320",
+  image: "",
+  androidVersion: "14",
+  installGapps: false,
+  gappsZip: "",
+  installMagisk: false,
+  installLsposed: false,
+  installShamiko: false,
+  installCloak: false,
+  installNativeCloak: false,
+  nativeCloakZip: "",
+  moduleZips: "",
+  spoofProfileId: "",
+  spoofProfile: "",
+  spoofAbilist: false,
+  hidePackages: "",
+  cleanTraces: false,
 };
 
 function doctorBadgeClass(status: string): string {
@@ -124,6 +159,11 @@ export function QemuCenterPage() {
   const [showInstanceForm, setShowInstanceForm] = useState(false);
   const [nodeForm, setNodeForm] = useState<NodeForm>(initialNodeForm);
   const [instanceForm, setInstanceForm] = useState<InstanceForm>(initialInstanceForm);
+  const [upgradeTarget, setUpgradeTarget] = useState<QemuRedroidInstance | null>(null);
+  const [presetAssets, setPresetAssets] = useState<MagiskAssets | null>(null);
+  const [spoofProfiles, setSpoofProfiles] = useState<SpoofProfileSummary[]>([]);
+  const [presetAssetError, setPresetAssetError] = useState("");
+  const presetBusyRef = useRef(false);
   const [createdSerial, setCreatedSerial] = useState("");
   const [waitingVm, setWaitingVm] = useState("");
   const [waitRemaining, setWaitRemaining] = useState(0);
@@ -256,6 +296,37 @@ export function QemuCenterPage() {
     void loadVms(false, true);
   }, [loadDoctor, loadVms]);
 
+  useEffect(() => {
+    if (!showInstanceForm) return;
+    let alive = true;
+    setPresetAssetError("");
+    void Promise.allSettled([
+      DeviceService.getLocalGappsPath(), DeviceService.getMagiskAssets(), DeviceService.listSpoofProfiles(),
+    ]).then(([gapps, assets, profiles]) => {
+      if (!alive) return;
+      if (gapps.status === "fulfilled") setInstanceForm((form) => ({ ...form, gappsZip: form.gappsZip || gapps.value }));
+      if (assets.status === "fulfilled") setPresetAssets(assets.value);
+      if (profiles.status === "fulfilled") setSpoofProfiles(profiles.value);
+      const errors = [gapps, assets, profiles].filter((result) => result.status === "rejected").map((result) => errText((result as PromiseRejectedResult).reason));
+      setPresetAssetError(errors.join("\n"));
+    });
+    return () => { alive = false; };
+  }, [showInstanceForm]);
+
+  const updatePreset = (field: keyof InstanceForm, value: string | boolean) => {
+    setInstanceForm((form) => {
+      const next = { ...form, [field]: value };
+      if (!next.installMagisk) {
+        next.installLsposed = next.installShamiko = next.installCloak = next.installNativeCloak = false;
+        next.moduleZips = next.spoofProfileId = next.spoofProfile = next.hidePackages = "";
+        next.spoofAbilist = next.cleanTraces = false;
+      }
+      if (!next.installLsposed) next.installCloak = false;
+      if (!next.spoofProfileId && !next.spoofProfile.trim()) next.spoofAbilist = next.cleanTraces = false;
+      return next;
+    });
+  };
+
   /**
    * While a setup runs Rust-side (possibly started on a previous visit), poll
    * doctor so the environment card converges on fresh data; doctor is a
@@ -285,6 +356,8 @@ export function QemuCenterPage() {
   }, [qemuSetup?.running, loadDoctor]);
 
   useEffect(() => {
+    setUpgradeTarget(null);
+    setShowInstanceForm(false);
     if (!selectedVm) {
       setInstances([]);
       return;
@@ -484,6 +557,7 @@ export function QemuCenterPage() {
     action: "start" | "stop" | "delete" | "verify",
     name: string,
   ) => {
+    if (presetBusyRef.current) return;
     if (action === "delete") {
       if (!(await askConfirm(t("qemu.nodes.deleteConfirm", { name })))) return;
     }
@@ -587,15 +661,29 @@ export function QemuCenterPage() {
 
   const createInstance = async () => {
     const vm = selectedVm;
-    if (!vm) return;
+    if (!vm || busyKey || presetBusyRef.current) return;
     const name = instanceForm.name.trim();
     if (!NAME_PATTERN.test(name)) {
       setStatusText(t("qemu.instances.form.nameInvalid"));
       return;
     }
+    if (instanceForm.installGapps && !instanceForm.gappsZip.trim()) {
+      setStatusText(t("qemu.presets.gappsRequired"));
+      return;
+    }
+    if (instanceForm.installMagisk && presetAssets && (!presetAssets.magiskOk || (instanceForm.installLsposed && !presetAssets.lsposedOk) || (instanceForm.installShamiko && !presetAssets.shamikoOk))) {
+      setStatusText(t("qemu.presets.assetsMissing"));
+      return;
+    }
+    presetBusyRef.current = true;
+    if (upgradeTarget && !(await askConfirm(t("qemu.presets.upgradeConfirm", { name })))) {
+      presetBusyRef.current = false;
+      return;
+    }
     setBusy(`instance-create-${vm}`);
-    setStatusText(t("qemu.instances.creating"));
-    const request = {
+    setStatusText(t("qemu.presets.running"));
+    const lines = (value: string) => value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const request: QemuRedroidCreateRequest = {
       vm,
       name,
       cpus: Number(instanceForm.cpus) || 0,
@@ -603,10 +691,26 @@ export function QemuCenterPage() {
       width: Number(instanceForm.width) || 0,
       height: Number(instanceForm.height) || 0,
       dpi: Number(instanceForm.dpi) || 0,
+      androidVersion: instanceForm.androidVersion.trim() || undefined,
+      image: instanceForm.image.trim() || undefined,
+      installGapps: instanceForm.installGapps,
+      gappsZip: instanceForm.installGapps ? instanceForm.gappsZip.trim() : undefined,
+      installMagisk: instanceForm.installMagisk,
+      installLsposed: instanceForm.installLsposed,
+      installShamiko: instanceForm.installShamiko,
+      installCloak: instanceForm.installCloak,
+      installNativeCloak: instanceForm.installNativeCloak,
+      nativeCloakZip: instanceForm.installNativeCloak ? instanceForm.nativeCloakZip.trim() || undefined : undefined,
+      moduleZips: lines(instanceForm.moduleZips),
+      spoofProfileId: instanceForm.spoofProfileId.trim() || undefined,
+      spoofProfile: instanceForm.spoofProfileId.trim() ? undefined : instanceForm.spoofProfile.trim() || undefined,
+      spoofAbilist: instanceForm.spoofAbilist,
+      hidePackages: lines(instanceForm.hidePackages),
+      cleanTraces: instanceForm.cleanTraces,
     };
     logCommand([
       "redroid",
-      "create",
+      upgradeTarget ? "upgrade" : "create",
       vm,
       name,
       "--cpus",
@@ -621,10 +725,10 @@ export function QemuCenterPage() {
       String(request.dpi),
     ]);
     try {
-      const result = await QemuService.redroidCreate(request);
+      const result = await (upgradeTarget ? QemuService.redroidUpgrade(request) : QemuService.redroidCreate(request));
       logOutput(result.stdout, result.stderr, result.success);
       if (!result.success) {
-        setStatusText(t("qemu.instances.createFailed"));
+        setStatusText(result.stderr.trim() || result.stdout.trim() || t("qemu.instances.createFailed"));
         return;
       }
       const list = await QemuService.redroidList(vm);
@@ -633,13 +737,35 @@ export function QemuCenterPage() {
       const serial =
         created?.serial || result.stdout.match(/127\.0\.0\.1:\d+/)?.[0] || "";
       setCreatedSerial(serial);
-      setStatusText(t("qemu.instances.created", { name, serial: serial || "-" }));
+      setStatusText(t(upgradeTarget ? "qemu.presets.upgraded" : "qemu.instances.created", { name, serial: serial || "-" }));
       setShowInstanceForm(false);
+      setUpgradeTarget(null);
     } catch (error) {
       appendLog([errText(error)]);
-      setStatusText(t("qemu.instances.createFailed"));
+      setStatusText(errText(error));
     } finally {
       setBusy(null);
+      presetBusyRef.current = false;
+    }
+  };
+
+  const restoreInstance = async (instance: QemuRedroidInstance) => {
+    if (!instance.rollbackAvailable || busyKey || presetBusyRef.current) return;
+    presetBusyRef.current = true;
+    try {
+      if (!(await askConfirm(t("qemu.presets.restoreConfirm", { name: instance.instance })))) return;
+      setBusy(`instance-restore-${instance.instance}`);
+      setStatusText(t("qemu.presets.running"));
+      const result = await QemuService.redroidRestore(selectedVm, instance.instance);
+      logOutput(result.stdout, result.stderr, result.success);
+      setStatusText(result.success ? t("qemu.presets.restored", { name: instance.instance }) : result.stderr.trim() || result.stdout.trim() || t("qemu.instances.createFailed"));
+      if (result.success) await loadInstances(selectedVm, true);
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
+      presetBusyRef.current = false;
     }
   };
 
@@ -954,7 +1080,7 @@ export function QemuCenterPage() {
                   <tr
                     key={vm.name}
                     className={vm.name === selectedVm ? "qemu-row-selected" : undefined}
-                    onClick={() => setSelectedVm(vm.name)}
+                    onClick={() => { if (!presetBusyRef.current) setSelectedVm(vm.name); }}
                   >
                     <td className="mono">{vm.name}</td>
                     <td>{vm.vcpus}</td>
@@ -969,6 +1095,7 @@ export function QemuCenterPage() {
                           size="sm"
                           icon={<Play size={12} />}
                           loading={busy === `start-${vm.name}`}
+                          disabled={Boolean(busyKey)}
                           onClick={(e) => {
                             e.stopPropagation();
                             void vmAction("start", vm.name);
@@ -980,6 +1107,7 @@ export function QemuCenterPage() {
                           size="sm"
                           icon={<Square size={12} />}
                           loading={busy === `stop-${vm.name}`}
+                          disabled={Boolean(busyKey)}
                           onClick={(e) => {
                             e.stopPropagation();
                             void vmAction("stop", vm.name);
@@ -992,6 +1120,7 @@ export function QemuCenterPage() {
                           variant="danger"
                           icon={<Trash2 size={12} />}
                           loading={busy === `delete-${vm.name}`}
+                          disabled={Boolean(busyKey)}
                           onClick={(e) => {
                             e.stopPropagation();
                             void vmAction("delete", vm.name);
@@ -1002,6 +1131,7 @@ export function QemuCenterPage() {
                         <Button
                           size="sm"
                           icon={<ShieldCheck size={12} />}
+                          disabled={Boolean(busyKey)}
                           onClick={(e) => {
                             e.stopPropagation();
                             void vmAction("verify", vm.name);
@@ -1012,6 +1142,7 @@ export function QemuCenterPage() {
                         <Button
                           size="sm"
                           loading={busy === `snapshot-${vm.name}`}
+                          disabled={Boolean(busyKey)}
                           title={t("qemu.nodes.snapshotHint")}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1023,6 +1154,7 @@ export function QemuCenterPage() {
                         <Button
                           size="sm"
                           loading={busy === `restore-${vm.name}`}
+                          disabled={Boolean(busyKey)}
                           title={t("qemu.nodes.restoreHint")}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1064,8 +1196,12 @@ export function QemuCenterPage() {
             <Button
               size="sm"
               icon={<Plus size={13} />}
-              disabled={!selectedVm}
-              onClick={() => setShowInstanceForm((open) => !open)}
+              disabled={!selectedVm || Boolean(busyKey)}
+              onClick={() => {
+                setUpgradeTarget(null);
+                setInstanceForm(initialInstanceForm);
+                setShowInstanceForm((open) => upgradeTarget ? true : !open);
+              }}
             >
               {t("qemu.instances.create")}
             </Button>
@@ -1079,13 +1215,16 @@ export function QemuCenterPage() {
             {showInstanceForm ? (
               <div className="qemu-form-grid">
                 <div className="field">
-                  <label>{t("qemu.instances.form.name")}</label>
+                  <label htmlFor="qemu-instance-name">{t("qemu.instances.form.name")}</label>
                   <input
+                    id="qemu-instance-name"
+                    disabled={Boolean(upgradeTarget) || Boolean(busyKey)}
                     value={instanceForm.name}
                     placeholder={t("qemu.instances.form.namePlaceholder")}
                     onChange={(e) => setInstanceForm({ ...instanceForm, name: e.target.value })}
                   />
                 </div>
+                {upgradeTarget ? <p className="muted" style={{ gridColumn: "1 / -1" }}>{t("qemu.presets.upgradeHint")}</p> : <>
                 <div className="field">
                   <label>{t("qemu.instances.form.cpus")}</label>
                   <input
@@ -1121,13 +1260,46 @@ export function QemuCenterPage() {
                     onChange={(e) => setInstanceForm({ ...instanceForm, dpi: e.target.value })}
                   />
                 </div>
+                </>}
+                <div className="field">
+                  <label htmlFor="qemu-android-version">{t("qemu.presets.androidVersion")}</label>
+                  <input id="qemu-android-version" value={instanceForm.androidVersion} disabled={Boolean(busyKey) || Boolean(upgradeTarget?.androidVersion)} onChange={(e) => updatePreset("androidVersion", e.target.value)} />
+                  {upgradeTarget && !upgradeTarget.androidVersion ? <small className="muted">{t("qemu.presets.versionCheck")}</small> : null}
+                </div>
+                <div className="field">
+                  <label htmlFor="qemu-image">{t("qemu.presets.image")}</label>
+                  <input id="qemu-image" value={instanceForm.image} placeholder={t("qemu.presets.imageDefault")} disabled={Boolean(busyKey)} onChange={(e) => updatePreset("image", e.target.value)} />
+                </div>
+                <div style={{ gridColumn: "1 / -1" }} className="row">
+                  {(["installGapps", "installMagisk", "installLsposed", "installShamiko", "installCloak", "installNativeCloak"] as const).map((field) => <label key={field} className="row">
+                    <input type="checkbox" checked={instanceForm[field]} disabled={Boolean(busyKey) || (field !== "installGapps" && field !== "installMagisk" && !instanceForm.installMagisk) || (field === "installCloak" && !instanceForm.installLsposed)} onChange={(e) => updatePreset(field, e.target.checked)} />
+                    {t(`qemu.presets.${field}`)}
+                  </label>)}
+                </div>
+                <p className="muted" style={{ gridColumn: "1 / -1" }}>{t("qemu.presets.dependencies")}</p>
+                {presetAssets ? <p className="muted" style={{ gridColumn: "1 / -1" }}>{t("qemu.presets.assetStatus", { magisk: t(presetAssets.magiskOk ? "qemu.env.status.ok" : "qemu.env.status.fail"), lsposed: t(presetAssets.lsposedOk ? "qemu.env.status.ok" : "qemu.env.status.fail"), shamiko: t(presetAssets.shamikoOk ? "qemu.env.status.ok" : "qemu.env.status.fail") })}</p> : null}
+                {presetAssetError ? <p role="alert" style={{ gridColumn: "1 / -1" }}>{presetAssetError}</p> : null}
+                {instanceForm.installCloak ? <p className="muted" style={{ gridColumn: "1 / -1" }}>{t("qemu.presets.cloakScope")}</p> : null}
+                {(["gappsZip", "nativeCloakZip", "moduleZips", "spoofProfileId", "spoofProfile", "hidePackages"] as const).map((field) => {
+                  const disabled = Boolean(busyKey) || (field === "gappsZip" ? !instanceForm.installGapps : field === "nativeCloakZip" ? !instanceForm.installNativeCloak : !instanceForm.installMagisk) || (field === "spoofProfile" && Boolean(instanceForm.spoofProfileId));
+                  return <div className="field" key={field} style={{ gridColumn: ["moduleZips", "spoofProfile", "hidePackages"].includes(field) ? "1 / -1" : undefined }}>
+                    <label htmlFor={`qemu-${field}`}>{t(`qemu.presets.${field}`)}</label>
+                    {["moduleZips", "spoofProfile", "hidePackages"].includes(field) ? <textarea id={`qemu-${field}`} rows={3} disabled={disabled} value={instanceForm[field]} onChange={(e) => updatePreset(field, e.target.value)} /> : <input id={`qemu-${field}`} list={field === "spoofProfileId" ? "qemu-profiles" : undefined} disabled={disabled} value={instanceForm[field]} onChange={(e) => updatePreset(field, e.target.value)} />}
+                  </div>;
+                })}
+                <datalist id="qemu-profiles">{spoofProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.marketName || profile.model}</option>)}</datalist>
+                <div style={{ gridColumn: "1 / -1" }} className="row">
+                  {(["spoofAbilist", "cleanTraces"] as const).map((field) => <label key={field} className="row"><input type="checkbox" checked={instanceForm[field]} disabled={Boolean(busyKey) || !instanceForm.installMagisk || (!instanceForm.spoofProfileId.trim() && !instanceForm.spoofProfile.trim())} onChange={(e) => updatePreset(field, e.target.checked)} />{t(`qemu.presets.${field}`)}</label>)}
+                </div>
+                <p className="muted" style={{ gridColumn: "1 / -1" }}>{t("qemu.presets.abiHint")}</p>
                 <div className="row">
                   <Button
                     variant="primary"
                     loading={busy === `instance-create-${selectedVm}`}
+                    disabled={Boolean(busyKey)}
                     onClick={() => void createInstance()}
                   >
-                    {t("qemu.instances.form.submit")}
+                    {t(upgradeTarget ? "qemu.presets.upgradeSubmit" : "qemu.instances.form.submit")}
                   </Button>
                 </div>
               </div>
@@ -1157,6 +1329,12 @@ export function QemuCenterPage() {
                         <td className="mono">{instance.serial}</td>
                         <td>{instance.status}</td>
                         <td>
+                          <Button size="sm" disabled={Boolean(busyKey)} onClick={() => {
+                            setUpgradeTarget(instance);
+                            setInstanceForm({ ...initialInstanceForm, name: instance.instance, androidVersion: instance.androidVersion || "", image: instance.image || "" });
+                            setShowInstanceForm(true);
+                          }}>{t("qemu.presets.upgrade")}</Button>
+                          <Button size="sm" disabled={!instance.rollbackAvailable || Boolean(busyKey)} loading={busy === `instance-restore-${instance.instance}`} onClick={() => void restoreInstance(instance)}>{t("qemu.presets.restore")}</Button>
                           <Button
                             size="sm"
                             variant="ghost"

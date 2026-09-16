@@ -123,6 +123,12 @@ pub struct QemuRedroidInstance {
     pub port: u16,
     pub serial: String,
     pub status: String,
+    #[serde(default)]
+    pub android_version: String,
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub rollback_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -150,7 +156,7 @@ pub struct QemuVmCreateRequest {
 }
 
 /// Request for `redroid create`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QemuRedroidCreateRequest {
     pub vm: String,
@@ -160,6 +166,39 @@ pub struct QemuRedroidCreateRequest {
     pub width: u32,
     pub height: u32,
     pub dpi: u32,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub android_version: Option<String>,
+    #[serde(default)]
+    pub install_gapps: bool,
+    #[serde(default)]
+    pub gapps_zip: String,
+    #[serde(default)]
+    pub install_magisk: bool,
+    #[serde(default)]
+    pub install_lsposed: bool,
+    #[serde(default)]
+    pub install_shamiko: bool,
+    #[serde(default)]
+    pub install_cloak: bool,
+    #[serde(default)]
+    pub install_native_cloak: bool,
+    #[serde(default)]
+    pub native_cloak_zip: String,
+    #[serde(default)]
+    pub module_zips: Vec<String>,
+    #[serde(default)]
+    pub spoof_profile_id: Option<String>,
+    #[serde(default)]
+    pub spoof_profile: String,
+    #[serde(default)]
+    pub spoof_abilist: bool,
+    #[serde(default)]
+    pub hide_packages: Vec<String>,
+    #[serde(default)]
+    pub clean_traces: bool,
+
 }
 
 // ------------------------------------------------------- raw JSON (CLI only) --
@@ -669,7 +708,7 @@ pub fn args_guest_wait(name: &str, timeout_secs: u64) -> Vec<String> {
 }
 
 pub fn args_redroid_create(request: &QemuRedroidCreateRequest) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "redroid".into(),
         "create".into(),
         request.vm.clone(),
@@ -684,7 +723,11 @@ pub fn args_redroid_create(request: &QemuRedroidCreateRequest) -> Vec<String> {
         request.height.to_string(),
         "--dpi".into(),
         request.dpi.to_string(),
-    ]
+    ];
+    if let Some(image) = request.image.as_deref().filter(|s| !s.is_empty()) {
+        args.extend(["--image".into(), image.into()]);
+    }
+    args
 }
 
 pub fn args_redroid_list(vm: &str) -> Vec<String> {
@@ -798,6 +841,9 @@ pub fn parse_redroid_list_json(raw: &str) -> Result<Vec<QemuRedroidInstance>, St
             container: entry.container,
             port: entry.port,
             status: entry.status,
+            android_version: String::new(),
+            image: String::new(),
+            rollback_available: false,
         })
         .collect())
 }
@@ -878,13 +924,14 @@ pub fn guest_wait(name: &str, timeout_secs: u64) -> Result<QemuCliOutput, String
 }
 
 pub fn redroid_create(request: QemuRedroidCreateRequest) -> Result<QemuCliOutput, String> {
-    // First `docker run` on a node pulls the redroid image inside the guest.
-    run_cli(&args_redroid_create(&request), Duration::from_secs(20 * 60))
+    crate::services::qemu_presets::apply(request, false)
 }
 
 pub fn redroid_list(vm: &str) -> Result<Vec<QemuRedroidInstance>, String> {
     let output = run_cli(&args_redroid_list(vm), Duration::from_secs(90))?;
-    parse_redroid_list_json(&output.stdout)
+    let mut rows = parse_redroid_list_json(&output.stdout)?;
+    crate::services::qemu_presets::enrich(vm, &mut rows);
+    Ok(rows)
 }
 
 pub fn adb_list() -> Result<Vec<QemuAdbMapping>, String> {
@@ -1200,6 +1247,7 @@ mod tests {
             width: 720,
             height: 1280,
             dpi: 320,
+            ..Default::default()
         };
         assert_eq!(
             args_redroid_create(&request),

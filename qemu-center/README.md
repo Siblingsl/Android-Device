@@ -13,9 +13,10 @@ Windows 宿主 (WHPX 硬件加速)
 │  adb / scrcpy
 │  ▲ 127.0.0.1:<port>   ← 端口号在宿主和 guest 内完全相同
 │  │
-│  └─ QEMU (qemu-system-x86_64, -accel whpx, q35, 无显示)
+│  └─ QEMU (qemu-system-x86_64, -accel whpx, -cpu max,-svm,-vmx, q35, 无显示)
 │      user-mode 网络: hostfwd tcp::22300-:22, tcp::24500-:24500, ...
 │      virtio-blk: disk.qcow2 (overlay, backing = Ubuntu cloud image)
+│      -serial file:<state-dir>/vms/<name>/console.log (guest 串口控制台日志)
 │      virtio-blk: seed.img (自写零依赖 FAT16: 卷标 CIDATA + LFN 小写文件名, cloud-init NoCloud)
 │      │
 │      └─ guest: Ubuntu 22.04/24.04 cloud image
@@ -168,7 +169,7 @@ Settings 页「默认运行轨道」下拉可记录 docker|qemu 偏好（`defaul
 
 | 档位 | 内容 |
 |---|---|
-| ✅ **纯函数已测**（162 个单测，`cargo test` 全绿） | ISO9660 生成/回读（含 CD001 标识、扇区数、确定性、回读内容一致；**已退役为库 API/测试资产**，见下方 seed 载体条目）、**FAT16 seed 镜像生成器**（BPB 字段断言、测试内解析器走 BPB→根目录→FAT 链全链路逐字节回读、LFN checksum 独立实现对拍、空文件表仅卷标条目、300 KiB 多簇链、确定性 + FAT2 副本一致、8.3 短名截断/非法字符/冲突回退、LFN 上限与根目录容量守卫、cloud-init 渲染结果过 FAT 载体回读）、cloud-init YAML 渲染与确定性（ISO 版 `seed_files` 与镜像版 `seed_image_files` 内容一致性、文件名小写逐字保留）、QEMU/qemu-img 参数拼装快照（含 seed.img virtio read-only 盘）、hostfwd 串、端口块分配唯一性、state.json 读写回环、redroid docker run 参数同构、各类输出判定（WHPX 探测/features/fsutil/readiness/boot_completed/adb connect）、便携化参数与解析（NSIS `/S /D=` 末位、空格目标拒绝、weilnetz 目录页解析、便携 state dir 派生、doctor 便携候选） |
+| ✅ **纯函数已测**（191 个单测：188 lib + 3 bin，`cargo test` 全绿） | ISO9660 生成/回读（含 CD001 标识、扇区数、确定性、回读内容一致；**已退役为库 API/测试资产**，见下方 seed 载体条目）、**FAT16 seed 镜像生成器**（BPB 字段断言、测试内解析器走 BPB→根目录→FAT 链全链路逐字节回读、LFN checksum 独立实现对拍、空文件表仅卷标条目、300 KiB 多簇链、确定性 + FAT2 副本一致、8.3 短名截断/非法字符/冲突回退、LFN 上限与根目录容量守卫、cloud-init 渲染结果过 FAT 载体回读）、cloud-init YAML 渲染与确定性（ISO 版 `seed_files` 与镜像版 `seed_image_files` 内容一致性、文件名小写逐字保留）、QEMU/qemu-img 参数拼装快照（含 seed.img virtio read-only 盘、**WHPX 变体必须带 `-cpu max,-svm,-vmx` 且 TCG 变体必须不带该掩码**、**两种加速器都带 `-serial file:<vm_dir>/console.log`**、Windows 反斜杠盘路径渲染成 `/` 分隔）、hostfwd 串、端口块分配唯一性、state.json 读写回环、redroid docker run 参数同构、各类输出判定（WHPX 探测/features/fsutil/readiness/boot_completed/adb connect）、便携化参数与解析（NSIS `/S /D=` 末位、空格目标拒绝、weilnetz 目录页解析、便携 state dir 派生、doctor 便携候选） |
 | ⚠️ **命令拼装已测，运行时未验证** | `vm start`（QEMU 实际拉起）、`vm stop`（QMP 握手）、`guest wait/provision`（SSH 实连）、`redroid create`（guest 内 docker run）、`vm snapshot/clone`（qemu-img 实际执行）、`adb map` 实测连通 |
 | 🔬 **需用户真机运行** | `doctor`（本机已实跑一次，见下）、`verify` 七项、整条 `vm create → guest wait → redroid create → adb map` 链路、cloud-init 首启是否与应用内 binderfs 准备完全一致。**seed 载体链路已在真机手工全链路验证**（见下方 seed 载体条目）：用户在 node1 上用手工生成的同规格 seed.img 跑通 `cloud-init status=done` / Docker 29.1.3 active / SSH 公钥认证；用 CLI 重建节点后应按 verify 第 2/4 项复验一致 |
 
@@ -179,6 +180,11 @@ Settings 页「默认运行轨道」下拉可记录 docker|qemu 偏好（`defaul
   1. **自写 ISO9660**（证伪）：按标准把目录记录里的文件名存成大写（`USER-DATA.;1`）。此前赌"Linux 内核 iso9660 默认 `map=normal` 会小写化并去掉 `.;1`"——已在用户真机（node1：Ubuntu noble cloud image + QEMU 11.1 + WHPX）证伪：PVD 卷标 `CIDATA` 正确、SSH 端口也通，但 guest 的 cloud-init NoCloud 找不到小写 `user-data`，种子被整体忽略（表现为公钥认证被拒）。
   2. **QEMU 原生 VVFAT**（`-drive file=fat:<dir>`，证伪）：文件名小写没问题，但 **vvfat 的卷标固定为 `QEMU VVFAT`，不可配置**。cloud-init NoCloud 的 `ds-identify` 在 init-local 阶段用 blkid 扫 `LABEL=cidata` 的块设备（vfat/iso9660），卷标不匹配 → 数据源判定失败 → **cloud-init 完全不激活**（真机 console 实证：零 cloud-init 日志 + `systemd-networkd-wait-online` 卡死）。
   3. **自写零依赖 FAT16**（`src/fat.rs`，现行方案，真机验证通过）：64 MiB 裸 FAT16 卷（无分区表，blkid 直接读 BPB 卷标）、卷标 `CIDATA`、LFN 长文件名目录项存小写 `user-data`/`meta-data`/`network-config`，以普通 virtio 硬盘挂载（`-drive file=<seed.img>,if=virtio,format=raw,read-only=on`）。用户已在真机用手工生成的同规格 seed.img 跑通全链路：**`cloud-init status=done`、Docker 29.1.3 active、SSH 公钥认证通过**。`src/iso.rs` 与 `cloudinit::seed_files` 保留为库 API 与测试资产。
+- **WHPX guest 卡死修复（真机实证 → 已固化进 argv）**：用户真机（Intel i5-11400H / Windows 11 / QEMU 11.1 / WHPX）上 node1 一天内卡死 3 次，`state/vms/node1/qemu.log` 满屏 `WHPX: Unexpected VP exit code 4`，并伴随 `warning: host doesn't support requested feature: CPUID[eax=80000001h].ECX.svm [bit 2]` 与 `warning: Ignoring request for interrupt vector 0`。根因：**当时 argv 里没有 `-cpu`**，QEMU 用默认 CPU 模型，向 guest 暴露宿主 hypervisor 无法兑现的嵌套虚拟化位（AMD `svm` / Intel `vmx`），WHPX 每次撞上就 `Unexpected VP exit code 4`，guest 随即挂死。
+  - **修复**：WHPX 加速时**显式钉 CPU 模型 `-cpu max,-svm,-vmx`**（常量 `vm::WHPX_CPU_SPEC`）。`max` 保留最宽可用特性集，`-svm,-vmx` 掩掉宿主背不了的嵌套虚拟化位；redroid 不需要嵌套虚拟化，无功能损失。**TCG 路径不加该掩码**（纯软件模拟不会触发这个 WHPX 故障，掩掉只是白丢特性）。
+  - **对照实验（唯一变量 = 显式 `-cpu max,-svm,-vmx`）**：`Unexpected VP exit` 出现次数从满屏 → **0**，guest 正常启动、容器自动拉起、`boot_completed=1`（Android 13）、数据卷完好。
+  - **诊断盲区已补上：guest 串口日志**。启动参数对**两种加速器**都追加 `-serial file:<state-dir>/vms/<name>/console.log`（与 `disk.qcow2` 同目录）——QEMU 的 `qemu.log` 只记录 QEMU 自身的 stdout/stderr（就是上面那堆 VP exit），guest 内核/Android 控制台另走 `-serial`；卡死在网络起来之前时，`console.log` 是唯一的事后现场。`-serial` 是独立 chardev，不影响 `-display none` 与 QMP 参数；`vm start` 成功输出里会打印该路径。
+  - ⚠️ 该修复的**真机证据来自手工拉起、参数等价于本 CLI 现在的 argv 的 QEMU**（AutoCoder 采集）；CLI 自身跑出来的 `vm start` 尚未在真机复跑一次——按上面"需用户真机运行"一档对待。
 - **guest 置备四点真机修复（node1 验收 7/7 PASS 后回写进 cloud-init 模板，新节点不再重踩）**：
   1. **Ubuntu cloud image 不带 `linux-modules-extra-<kernel>`** → `binder_linux` 模块缺失、modprobe 失败。runcmd 首步 `apt-get install -y linux-modules-extra-$(uname -r) || true`（约 100 MB，apt 可直连；`|| true` 兜底——apt 失败不阻塞置备，binder 真实状态由 verify 第 3 项如实报告）。
   2. **旧模板往 /etc/fstab 追加 binder 挂载项**：模块缺失时重启后 fstab 挂载失败 → **emergency mode 卡死整次 boot**（真机实证）。该行已彻底移除，且断言 `!contains("/etc/fstab")` 防回归；binderfs 由 redroid 容器自挂载，宿主不挂。
@@ -209,6 +215,8 @@ $env:QEMU_CENTER_STATE_DIR = "F:\code\project\Android-Device\qemu-center\state"
   vms/node1/
     disk.qcow2                    # overlay，backing = cloud image
     seed.img                      # 自写 FAT16 seed 镜像（卷标 CIDATA + LFN 小写文件名，只读 virtio 盘）
+    console.log                   # guest 串口控制台日志（-serial file:，每次启动由 QEMU 写入）
+    qemu.log                      # QEMU 自身 stdout/stderr（detached spawn 的落点，追加）
     known_hosts                   # 每节点独立的 ssh known_hosts
   images/
     noble-server-cloudimg-amd64.img
@@ -237,7 +245,7 @@ $env:QEMU_CENTER_STATE_DIR = "F:\code\project\Android-Device\qemu-center\state"
 ## 7. 开发
 
 ```bash
-cargo test --manifest-path qemu-center/Cargo.toml      # 162 个用例
+cargo test --manifest-path qemu-center/Cargo.toml      # 191 个用例
 cargo run  --manifest-path qemu-center/Cargo.toml -- doctor
 cargo run  --manifest-path qemu-center/Cargo.toml -- setup all
 ```

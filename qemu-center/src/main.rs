@@ -203,6 +203,11 @@ enum RedroidCmd {
         /// Override the redroid image tag.
         #[arg(long)]
         image: Option<String>,
+        /// Read-only guest bind mount, source:target:ro.
+        #[arg(long)]
+        bind: Vec<String>,
+        #[arg(long)]
+        cgroup_parent: Option<String>,
     },
     Start { vm: String, name: String },
     Stop { vm: String, name: String },
@@ -309,8 +314,10 @@ fn main() {
                 dpi,
                 gpu_mode,
                 image,
+                bind,
+                cgroup_parent,
             } => cmd_redroid_create(
-                &state_dir, &vm, &name, cpus, memory, width, height, dpi, &gpu_mode, image,
+                &state_dir, &vm, &name, cpus, memory, width, height, dpi, &gpu_mode, image, bind, cgroup_parent,
             ),
             RedroidCmd::Start { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "start"),
             RedroidCmd::Stop { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "stop"),
@@ -366,7 +373,7 @@ fn ssh_cmd_for(entry: &VmEntry, state_dir: &Path, remote: &str) -> Vec<String> {
 
 /// Run a docker command inside the guest over ssh.
 fn guest_docker(entry: &VmEntry, state_dir: &Path, docker_args: &[String]) -> exec::RunOutcome {
-    let remote = format!("docker {}", docker_args.join(" "));
+    let remote = format!("docker {}", docker_args.iter().map(|s| format!("'{}'", s.replace('\'', "'\"'\"'"))).collect::<Vec<_>>().join(" "));
     let argv = ssh_cmd_for(entry, state_dir, &remote);
     let cmd = argv_to_display(&argv);
     println!("$ {cmd}");
@@ -1090,6 +1097,7 @@ fn cmd_vm_start(state_dir: &Path, name: &str) -> i32 {
             println!("  ssh:  ssh -p {} -i {} rdc@127.0.0.1", entry.ssh_host_port,
                 vm::vm_ssh_key_path(state_dir, name).display());
             println!("  log:  {}", log_path.display());
+            println!("  console: {}", vm::vm_console_log_path(state_dir, name).display());
             println!("  next: qemu-center guest wait {name}");
             0
         }
@@ -1538,7 +1546,15 @@ fn cmd_redroid_create(
     dpi: u32,
     gpu_mode: &str,
     image: Option<String>,
+    binds: Vec<String>,
+    cgroup_parent: Option<String>,
 ) -> i32 {
+    for bind in &binds {
+        let parts: Vec<_> = bind.split(':').collect();
+        if parts.len() != 3 || !parts[0].starts_with('/') || !parts[1].starts_with('/') || parts[2] != "ro" || bind.contains([',', '\n', '\r']) {
+            return err_exit("bind must be an absolute guest source:target:ro without commas/newlines");
+        }
+    }
     if let Err(e) = redroid::validate_instance_name(inst) {
         return err_exit(&e);
     }
@@ -1579,7 +1595,7 @@ fn cmd_redroid_create(
     if !vol.success {
         println!("note: volume create failed (continuing; docker run -v will retry): {}", vol.stderr_last_line());
     }
-    let run = guest_docker(entry, state_dir, &redroid::redroid_create_args(&spec));
+    let run = guest_docker(entry, state_dir, &redroid::redroid_create_args_with_mounts(&spec, &binds, cgroup_parent.as_deref()));
     if !run.success {
         return err_exit(&format!("docker run failed in guest: {}", run.stderr_last_line()));
     }

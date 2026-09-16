@@ -243,21 +243,83 @@ pub fn delete_internal_snapshot(
 mod tests {
     use super::*;
 
+    /// Deterministic half of the closed-port coverage: the mapping from probe
+    /// class to liveness to snapshot plan, asserted directly. No socket is
+    /// involved, so this is what pins Bug A's invariants even on a machine
+    /// whose loopback behaves unusually (see `probe_of_a_dead_port_is_never_alive`).
     #[test]
-    fn probe_classifies_a_closed_port_as_stopped() {
-        // A port that was just released has nothing listening: the probe must
-        // say "stopped" (never "running"), and it must do so by itself — this is
-        // the only liveness signal the whole crate has.
+    fn probe_classes_map_to_liveness_and_snapshot_plan() {
+        // Refused is the *only* class that proves the VM is stopped, and the
+        // only one that licenses qemu-img.
+        let stopped = vm::vm_liveness_from_qmp_probe(vm::QmpProbe::Refused);
+        assert_eq!(stopped, vm::VmLiveness::Stopped);
+        assert_eq!(vm::snapshot_plan(stopped, true), vm::SnapshotPlan::QemuImg);
+
+        // A QMP greeting proves a live QEMU owns the image: QMP only.
+        let running = vm::vm_liveness_from_qmp_probe(vm::QmpProbe::Answered);
+        assert_eq!(running, vm::VmLiveness::Running);
+        assert_eq!(
+            vm::snapshot_plan(running, true),
+            vm::SnapshotPlan::QmpInternal
+        );
+        // Running with an unusable QMP channel skips; it must not fall back.
+        assert!(matches!(
+            vm::snapshot_plan(running, false),
+            vm::SnapshotPlan::Skip(_)
+        ));
+
+        // An unanswered probe proves nothing: unknown liveness, either way.
+        let unknown = vm::vm_liveness_from_qmp_probe(vm::QmpProbe::TimedOut);
+        assert_eq!(unknown, vm::VmLiveness::Unknown);
+        for qmp_usable in [true, false] {
+            assert!(
+                matches!(
+                    vm::snapshot_plan(unknown, qmp_usable),
+                    vm::SnapshotPlan::Skip(_)
+                ),
+                "unknown liveness must never license a write plan"
+            );
+        }
+    }
+
+    /// Socket half: probe a port that was just released. What the local stack
+    /// reports here is *not* portable — normally the connect gets a RST
+    /// (`Refused`), but a local proxy or firewall can swallow that RST so the
+    /// same connect reports nothing at all (`TimedOut`; observed on Windows 11
+    /// with v2rayN running). Both mean "nobody is serving", so this test asserts
+    /// the environment-independent safety property instead of the exact class:
+    /// a dead port is never alive, and it never yields a plan that writes with
+    /// qemu-img unless the connect positively proved the port is closed.
+    #[test]
+    fn probe_of_a_dead_port_is_never_alive() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         drop(listener);
         let p = probe(port, Duration::from_millis(750));
-        assert_eq!(p, vm::QmpProbe::Refused, "a closed port must read as Refused");
-        assert_eq!(vm::vm_liveness_from_qmp_probe(p), vm::VmLiveness::Stopped);
-        assert_eq!(
-            vm::snapshot_plan(vm::vm_liveness_from_qmp_probe(p), true),
-            vm::SnapshotPlan::QemuImg
+        assert_ne!(
+            p,
+            vm::QmpProbe::Answered,
+            "a dead port must never read as alive"
         );
+        let liveness = vm::vm_liveness_from_qmp_probe(p);
+        assert_ne!(liveness, vm::VmLiveness::Running);
+        match p {
+            // The textbook outcome: RST received, the VM is provably stopped.
+            vm::QmpProbe::Refused => {
+                assert_eq!(liveness, vm::VmLiveness::Stopped);
+                assert_eq!(vm::snapshot_plan(liveness, true), vm::SnapshotPlan::QemuImg);
+            }
+            // The swallowed-RST outcome: nothing answered, so nothing is proven
+            // and qemu-img stays out of the picture.
+            vm::QmpProbe::TimedOut => {
+                assert_eq!(liveness, vm::VmLiveness::Unknown);
+                assert!(matches!(
+                    vm::snapshot_plan(liveness, true),
+                    vm::SnapshotPlan::Skip(_)
+                ));
+            }
+            vm::QmpProbe::Answered => unreachable!("asserted above"),
+        }
     }
 
     #[test]
@@ -283,6 +345,11 @@ mod tests {
 
     #[test]
     fn connect_to_a_dead_endpoint_is_a_transport_error() {
+        // Same environment caveat as `probe_of_a_dead_port_is_never_alive`:
+        // depending on whether the loopback RST survives the local network stack,
+        // the connect fails as "refused" or as "no answer within <budget>". Both
+        // are transport failures; what matters is that a dead endpoint never
+        // yields a client and never a `Rejected` (which would mean QMP answered).
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         drop(listener);
@@ -290,7 +357,11 @@ mod tests {
             Ok(_) => panic!("nothing should be listening on a just-released port"),
             Err(e) => {
                 assert!(matches!(e, QmpError::Transport(_)), "{e:?}");
-                assert!(e.message().contains("refused"), "{e:?}");
+                let message = e.message();
+                assert!(
+                    message.contains("refused") || message.contains("no answer within"),
+                    "a dead endpoint must report that nobody served it: {e:?}"
+                );
             }
         }
     }

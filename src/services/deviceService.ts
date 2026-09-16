@@ -495,6 +495,10 @@ export const QemuService = {
     invoke<QemuCliOutput>("qemu_guest_wait", { name, timeoutSecs }),
   redroidCreate: (req: QemuRedroidCreateRequest) =>
     invoke<QemuCliOutput>("qemu_redroid_create", { req }),
+  redroidUpgrade: (req: QemuRedroidCreateRequest) =>
+    invoke<QemuCliOutput>("qemu_redroid_upgrade", { req }),
+  redroidRestore: (vm: string, name: string) =>
+    invoke<QemuCliOutput>("qemu_redroid_restore", { vm, name }),
   redroidList: (vm: string) =>
     invoke<QemuRedroidInstance[]>("qemu_redroid_list", { vm }),
   adbList: () => invoke<QemuAdbMapping[]>("qemu_adb_list"),

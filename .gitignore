@@ -44,3 +44,8 @@ vendor/gnirehtet/**/*.zip
 *.njsproj
 *.sln
 *.sw?
+
+# Python bytecode from running the scripts above (e.g. the guest-side
+# unittest in src-tauri/src/services/test_qemu_guest.py) - never committed.
+__pycache__/
+*.py[cod]

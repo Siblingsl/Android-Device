@@ -1284,6 +1284,20 @@ pub async fn qemu_redroid_create(
 }
 
 #[tauri::command]
+pub async fn qemu_redroid_upgrade(
+    req: crate::services::qemu::QemuRedroidCreateRequest,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu_presets::apply(req, true)).await
+}
+
+#[tauri::command]
+pub async fn qemu_redroid_restore(
+    vm: String, name: String,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu_presets::restore(&vm, &name)).await
+}
+
+#[tauri::command]
 pub async fn qemu_redroid_list(
     vm: String,
 ) -> Result<Vec<crate::services::qemu::QemuRedroidInstance>, String> {

@@ -715,6 +715,9 @@ export interface QemuRedroidInstance {
   port: number;
   serial: string;
   status: string;
+  androidVersion?: string;
+  image?: string;
+  rollbackAvailable?: boolean;
 }
 
 export interface QemuAdbMapping {
@@ -742,4 +745,20 @@ export interface QemuRedroidCreateRequest {
   width: number;
   height: number;
   dpi: number;
+  image?: string;
+  androidVersion?: string;
+  installGapps?: boolean;
+  gappsZip?: string;
+  installMagisk?: boolean;
+  installLsposed?: boolean;
+  installShamiko?: boolean;
+  installCloak?: boolean;
+  installNativeCloak?: boolean;
+  nativeCloakZip?: string;
+  moduleZips?: string[];
+  spoofProfileId?: string;
+  spoofProfile?: string;
+  spoofAbilist?: boolean;
+  hidePackages?: string[];
+  cleanTraces?: boolean;
 }

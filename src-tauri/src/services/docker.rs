@@ -430,7 +430,7 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
                     //（此前 else-if 会让勾选了 Magisk 的实例静默丢掉 GApps）。
                     set_create_stage("构建 / 复用 GApps 镜像（叠加在 Magisk 预设上）…");
                     let zip = resolve_gapps_zip(req.gapps_zip.trim(), &base_image);
-                    match ensure_gapps_image(&tag, &zip) {
+                    match ensure_gapps_image(&tag, &zip, &req.android_version) {
                         Ok(gtag) => {
                             log::info(
                                 "Docker",
@@ -463,7 +463,7 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     } else if req.install_gapps {
         set_create_stage("构建 / 复用 GApps 镜像…");
         let zip = resolve_gapps_zip(req.gapps_zip.trim(), &base_image);
-        match ensure_gapps_image(&base_image, &zip) {
+        match ensure_gapps_image(&base_image, &zip, &req.android_version) {
             Ok(tag) => {
                 log::info("Docker", &format!("Using GApps image {tag}"));
                 tag
@@ -1215,9 +1215,43 @@ fn image_exists(image: &str) -> bool {
     r.success && !r.stdout.is_empty()
 }
 
-/// Build (or reuse) a derived Redroid image with user-supplied GApps overlay.
-/// Accepts MindTheGapps / extracted `system/` trees. Does not download GApps.
-fn ensure_gapps_image(base_image: &str, zip_or_dir: &str) -> Result<String, String> {
+/// Copy a validated local GApps system overlay into a build context.
+pub(crate) fn prepare_gapps_context(
+    base_image: &str,
+    src: &str,
+    version: &str,
+    work: &std::path::Path,
+) -> Result<(), String> {
+    let src_path = std::path::Path::new(src);
+    crate::services::preset::validate_gapps(src_path, version)?;
+    let overlay_dir = work.join("overlay");
+    std::fs::create_dir_all(&overlay_dir).map_err(|e| e.to_string())?;
+    let extracted = if src_path.is_dir() {
+        src_path.to_path_buf()
+    } else {
+        let dest = work.join("extract");
+        util::ensure_dir(&dest.to_string_lossy());
+        extract_archive(src_path, &dest)?;
+        dest
+    };
+    if looks_like_opengapps(&extracted) {
+        return Err(format!(
+                "当前是 OpenGApps 压缩包（含 Core/ 分卷），需要 lzip 解包，本机暂不自动处理。请改用 MindTheGapps zip，或先自行解出带 system/app、system/priv-app 的目录。\n基础镜像: {base_image}\nGApps: {src}\n目标镜像: {base_image}"
+            ));
+    }
+    let system = find_system_overlay(&extracted).ok_or_else(|| {
+            format!(
+                "zip/目录里找不到 system/app、system/priv-app 或 system/product。请使用 MindTheGapps。\n基础镜像: {base_image}\nGApps: {src}\n目标镜像: {base_image}"
+            )
+        })?;
+    copy_dir_all(&system, &overlay_dir).map_err(|e| {
+            format!("复制 GApps overlay 失败: {e}\n基础镜像: {base_image}\nGApps: {src}\n目标镜像: {base_image}")
+        })?;
+
+    Ok(())
+}
+
+fn ensure_gapps_image(base_image: &str, zip_or_dir: &str, version: &str) -> Result<String, String> {
     let src = zip_or_dir.trim();
     if src.is_empty() {
         return Err(
@@ -1229,6 +1263,8 @@ fn ensure_gapps_image(base_image: &str, zip_or_dir: &str) -> Result<String, Stri
         return Err(format!("GApps 路径不存在: {src}\n基础镜像: {base_image}"));
     }
 
+    crate::services::preset::validate_image(base_image)?;
+    crate::services::preset::validate_gapps(src_path, version)?;
     let stamp = gapps_stamp(src_path)?;
     let tag_safe = base_image
         .chars()
@@ -1252,27 +1288,7 @@ fn ensure_gapps_image(base_image: &str, zip_or_dir: &str) -> Result<String, Stri
     util::ensure_dir(&overlay_dir.to_string_lossy());
 
     let built = (|| {
-        let extracted = if src_path.is_dir() {
-            src_path.to_path_buf()
-        } else {
-            let dest = work.join("extract");
-            util::ensure_dir(&dest.to_string_lossy());
-            extract_archive(src_path, &dest)?;
-            dest
-        };
-        if looks_like_opengapps(&extracted) {
-            return Err(format!(
-                "当前是 OpenGApps 压缩包（含 Core/ 分卷），需要 lzip 解包，本机暂不自动处理。请改用 MindTheGapps zip，或先自行解出带 system/app、system/priv-app 的目录。\n基础镜像: {base_image}\nGApps: {src}\n目标镜像: {tag}"
-            ));
-        }
-        let system = find_system_overlay(&extracted).ok_or_else(|| {
-            format!(
-                "zip/目录里找不到 system/app、system/priv-app 或 system/product。请使用 MindTheGapps。\n基础镜像: {base_image}\nGApps: {src}\n目标镜像: {tag}"
-            )
-        })?;
-        copy_dir_all(&system, &overlay_dir).map_err(|e| {
-            format!("复制 GApps overlay 失败: {e}\n基础镜像: {base_image}\nGApps: {src}\n目标镜像: {tag}")
-        })?;
+        prepare_gapps_context(base_image, src, version, &work)?;
 
         let dockerfile = work.join("Dockerfile");
         let df = format!("FROM {base_image}\nCOPY overlay/ /system/\n");
@@ -1560,10 +1576,42 @@ fn resolve_spoof_conf_path(
     ))
 }
 
-/// Build (or reuse) a derived Redroid image with the Magisk preset
-/// (magiskd + Zygisk + optional LSPosed/Shamiko modules + spoof props).
-/// Also carries the GApps overlay when `install_gapps` is set.
-fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<String, String> {
+/// Prepare local preset assets without invoking Docker or changing an instance.
+pub fn prepare_preset_context(
+    req: &CreateInstanceRequest,
+    base_image: &str,
+    work: &std::path::Path,
+) -> Result<(), String> {
+    crate::services::preset::validate_image(base_image)?;
+    std::fs::create_dir_all(work).map_err(|e| e.to_string())?;
+    let ctx_bin = work.join("bin");
+    let ctx_data = work.join("data");
+    let ctx_etc = work.join("etc");
+    let ctx_modules = work.join("modules");
+    let ctx_overlay = work.join("overlay");
+    for dir in [&ctx_bin, &ctx_data, &ctx_etc, &ctx_modules, &ctx_overlay] {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    if req.install_gapps {
+        let preferred = req.gapps_zip.trim();
+        let zip = if preferred.is_empty() {
+            resolve_gapps_zip("", base_image)
+        } else {
+            preferred.to_string()
+        };
+        if zip.is_empty() {
+            return Err("已勾选 GApps，但未找到本地 zip。".into());
+        }
+        prepare_gapps_context(base_image, &zip, &req.android_version, work)?;
+    }
+    if !req.install_magisk {
+        let df = if req.install_gapps {
+            format!("FROM {base_image}\nCOPY overlay/ /system/\n")
+        } else {
+            format!("FROM {base_image}\n")
+        };
+        return std::fs::write(work.join("Dockerfile"), df).map_err(|e| e.to_string());
+    }
     let magisk_root = resolve_magisk_dir();
     if magisk_root.is_empty() {
         return Err(
@@ -1603,86 +1651,7 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
     // is removed before we return (see the cleanup below).
     let (spoof_conf, spoof_tmp) = resolve_spoof_conf_path(req, &overlay_src)?;
 
-    // Stamp = everything that changes the derived image.
-    let mut stamp_srcs: Vec<String> = vec![
-        base_image.to_string(),
-        format!(
-            "magisk={}",
-            gapps_stamp(&bin_src.join("magisk.apk")).unwrap_or_default()
-        ),
-        format!("conf={}", gapps_stamp(&spoof_conf).unwrap_or_default()),
-        format!("gapps={}", req.install_gapps),
-        format!("lsposed={}", req.install_lsposed),
-        format!("shamiko={}", req.install_shamiko),
-        dir_stamp(&std::path::Path::new(&overlay_src).join("system")),
-    ];
-    for z in &module_zips {
-        stamp_srcs.push(gapps_stamp(z).unwrap_or_default());
-    }
-    let stamp = format!("{:016x}", fnv1a64(&stamp_srcs.join("|")));
-    let tag_safe = base_image
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let tag = format!("rdc-preset:{tag_safe}-{stamp}");
-    if image_exists(&tag) {
-        if let Some(tmp) = &spoof_tmp {
-            let _ = std::fs::remove_file(tmp);
-        }
-        log::info("Docker", &format!("Reusing Magisk preset image {tag}"));
-        return Ok(tag);
-    }
-
-    let work = std::env::temp_dir().join(format!("rdc-preset-{}", util::now_millis()));
-    util::ensure_dir(&work.to_string_lossy());
-    let built = (|| {
-        let ctx_bin = work.join("bin");
-        let ctx_data = work.join("data");
-        let ctx_etc = work.join("etc");
-        let ctx_modules = work.join("modules");
-        let ctx_overlay = work.join("overlay");
-        for d in [&ctx_bin, &ctx_data, &ctx_etc, &ctx_modules, &ctx_overlay] {
-            util::ensure_dir(&d.to_string_lossy());
-        }
-
-        // 1. GApps overlay (optional)
-        if req.install_gapps {
-            let zip = resolve_gapps_zip(req.gapps_zip.trim(), base_image);
-            if zip.is_empty() {
-                return Err(
-                    "已勾选预装 Google 套件，但未指定本地 zip。请在创建设置或「设置 → GApps zip」中填写路径（MindTheGapps，需自行下载）。".into(),
-                );
-            }
-            let src_path = std::path::Path::new(&zip);
-            if !src_path.exists() {
-                return Err(format!("GApps 路径不存在: {zip}\n基础镜像: {base_image}"));
-            }
-            let extracted = if src_path.is_dir() {
-                src_path.to_path_buf()
-            } else {
-                let dest = work.join("extract");
-                util::ensure_dir(&dest.to_string_lossy());
-                extract_archive(src_path, &dest)?;
-                dest
-            };
-            if looks_like_opengapps(&extracted) {
-                return Err(
-                    "当前是 OpenGApps 压缩包（含 Core/ 分卷），本机暂不自动处理。请改用 MindTheGapps zip 或解出的 system 目录。".into(),
-                );
-            }
-            let system = find_system_overlay(&extracted).ok_or_else(|| {
-                "zip/目录里找不到 system/app、system/priv-app 或 system/product。请使用 MindTheGapps。".to_string()
-            })?;
-            copy_dir_all(&system, &ctx_overlay)
-                .map_err(|e| format!("复制 GApps overlay 失败: {e}"))?;
-        }
-
+    let prepared = (|| {
         // 2. Magisk binaries from the fetched assets (need the exec bit → COPY --chmod=755)
         for name in [
             "magisk",
@@ -1759,6 +1728,10 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
         }
 
         // NOTE: requires BuildKit (Docker Desktop default) for COPY --chmod.
+        // The init rc must land non-group-writable: Android init skips any
+        // config file with group/other write bits ("Skipping insecure file"),
+        // and a Windows checkout has no POSIX modes to inherit — the build
+        // context tar carries 0664 for everything.
         let dockerfile = work.join("Dockerfile");
         std::fs::write(
             &dockerfile,
@@ -1767,11 +1740,117 @@ fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<
                  COPY overlay/ /system/\n\
                  COPY data/ /system/etc/init/magisk/\n\
                  COPY --chmod=755 bin/ /system/etc/init/magisk/\n\
-                 COPY etc/ /system/etc/init/\n\
+                 COPY --chmod=644 etc/ /system/etc/init/\n\
                  COPY modules/ /system/etc/init/magisk/modules/\n"
             ),
         )
         .map_err(|e| e.to_string())?;
+
+        Ok(())
+    })();
+    if let Some(tmp) = spoof_tmp {
+        let _ = std::fs::remove_file(tmp);
+    }
+    prepared
+}
+
+fn ensure_preset_image(req: &CreateInstanceRequest, base_image: &str) -> Result<String, String> {
+    crate::services::preset::validate_image(base_image)?;
+    if req.install_gapps {
+        let zip = resolve_gapps_zip(req.gapps_zip.trim(), base_image);
+        crate::services::preset::validate_gapps(std::path::Path::new(&zip), &req.android_version)?;
+    }
+    let magisk_root = resolve_magisk_dir();
+    if magisk_root.is_empty() {
+        return Err(
+            "已勾选预装 Magisk，但未找到 vendor/magisk 资产目录。\n请先运行 .\\scripts\\fetch-magisk.ps1（Magisk fork APK + LSPosed + Shamiko，均不进 Git）。".into(),
+        );
+    }
+    let Some(bin_src) = magisk_bin_dir(&magisk_root) else {
+        return Err(format!(
+            "vendor/magisk 里找不到 magisk64 二进制。\n请重跑 .\\scripts\\fetch-magisk.ps1。\n目录: {magisk_root}"
+        ));
+    };
+    let overlay_src = resolve_overlay_dir();
+    if overlay_src.is_empty() {
+        return Err(
+            "未找到 vendor/magisk-overlay（镜像内 init rc 与首启脚本）。请检查项目文件完整性。"
+                .into(),
+        );
+    }
+    let modules_src = std::path::Path::new(&magisk_root).join("modules");
+
+    let mut module_zips: Vec<std::path::PathBuf> = Vec::new();
+    if req.install_lsposed {
+        let zip = find_module_zip(&modules_src, "lsposed").ok_or_else(|| {
+            "已勾选 LSPosed，但 vendor/magisk/modules 下没有 lsposed-*.zip。\n请运行 .\\scripts\\fetch-magisk.ps1。".to_string()
+        })?;
+        module_zips.push(zip);
+    }
+    if req.install_shamiko {
+        let zip = find_module_zip(&modules_src, "shamiko").ok_or_else(|| {
+            "已勾选 Shamiko，但 vendor/magisk/modules 下没有 shamiko-*.zip。\n请运行 .\\scripts\\fetch-magisk.ps1。".to_string()
+        })?;
+        module_zips.push(zip);
+    }
+
+    // Optional spoof profile override (else the bundled default is baked in).
+    // A built-in profile id is rendered into a temp conf first; the temp file
+    // is removed before we return (see the cleanup below).
+    let (spoof_conf, spoof_tmp) = resolve_spoof_conf_path(req, &overlay_src)?;
+
+    // Stamp = everything that changes the derived image.
+    let mut stamp_srcs: Vec<String> = vec![
+        base_image.to_string(),
+        format!(
+            "magisk={}",
+            gapps_stamp(&bin_src.join("magisk.apk")).unwrap_or_default()
+        ),
+        format!("conf={}", gapps_stamp(&spoof_conf).unwrap_or_default()),
+        format!("gapps={}", req.install_gapps),
+        if req.install_gapps {
+            let zip = resolve_gapps_zip(req.gapps_zip.trim(), base_image);
+            let path = std::path::Path::new(&zip);
+            if path.is_dir() {
+                dir_stamp(path)
+            } else {
+                gapps_stamp(path).unwrap_or_default()
+            }
+        } else {
+            String::new()
+        },
+        format!("lsposed={}", req.install_lsposed),
+        format!("shamiko={}", req.install_shamiko),
+        dir_stamp(&std::path::Path::new(&overlay_src).join("system")),
+    ];
+    for z in &module_zips {
+        stamp_srcs.push(gapps_stamp(z).unwrap_or_default());
+    }
+    let stamp = format!("{:016x}", fnv1a64(&stamp_srcs.join("|")));
+    let tag_safe = base_image
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let tag = format!("rdc-preset:{tag_safe}-{stamp}");
+    if image_exists(&tag) {
+        if let Some(tmp) = &spoof_tmp {
+            let _ = std::fs::remove_file(tmp);
+        }
+        log::info("Docker", &format!("Reusing Magisk preset image {tag}"));
+        return Ok(tag);
+    }
+
+    let work = std::env::temp_dir().join(format!("rdc-preset-{}", util::now_millis()));
+    util::ensure_dir(&work.to_string_lossy());
+    let built = (|| {
+        crate::services::preset::prepare(req, base_image, &work)?;
+        let dockerfile = work.join("Dockerfile");
 
         log::info("Docker", &format!("Building Magisk preset image {tag}"));
         let build = util::run_command_timeout(
