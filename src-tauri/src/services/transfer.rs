@@ -1,5 +1,118 @@
-use crate::models::ShellResult;
+use std::collections::HashMap;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+
+use crate::models::{FileTransferProgress, ShellResult};
 use crate::services::adb;
+use crate::services::util::CancellableCommandResult;
+
+static TRANSFER_CANCELLATIONS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn transfer_event(
+    operation_id: &str,
+    direction: &str,
+    status: &str,
+    message: impl Into<String>,
+) -> FileTransferProgress {
+    FileTransferProgress {
+        operation_id: operation_id.into(),
+        direction: direction.into(),
+        status: status.into(),
+        message: message.into(),
+        ..FileTransferProgress::default()
+    }
+}
+
+pub fn cancel_transfer(operation_id: &str) -> bool {
+    let Some(cancel) = TRANSFER_CANCELLATIONS.lock().get(operation_id).cloned() else {
+        return false;
+    };
+    cancel.store(true, Ordering::SeqCst);
+    true
+}
+
+fn tracked_transfer(
+    serial: &str,
+    local: &str,
+    remote: &str,
+    operation_id: &str,
+    direction: &str,
+    emit: impl Fn(FileTransferProgress) + Send + Sync + 'static,
+) -> ShellResult {
+    if operation_id.trim().is_empty() {
+        return ShellResult {
+            success: false,
+            stderr: "文件传输操作 ID 不能为空".into(),
+            exit_code: -1,
+            ..ShellResult::default()
+        };
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    TRANSFER_CANCELLATIONS
+        .lock()
+        .insert(operation_id.to_string(), Arc::clone(&cancel));
+    emit(transfer_event(operation_id, direction, "queued", "等待开始"));
+    emit(transfer_event(operation_id, direction, "running", "传输中"));
+    let emit: Arc<dyn Fn(FileTransferProgress) + Send + Sync> = Arc::new(emit);
+    let on_output = {
+        let emit = Arc::clone(&emit);
+        let operation_id = operation_id.to_string();
+        let direction = direction.to_string();
+        move |output: String| emit(transfer_event(&operation_id, &direction, "running", output))
+    };
+    let result = if direction == "upload" {
+        adb::push_tracked(serial, local, remote, &cancel, on_output)
+    } else {
+        adb::pull_tracked(serial, remote, local, &cancel, on_output)
+    };
+    TRANSFER_CANCELLATIONS.lock().remove(operation_id);
+    match result {
+        CancellableCommandResult::Completed(result) => {
+            emit(transfer_event(
+                operation_id,
+                direction,
+                if result.success { "completed" } else { "failed" },
+                if result.success {
+                    "传输完成"
+                } else {
+                    result.stderr.as_str()
+                },
+            ));
+            result
+        }
+        CancellableCommandResult::Cancelled(result) => {
+            emit(transfer_event(operation_id, direction, "cancelled", "传输已取消"));
+            result
+        }
+        CancellableCommandResult::TimedOut(result) => {
+            emit(transfer_event(operation_id, direction, "failed", "传输超时"));
+            result
+        }
+    }
+}
+
+pub fn upload_tracked(
+    serial: &str,
+    local: &str,
+    remote: &str,
+    operation_id: &str,
+    emit: impl Fn(FileTransferProgress) + Send + Sync + 'static,
+) -> ShellResult {
+    tracked_transfer(serial, local, remote, operation_id, "upload", emit)
+}
+
+pub fn download_tracked(
+    serial: &str,
+    remote: &str,
+    local: &str,
+    operation_id: &str,
+    emit: impl Fn(FileTransferProgress) + Send + Sync + 'static,
+) -> ShellResult {
+    tracked_transfer(serial, local, remote, operation_id, "download", emit)
+}
 
 pub fn shell_quote(value: &str) -> Result<String, String> {
     if value.is_empty() || value.chars().any(|c| c.is_control()) {

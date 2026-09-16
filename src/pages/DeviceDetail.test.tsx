@@ -75,12 +75,15 @@ vi.mock("../services/deviceService", () => ({
     logcat: vi.fn(),
     scrcpyStatus: vi.fn(),
     screenshot: vi.fn(),
+    getDeviceTelemetry: vi.fn(),
+    gnirehtetStatus: vi.fn(),
   },
 }));
 vi.mock("../lib/clipboard", () => ({ copyText: vi.fn() }));
 vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn() }));
 vi.mock("../stores/appStore", () => ({
   useAppStore: (selector: (state: {
+    devices: DeviceInfo[];
     setStatusText: () => void;
     saveSettings: () => Promise<void>;
     settings: null;
@@ -90,6 +93,7 @@ vi.mock("../stores/appStore", () => ({
     clearMonitorAlerts: () => void;
   }) => unknown) =>
     selector({
+      devices: [],
       setStatusText: () => {},
       saveSettings: async () => {},
       settings: null,
@@ -264,6 +268,23 @@ describe("DeviceDetail refresh ordering", () => {
     vi.mocked(DeviceService.getAppActivities).mockResolvedValue("");
     vi.mocked(DeviceService.logcat).mockResolvedValue("");
     vi.mocked(DeviceService.scrcpyStatus).mockResolvedValue("stopped");
+    vi.mocked(DeviceService.getDeviceTelemetry).mockResolvedValue({
+      serial: "device-1-serial",
+      batteryLevel: 80,
+      batteryTemperature: "30 °C",
+      powerState: "放电中",
+      voltage: "4000 mV",
+      updatedAt: "2026-09-16T00:00:00Z",
+      status: "ok",
+      message: "电池状态已更新",
+    });
+    vi.mocked(DeviceService.gnirehtetStatus).mockResolvedValue({
+      serial: "device-1-serial",
+      status: "stopped",
+      message: "",
+      relay: "",
+      installed: false,
+    });
     vi.mocked(DeviceService.screenshot).mockResolvedValue({
       success: false,
       path: "",
@@ -300,6 +321,64 @@ describe("DeviceDetail refresh ordering", () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("mounts automation and AI panels in the device control workspace", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+
+    renderDetail("control");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("可视化自动化")).toBeTruthy();
+    expect(screen.getByText("AI 控制（安全模式）")).toBeTruthy();
+    expect(screen.getByPlaceholderText("OpenAI-compatible API 地址")).toBeTruthy();
+  });
+
+  it("mounts the other device-scoped control capabilities in the same workspace", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+
+    renderDetail("control");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("键盘映射")).toBeTruthy();
+    expect(screen.getByLabelText("Gnirehtet 反向供网")).toBeTruthy();
+  });
+
+  it("keeps assistant controls disabled when the device is offline", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue({
+      ...device("device-1"),
+      online: false,
+      adbStatus: "offline",
+    });
+
+    renderDetail("control");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const endpoint = screen.getByPlaceholderText("OpenAI-compatible API 地址");
+    const assistantFieldset = endpoint.closest("fieldset");
+    expect(assistantFieldset?.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "新增" }).closest("fieldset")).toBe(assistantFieldset);
+  });
+
+  it("mounts device asset metadata and telemetry in the overview workspace", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+
+    renderDetail("overview");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByLabelText("设备资产信息")).toBeTruthy();
   });
 
   it("keeps the current device when the previous device request resolves later", async () => {

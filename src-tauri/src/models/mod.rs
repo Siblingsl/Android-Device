@@ -262,6 +262,18 @@ pub struct ShellResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct FileTransferProgress {
+    pub operation_id: String,
+    pub direction: String,
+    pub status: String,
+    pub bytes_transferred: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<f64>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ScreenshotResult {
     pub success: bool,
     pub path: String,

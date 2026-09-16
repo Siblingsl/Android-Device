@@ -24,6 +24,7 @@ vi.mock("../services/deviceService", () => ({
     spoofProfileUsage: vi.fn(),
     applySpoofProfile: vi.fn(),
     setDeviceTags: vi.fn(),
+    scrcpyStreamStop: vi.fn(),
   },
 }));
 const storeState = vi.hoisted(() => ({
@@ -116,6 +117,7 @@ describe("Devices batch controls", () => {
     vi.mocked(DeviceService.disconnect).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.restart).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.stop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
+    vi.mocked(DeviceService.scrcpyStreamStop).mockResolvedValue({ success: true, stdout: "", stderr: "", exitCode: 0 });
     vi.mocked(DeviceService.exportLogs).mockResolvedValue("C:\\exports\\batch.csv");
     vi.mocked(DeviceService.revealInFolder).mockResolvedValue(undefined);
     vi.mocked(DeviceService.listSpoofProfiles).mockResolvedValue([
@@ -135,6 +137,18 @@ describe("Devices batch controls", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it("opens the saved multi-device window arrangement editor", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "窗口编排" }));
+    expect(screen.getByRole("dialog", { name: "设备窗口编排" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "设备窗口编排" }).querySelector("strong")?.textContent).toBe("设备 one");
   });
 
   it("stops before the next device and reports the skipped item", async () => {

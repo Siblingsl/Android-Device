@@ -71,10 +71,46 @@ describe("Signal Desk layout", () => {
     expect(styles).toMatch(/\.page-dashboard \.grid-2\s*,[\s\S]*\.page-dashboard \.grid-3/);
   });
 
+  it("keeps Dashboard paired cards on the stat-grid split", () => {
+    expect(styles).toMatch(
+      /\.page-dashboard \.grid-stats\s*,\s*\.page-dashboard \.grid-2\s*\{[^}]*--dashboard-grid-gap:\s*7px;[^}]*--dashboard-stat-column:\s*calc\(\(100% - var\(--dashboard-grid-gap\) - var\(--dashboard-grid-gap\)\) \/ 3\);/s,
+    );
+    expect(styles).toMatch(
+      /\.page-dashboard \.grid-2\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*calc\(var\(--dashboard-stat-column\) \+ var\(--dashboard-stat-column\) \+ var\(--dashboard-grid-gap\)\)\)\s+minmax\(0,\s*1fr\);[^}]*column-gap:\s*var\(--dashboard-grid-gap\);/s,
+    );
+  });
+
   it("keeps device columns aligned across the table header and rows", () => {
     expect(styles).toMatch(/\.devices-table \{[^}]*table-layout:\s*fixed;/s);
     expect(styles).toMatch(/\.devices-table \.device-list-table-head \{[^}]*display:\s*table-row;/s);
     expect(styles).toMatch(/\.device-grid \{[^}]*grid-template-columns:\s*repeat\(auto-fit/s);
     expect(styles).toMatch(/\.detail-overview-panes \{[^}]*grid-template-columns:/s);
+  });
+
+  it("keeps device-scoped feature panels reachable from their workspaces", () => {
+    expect(detail).toContain("KeyboardMappingPanel");
+    expect(detail).toContain("AutomationPanel");
+    expect(detail).toContain("AgentPanel");
+    expect(detail).toContain("GnirehtetPanel");
+    expect(detail).toContain("DeviceMetadataPanel");
+    const devices = read("src/pages/Devices.tsx");
+    expect(devices).toContain("ArrangementDialog");
+    expect(devices).toContain("窗口编排");
+  });
+
+  it("keeps the standalone terminal window route reachable", () => {
+    const app = read("src/App.tsx");
+    expect(app).toContain('import { TerminalPage } from "./pages/Terminal";');
+    expect(app).toContain('<Route path="terminal" element={<TerminalPage />} />');
+    expect(read("src/pages/Terminal.tsx")).toContain("TerminalSessionService.subscribe");
+  });
+
+  it("keeps the persisted monitor alert workspace reachable", () => {
+    const app = read("src/App.tsx");
+    const sidebar = read("src/components/layout/Sidebar.tsx");
+    expect(app).toContain('import { MonitorAlertsPage } from "./pages/MonitorAlerts";');
+    expect(app).toContain('<Route path="monitor" element={<MonitorAlertsPage />} />');
+    expect(sidebar).toContain('to: "/monitor"');
+    expect(sidebar).toContain('key: "common.nav.monitor"');
   });
 });

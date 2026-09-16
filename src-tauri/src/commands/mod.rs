@@ -1,10 +1,12 @@
 use crate::models::*;
 use crate::services::{
     adb, audit, battery, cloak, config, device, docker, geo, gnirehtet, log, proxy, recording,
-    root, scrcpy, settings, spoof, terminal, transfer, usage, wireless, wsl_kernel,
+    root, scrcpy, settings, spoof, terminal, terminal_session, transfer, usage, wireless,
+    wsl_kernel,
 };
 use base64::Engine;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
+use serde::Deserialize;
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tauri::async_runtime::spawn_blocking(f)
@@ -245,6 +247,31 @@ pub async fn device_rotate(serial: String, landscape: bool) -> ShellResult {
 }
 
 #[tauri::command]
+pub async fn device_set_rotation_mode(serial: String, mode: String) -> ShellResult {
+    blocking(move || device::set_rotation_mode(&serial, &mode)).await
+}
+
+#[tauri::command]
+pub async fn device_volume_mute(serial: String) -> ShellResult {
+    blocking(move || device::volume_mute(&serial)).await
+}
+
+#[tauri::command]
+pub async fn device_screen_off(serial: String) -> ShellResult {
+    blocking(move || device::screen_off(&serial)).await
+}
+
+#[tauri::command]
+pub async fn device_reboot(serial: String) -> ShellResult {
+    blocking(move || device::reboot(&serial)).await
+}
+
+#[tauri::command]
+pub async fn device_shutdown(serial: String) -> ShellResult {
+    blocking(move || device::shutdown(&serial)).await
+}
+
+#[tauri::command]
 pub async fn device_open_notifications(serial: String) -> ShellResult {
     blocking(move || device::open_notifications(&serial)).await
 }
@@ -294,6 +321,42 @@ pub async fn terminal_stop(id: String) -> ShellResult {
     blocking(move || terminal::stop(&id)).await
 }
 
+// ---- Persistent terminal sessions ----
+
+#[tauri::command]
+pub async fn terminal_session_start(
+    app: AppHandle,
+    state: tauri::State<'_, terminal_session::TerminalRegistry>,
+    request: terminal_session::TerminalStartRequest,
+) -> Result<terminal_session::TerminalSessionInfo, String> {
+    let registry = state.inner().clone();
+    blocking_res(move || terminal_session::start(app, registry, request)).await
+}
+
+#[tauri::command]
+pub async fn terminal_session_write(
+    state: tauri::State<'_, terminal_session::TerminalRegistry>,
+    id: String,
+    data: String,
+) -> Result<terminal_session::TerminalCommandResult, String> {
+    Ok(terminal_session::write(state.inner(), &id, &data))
+}
+
+#[tauri::command]
+pub async fn terminal_session_stop(
+    state: tauri::State<'_, terminal_session::TerminalRegistry>,
+    id: String,
+) -> Result<terminal_session::TerminalCommandResult, String> {
+    Ok(terminal_session::stop(state.inner(), &id))
+}
+
+#[tauri::command]
+pub async fn terminal_session_list(
+    state: tauri::State<'_, terminal_session::TerminalRegistry>,
+) -> Result<Vec<terminal_session::TerminalSessionInfo>, String> {
+    Ok(terminal_session::list(state.inner()))
+}
+
 // ---- APK / Apps ----
 
 #[tauri::command]
@@ -309,6 +372,15 @@ pub async fn uninstall_app(serial: String, package: String) -> ShellResult {
 #[tauri::command]
 pub async fn start_app(serial: String, package: String) -> ShellResult {
     blocking(move || device::start_app(&serial, &package)).await
+}
+
+#[tauri::command]
+pub async fn start_app_on_display(
+    serial: String,
+    package: String,
+    display_id: i32,
+) -> ShellResult {
+    blocking(move || device::start_app_on_display(&serial, &package, display_id)).await
 }
 
 #[tauri::command]
@@ -397,8 +469,57 @@ pub async fn upload_file(serial: String, local: String, remote: String) -> Shell
 }
 
 #[tauri::command]
+pub async fn upload_file_tracked(
+    app: AppHandle,
+    serial: String,
+    local: String,
+    remote: String,
+    operation_id: String,
+) -> ShellResult {
+    blocking(move || {
+        transfer::upload_tracked(
+            &serial,
+            &local,
+            &remote,
+            &operation_id,
+            move |progress| {
+                let _ = app.emit("file-transfer-progress", progress);
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn download_file(serial: String, remote: String, local: String) -> ShellResult {
     blocking(move || device::download_file(&serial, &remote, &local)).await
+}
+
+#[tauri::command]
+pub async fn download_file_tracked(
+    app: AppHandle,
+    serial: String,
+    remote: String,
+    local: String,
+    operation_id: String,
+) -> ShellResult {
+    blocking(move || {
+        transfer::download_tracked(
+            &serial,
+            &remote,
+            &local,
+            &operation_id,
+            move |progress| {
+                let _ = app.emit("file-transfer-progress", progress);
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn cancel_file_transfer(operation_id: String) -> bool {
+    blocking(move || transfer::cancel_transfer(&operation_id)).await
 }
 
 #[tauri::command]
@@ -892,6 +1013,45 @@ pub async fn scrcpy_start(
         .await
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScrcpyWindowPlacement {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[tauri::command]
+pub async fn scrcpy_start_layout(
+    serial: String,
+    max_size: u32,
+    bit_rate: u32,
+    extra: Option<String>,
+    placement: ScrcpyWindowPlacement,
+) -> ShellResult {
+    blocking(move || {
+        if placement.width == 0 || placement.height == 0 {
+            return ShellResult {
+                success: false,
+                stderr: "窗口宽高必须大于 0".into(),
+                exit_code: -1,
+                ..ShellResult::default()
+            };
+        }
+        let mut args = extra.unwrap_or_default();
+        args.push_str(&format!(
+            " --window-x {} --window-y {} --window-width {} --window-height {}",
+            placement.x,
+            placement.y,
+            placement.width.min(3840),
+            placement.height.min(2160),
+        ));
+        scrcpy::start(&serial, max_size, bit_rate, &args)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn scrcpy_stop(serial: String) -> ShellResult {
     blocking(move || scrcpy::stop(&serial)).await
@@ -931,6 +1091,202 @@ pub async fn scrcpy_stream_status(serial: String) -> StreamSession {
 }
 
 // ---- Recording / camera / OTG ----
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct ScrcpyRecordingOptions {
+    output_path: String,
+    format: String,
+    audio: bool,
+    audio_only: bool,
+    audio_source: String,
+    video_source: String,
+    time_limit_secs: u32,
+    camera_id: String,
+    camera_size: String,
+    camera_ar: String,
+    camera_fps: u32,
+    camera_facing: String,
+    camera_torch: bool,
+    camera_zoom: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct ScrcpyCameraOptions {
+    camera_id: String,
+    camera_size: String,
+    camera_ar: String,
+    camera_fps: u32,
+    camera_facing: String,
+    camera_torch: bool,
+    camera_zoom: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct ScrcpyInputOptions {
+    keyboard: bool,
+    mouse: bool,
+    gamepad: bool,
+}
+
+fn recording_shell_result(session: RecordingSession) -> ShellResult {
+    if session.status == "running" {
+        ShellResult {
+            success: true,
+            stdout: if session.output_path.is_empty() {
+                session.message
+            } else {
+                session.output_path
+            },
+            ..ShellResult::default()
+        }
+    } else {
+        ShellResult {
+            success: false,
+            stderr: session.message,
+            exit_code: -1,
+            ..ShellResult::default()
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn scrcpy_start_recording(
+    serial: String,
+    options: serde_json::Value,
+) -> ShellResult {
+    blocking(move || {
+        let Ok(options) = serde_json::from_value::<ScrcpyRecordingOptions>(options) else {
+            return ShellResult {
+                success: false,
+                stderr: "录制参数格式无效".into(),
+                exit_code: -1,
+                ..ShellResult::default()
+            };
+        };
+        let mode = if options.audio_only {
+            "audio"
+        } else if options.video_source == "camera" {
+            if options.audio { "camera-record-av" } else { "camera-record" }
+        } else if options.audio {
+            "av"
+        } else {
+            "video"
+        };
+        let _ = options.audio_source;
+        recording_shell_result(recording::start(
+            &serial,
+            mode,
+            &options.output_path,
+            &options.camera_facing,
+            &options.camera_id,
+            &options.camera_ar,
+            false,
+            &options.camera_size,
+            options.camera_fps,
+            options.time_limit_secs,
+            &options.format,
+            "",
+            options.camera_torch,
+            options.camera_zoom,
+            "",
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stop_recording(serial: String) -> ShellResult {
+    blocking(move || recording::stop(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_recording_status(serial: String) -> String {
+    blocking(move || recording::status(&serial).status).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_start_camera(
+    serial: String,
+    options: serde_json::Value,
+) -> ShellResult {
+    blocking(move || {
+        let Ok(options) = serde_json::from_value::<ScrcpyCameraOptions>(options) else {
+            return ShellResult {
+                success: false,
+                stderr: "摄像头参数格式无效".into(),
+                exit_code: -1,
+                ..ShellResult::default()
+            };
+        };
+        recording_shell_result(recording::start(
+            &serial,
+            "camera",
+            "",
+            &options.camera_facing,
+            &options.camera_id,
+            &options.camera_ar,
+            false,
+            &options.camera_size,
+            options.camera_fps,
+            0,
+            "",
+            "",
+            options.camera_torch,
+            options.camera_zoom,
+            "",
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stop_camera(serial: String) -> ShellResult {
+    blocking(move || recording::stop(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_camera_status(serial: String) -> String {
+    blocking(move || recording::status(&serial).status).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_start_input(
+    serial: String,
+    mode: String,
+    options: serde_json::Value,
+) -> ShellResult {
+    blocking(move || {
+        let Ok(options) = serde_json::from_value::<ScrcpyInputOptions>(options) else {
+            return ShellResult {
+                success: false,
+                stderr: "输入参数格式无效".into(),
+                exit_code: -1,
+                ..ShellResult::default()
+            };
+        };
+        recording_shell_result(recording::start_input(
+            &serial,
+            &mode,
+            options.keyboard,
+            options.mouse,
+            options.gamepad,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn scrcpy_stop_input(serial: String) -> ShellResult {
+    blocking(move || recording::stop(&serial)).await
+}
+
+#[tauri::command]
+pub async fn scrcpy_input_status(serial: String) -> String {
+    blocking(move || recording::status(&serial).status).await
+}
 
 #[tauri::command]
 pub async fn recording_start(

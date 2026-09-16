@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Smartphone,
+  BellRing,
   Boxes,
   Cable,
   Package,
@@ -15,6 +16,7 @@ import { useI18n } from "../../i18n";
 const items = [
   { to: "/", icon: LayoutDashboard, key: "common.nav.dashboard" },
   { to: "/devices", icon: Smartphone, key: "common.nav.devices" },
+  { to: "/monitor", icon: BellRing, key: "common.nav.monitor" },
   // One entry for both runtime tracks (page-merge spec §6.1, decision #4). The
   // link carries no `?track=`: the merged page resolves the landing track from
   // `?track=` > remembered `defaultTrack` > docker, so neither track is

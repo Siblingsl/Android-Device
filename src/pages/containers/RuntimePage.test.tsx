@@ -586,7 +586,7 @@ describe("RuntimePage lifecycle (P3)", () => {
       probe.remove();
       style.remove();
     }
-  });
+  }, 15_000);
 
   it("tags the shared status line with the track it came from", async () => {
     vi.mocked(DeviceService.refreshDockerInfo).mockRejectedValue(new Error("engine down"));

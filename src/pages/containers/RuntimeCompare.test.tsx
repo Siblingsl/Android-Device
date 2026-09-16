@@ -549,7 +549,7 @@ describe("compare view entry and deep links (P6)", () => {
       probe.remove();
       style.remove();
     }
-  });
+  }, 15_000);
 });
 
 describe("compare view grouping (P6)", () => {

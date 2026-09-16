@@ -24,6 +24,7 @@ pub mod settings;
 pub mod spoof;
 pub mod stream;
 pub mod terminal;
+pub mod terminal_session;
 pub mod traces;
 pub mod transfer;
 pub mod unified;

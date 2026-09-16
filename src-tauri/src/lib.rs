@@ -16,6 +16,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(services::terminal_session::TerminalRegistry::default())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -77,6 +78,11 @@ pub fn run() {
             device_lock,
             device_wake,
             device_rotate,
+            device_set_rotation_mode,
+            device_volume_mute,
+            device_screen_off,
+            device_reboot,
+            device_shutdown,
             device_open_notifications,
             device_open_settings,
             device_send_clipboard,
@@ -87,10 +93,15 @@ pub fn run() {
             terminal_read,
             terminal_resize,
             terminal_stop,
+            terminal_session_start,
+            terminal_session_write,
+            terminal_session_stop,
+            terminal_session_list,
             // APK / Apps
             install_apk,
             uninstall_app,
             start_app,
+            start_app_on_display,
             start_app_activity,
             create_app_shortcut,
             stop_app,
@@ -108,7 +119,10 @@ pub fn run() {
             list_files,
             list_files_result,
             upload_file,
+            upload_file_tracked,
             download_file,
+            download_file_tracked,
+            cancel_file_transfer,
             delete_file,
             mkdir_remote,
             move_remote_file,
@@ -200,6 +214,7 @@ pub fn run() {
             adb_tcpip,
             // Scrcpy
             scrcpy_start,
+            scrcpy_start_layout,
             scrcpy_stop,
             scrcpy_restart,
             scrcpy_status,
@@ -210,6 +225,15 @@ pub fn run() {
             recording_start,
             recording_stop,
             recording_status,
+            scrcpy_start_recording,
+            scrcpy_stop_recording,
+            scrcpy_recording_status,
+            scrcpy_start_camera,
+            scrcpy_stop_camera,
+            scrcpy_camera_status,
+            scrcpy_start_input,
+            scrcpy_stop_input,
+            scrcpy_input_status,
             // Gnirehtet reverse tethering
             gnirehtet_install,
             gnirehtet_start,

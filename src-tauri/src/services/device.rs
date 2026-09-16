@@ -416,6 +416,43 @@ pub fn rotate(serial: &str, landscape: bool) -> ShellResult {
     )
 }
 
+pub fn set_rotation_mode(serial: &str, mode: &str) -> ShellResult {
+    match mode {
+        "portrait" => rotate(serial, false),
+        "landscape" => rotate(serial, true),
+        "auto" => adb::shell(
+            serial,
+            "settings put system accelerometer_rotation 1",
+        ),
+        "lock" => adb::shell(
+            serial,
+            "settings put system accelerometer_rotation 0",
+        ),
+        _ => ShellResult {
+            success: false,
+            stderr: "旋转模式只能是 portrait、landscape、auto 或 lock".into(),
+            exit_code: -1,
+            ..ShellResult::default()
+        },
+    }
+}
+
+pub fn volume_mute(serial: &str) -> ShellResult {
+    keyevent(serial, 164)
+}
+
+pub fn screen_off(serial: &str) -> ShellResult {
+    keyevent(serial, 26)
+}
+
+pub fn reboot(serial: &str) -> ShellResult {
+    adb::shell(serial, "reboot")
+}
+
+pub fn shutdown(serial: &str) -> ShellResult {
+    adb::shell(serial, "reboot -p")
+}
+
 pub fn open_notifications(serial: &str) -> ShellResult {
     adb::shell(serial, "cmd statusbar expand-notifications")
 }
@@ -496,6 +533,27 @@ pub fn start_app(serial: &str, package: &str) -> ShellResult {
         };
     }
     r
+}
+
+pub fn start_app_on_display(serial: &str, package: &str, display_id: i32) -> ShellResult {
+    if !valid_package(package) {
+        return invalid_package_result();
+    }
+    if display_id < 0 {
+        return ShellResult {
+            success: false,
+            stderr: "Display ID 不能为负数".into(),
+            exit_code: -1,
+            ..ShellResult::default()
+        };
+    }
+    adb::shell(
+        serial,
+        &format!(
+            "monkey --display {} -p {} -c android.intent.category.LAUNCHER 1",
+            display_id, package
+        ),
+    )
 }
 
 pub fn telemetry(serial: &str) -> DeviceTelemetry {

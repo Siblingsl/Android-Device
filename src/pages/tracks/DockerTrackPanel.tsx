@@ -283,11 +283,16 @@ export default function DockerTrackPanel({
     }
     let cancelled = false;
     const t = window.setTimeout(() => {
-      void DeviceService.checkInstanceName(name).then(async (taken) => {
-        if (cancelled) return;
-        setNameTaken(taken);
-        setNameSuggestion(taken ? await suggestName(name) : "");
-      });
+      void Promise.resolve()
+        .then(() => DeviceService.checkInstanceName?.(name) ?? false)
+        .then(async (taken) => {
+          if (cancelled) return;
+          setNameTaken(taken);
+          setNameSuggestion(taken ? await suggestName(name) : "");
+        })
+        .catch(() => {
+          if (!cancelled) setNameTaken(false);
+        });
     }, 250);
     return () => {
       cancelled = true;
@@ -304,11 +309,16 @@ export default function DockerTrackPanel({
     }
     let cancelled = false;
     const t = window.setTimeout(() => {
-      void DeviceService.checkAdbPort(port).then(async (taken) => {
-        if (cancelled) return;
-        setPortTaken(taken);
-        setPortSuggestion(taken ? await DeviceService.nextFreeAdbPort() : null);
-      });
+      void Promise.resolve()
+        .then(() => DeviceService.checkAdbPort?.(port) ?? false)
+        .then(async (taken) => {
+          if (cancelled) return;
+          setPortTaken(taken);
+          setPortSuggestion(taken ? await DeviceService.nextFreeAdbPort() : null);
+        })
+        .catch(() => {
+          if (!cancelled) setPortTaken(false);
+        });
     }, 250);
     return () => {
       cancelled = true;

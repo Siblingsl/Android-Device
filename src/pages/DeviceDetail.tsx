@@ -76,6 +76,11 @@ import { DeviceInputModes } from "../components/device/DeviceInputModes";
 import { DeviceHealthPanel } from "../components/device/DeviceHealthPanel";
 import { DeviceControlPanel, type DeviceControlAction } from "../components/device/DeviceControlPanel";
 import { DeviceShell } from "../components/device/DeviceShell";
+import { DeviceMetadataPanel } from "../components/device/DeviceMetadataPanel";
+import { KeyboardMappingPanel } from "../components/device/KeyboardMappingPanel";
+import { GnirehtetPanel } from "../components/device/GnirehtetPanel";
+import { AutomationPanel } from "../components/device/AutomationPanel";
+import { AgentPanel } from "../components/device/AgentPanel";
 import { TerminalSessionService } from "../services/terminalSessionService";
 import { openTerminalWindow } from "../lib/terminalWindow";
 import { useAppStore } from "../stores/appStore";
@@ -701,16 +706,29 @@ export function DeviceDetail() {
               <Overview device={device} onOpenTab={setTab} />
               <RootPanel device={device} />
             </div>
+            <DeviceMetadataPanel device={device} />
           </>
         )}
         {tab === "control" && (
-          <Control
-            serial={serial}
-            resolution={device.resolution}
-            setStatusText={setStatusText}
-            disabled={!(device.online && device.adbStatus === "device")}
-            onOpenTerminal={() => void openDeviceTerminal()}
-          />
+          <>
+            <Control
+              serial={serial}
+              resolution={device.resolution}
+              setStatusText={setStatusText}
+              disabled={!(device.online && device.adbStatus === "device")}
+              onOpenTerminal={() => void openDeviceTerminal()}
+            />
+            <fieldset
+              className="detail-control-assistants"
+              disabled={!(device.online && device.adbStatus === "device")}
+              style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+            >
+              <KeyboardMappingPanel device={device} setStatusText={setStatusText} />
+              <AutomationPanel device={device} setStatusText={setStatusText} />
+              <AgentPanel device={device} setStatusText={setStatusText} />
+              <GnirehtetPanel serial={serial} online={device.online && device.adbStatus === "device"} setStatusText={setStatusText} />
+            </fieldset>
+          </>
         )}
         {tab === "files" && (
           <Files

@@ -83,7 +83,7 @@ fn output_format(mode: &str, output: &Path, requested: &str) -> Result<String, S
 fn valid_mode(mode: &str) -> bool {
     matches!(
         mode,
-        "video" | "audio" | "av" | "camera" | "camera-record" | "otg"
+        "video" | "audio" | "av" | "camera" | "camera-record" | "camera-record-av" | "otg"
     )
 }
 
@@ -93,7 +93,7 @@ fn append_camera_args(
     camera_torch: bool,
     camera_zoom: Option<f64>,
 ) -> Result<(), String> {
-    if !matches!(mode, "camera" | "camera-record") {
+    if !matches!(mode, "camera" | "camera-record" | "camera-record-av") {
         return Ok(());
     }
     if camera_torch {
@@ -153,10 +153,10 @@ fn build_args(
     }
     if mode == "audio" {
         args.push("--no-video".into());
-    } else {
+    } else if !matches!(mode, "av" | "camera-record-av") {
         args.push("--no-audio".into());
     }
-    if mode == "camera" || mode == "camera-record" {
+    if matches!(mode, "camera" | "camera-record" | "camera-record-av") {
         args.push("--video-source=camera".into());
         if !camera_id.trim().is_empty() {
             if !camera_id.chars().all(|ch| ch.is_ascii_digit()) {
@@ -213,6 +213,42 @@ fn build_args(
     if time_limit > 0 {
         args.push("--time-limit".into());
         args.push(time_limit.min(86_400).to_string());
+    }
+    Ok(args)
+}
+
+fn build_input_args(
+    serial: &str,
+    mode: &str,
+    keyboard: bool,
+    mouse: bool,
+    gamepad: bool,
+) -> Result<Vec<String>, String> {
+    if serial.trim().is_empty() || serial.chars().any(|ch| ch.is_control()) {
+        return Err("设备 Serial 不能为空或包含控制字符".into());
+    }
+    if !matches!(mode, "uhid" | "otg") {
+        return Err("输入模式只能是 uhid 或 otg".into());
+    }
+    let mut args = vec![
+        "-s".into(),
+        serial.into(),
+        "--no-window".into(),
+        "--no-video".into(),
+        "--no-audio".into(),
+    ];
+    let backend = if mode == "uhid" { "uhid" } else { "sdk" };
+    if keyboard {
+        args.push(format!("--keyboard={backend}"));
+    }
+    if mouse {
+        args.push(format!("--mouse={backend}"));
+    }
+    if gamepad {
+        args.push("--gamepad=uhid".into());
+    }
+    if mode == "otg" {
+        args.push("--otg".into());
     }
     Ok(args)
 }
@@ -365,6 +401,84 @@ pub fn start(
     }
 }
 
+/// Start a scrcpy input-only session. It shares the recording process registry
+/// so the existing stop/status commands can reclaim the process reliably.
+pub fn start_input(
+    serial: &str,
+    mode: &str,
+    keyboard: bool,
+    mouse: bool,
+    gamepad: bool,
+) -> RecordingSession {
+    let previous_stop = stop(serial);
+    if !previous_stop.success {
+        return error(serial, mode, "", previous_stop.stderr);
+    }
+    if let Err(reason) = scrcpy::ensure_device_ready(serial) {
+        return error(serial, mode, "", reason);
+    }
+    let args = match build_input_args(serial, mode, keyboard, mouse, gamepad) {
+        Ok(value) => value,
+        Err(reason) => return error(serial, mode, "", reason),
+    };
+    let bin = scrcpy::scrcpy_bin();
+    let adb_path = settings::adb_path();
+    let mut command = util::command(&bin);
+    command
+        .args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if Path::new(&adb_path).exists() {
+        command.env("ADB", &adb_path);
+    }
+    if let Some(parent) = Path::new(&bin).parent() {
+        util::prepend_path(&mut command, parent);
+    }
+    let mut child = match command.spawn() {
+        Ok(value) => value,
+        Err(reason) => return error(serial, mode, "", format!("启动输入会话失败: {reason}")),
+    };
+    thread::sleep(Duration::from_millis(700));
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                use std::io::Read;
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            error(
+                serial,
+                mode,
+                "",
+                format!(
+                    "输入会话已退出 (code={:?}) {}",
+                    status.code(),
+                    stderr.trim()
+                ),
+            )
+        }
+        Ok(None) => {
+            let session = RecordingSession {
+                serial: serial.into(),
+                mode: format!("input-{mode}"),
+                status: "running".into(),
+                output_path: String::new(),
+                message: "输入会话进行中".into(),
+            };
+            PROCESSES.lock().insert(
+                serial.into(),
+                RecordingProcess {
+                    child,
+                    session: session.clone(),
+                },
+            );
+            log::info("Recording", &format!("Input session started for {serial}"));
+            session
+        }
+        Err(reason) => error(serial, mode, "", format!("读取输入会话状态失败: {reason}")),
+    }
+}
+
 pub fn stop(serial: &str) -> ShellResult {
     let mut processes = PROCESSES.lock();
     let Some(mut process) = processes.remove(serial) else {
@@ -474,7 +588,7 @@ pub fn status(serial: &str) -> RecordingSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_camera_args, build_args, output_format};
+    use super::{append_camera_args, build_args, build_input_args, output_format};
     use std::path::Path;
 
     #[test]
@@ -635,6 +749,18 @@ mod tests {
         append_camera_args(&mut screen, "video", true, Some(2.5)).unwrap();
         assert!(screen.is_empty());
         assert!(append_camera_args(&mut screen, "camera", false, Some(101.0)).is_err());
+    }
+
+    #[test]
+    fn input_modes_build_only_the_requested_injection_backends() {
+        let uhid = build_input_args("device", "uhid", true, false, true).unwrap();
+        assert!(uhid.contains(&"--keyboard=uhid".into()));
+        assert!(!uhid.contains(&"--mouse=uhid".into()));
+        assert!(!uhid.contains(&"--otg".into()));
+        let otg = build_input_args("device", "otg", true, true, false).unwrap();
+        assert!(otg.contains(&"--otg".into()));
+        assert!(otg.contains(&"--keyboard=sdk".into()));
+        assert!(otg.contains(&"--mouse=sdk".into()));
     }
 
     #[test]

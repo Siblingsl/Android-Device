@@ -46,6 +46,7 @@ import { Button } from "../components/ui/Button";
 import { DeviceBroadcastInput } from "../components/device/DeviceBroadcastInput";
 import { DeviceHoverCard } from "../components/device/DeviceHoverCard";
 import { QuickAppLauncher } from "../components/device/QuickAppLauncher";
+import { ArrangementDialog } from "../components/layout/ArrangementDialog";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
@@ -372,6 +373,7 @@ export function Devices() {
   const [tagEditor, setTagEditor] = useState<{ id: string; name: string } | null>(null);
   const [tagDraft, setTagDraft] = useState<string[]>([]);
   const [tagNew, setTagNew] = useState("");
+  const [arrangementOpen, setArrangementOpen] = useState(false);
   const navigate = useNavigate();
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
   const setStatusText = useAppStore((s) => s.setStatusText);
@@ -985,6 +987,13 @@ export function Devices() {
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
         <div className="row devices-header-actions">
+          <Button
+            variant="ghost"
+            icon={<LayoutGrid size={15} />}
+            onClick={() => setArrangementOpen(true)}
+          >
+            窗口编排
+          </Button>
           {historicalOffline.length > 0 && (
             <Button
               variant="ghost"
@@ -2630,6 +2639,13 @@ export function Devices() {
             </div>
           </Card>
         </div>
+      )}
+      {arrangementOpen && (
+        <ArrangementDialog
+          devices={devices}
+          setStatusText={setStatusText}
+          onClose={() => setArrangementOpen(false)}
+        />
       )}
     </div>
   );
