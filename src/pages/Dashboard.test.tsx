@@ -12,11 +12,24 @@ vi.mock("../services/deviceService", () => ({
   },
 }));
 vi.mock("../stores/appStore", () => ({
-  useAppStore: (selector: (state: { setSelectedDeviceId: () => void; setStatusText: () => void }) => unknown) =>
-    selector({ setSelectedDeviceId: () => {}, setStatusText: () => {} }),
+  useAppStore: (selector: (state: typeof mockStoreState) => unknown) => selector(mockStoreState),
 }));
 
 const { DeviceService } = await import("../services/deviceService");
+
+const mockStoreState = vi.hoisted(() => ({
+  monitorAlerts: [] as Array<{
+    id: string;
+    deviceId: string;
+    deviceName: string;
+    kind: "cpu" | "memory" | "both";
+    createdAt: number;
+    severity: "warning" | "critical";
+    alertThreshold: number;
+  }>,
+  setSelectedDeviceId: vi.fn(),
+  setStatusText: vi.fn(),
+}));
 
 /** Shows the router's current location so tests can assert a jump target. */
 function LocationProbe() {
@@ -98,6 +111,64 @@ describe("Dashboard refresh ordering", () => {
     });
     expect(screen.queryByText(/旧统计结果/)).toBeNull();
     expect(screen.getByText(/新统计结果/)).toBeTruthy();
+  });
+});
+
+describe("Dashboard monitor summary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(DeviceService.getDashboard).mockReset();
+    vi.mocked(DeviceService.getDashboard).mockResolvedValue(dashboard("ok", 5));
+    vi.mocked(DeviceService.readinessChecklist).mockReset();
+    vi.mocked(DeviceService.readinessChecklist).mockResolvedValue([]);
+    mockStoreState.monitorAlerts = [];
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("summarizes cross-device alerts and opens the full alert history", async () => {
+    mockStoreState.monitorAlerts = [
+      {
+        id: "alert-critical",
+        deviceId: "device-a",
+        deviceName: "redroid-a",
+        kind: "both",
+        createdAt: Date.now(),
+        severity: "critical",
+        alertThreshold: 80,
+      },
+      {
+        id: "alert-warning",
+        deviceId: "device-b",
+        deviceName: "redroid-b",
+        kind: "cpu",
+        createdAt: Date.now() - 60_000,
+        severity: "warning",
+        alertThreshold: 85,
+      },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/monitor" element={<div data-testid="monitor-page">monitor-history</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("资源告警")).toBeTruthy();
+    expect(screen.getByText("2 条")).toBeTruthy();
+    expect(screen.getByText("redroid-a")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看全部告警" }));
+    expect(screen.getByTestId("monitor-page")).toBeTruthy();
   });
 });
 

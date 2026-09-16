@@ -3,7 +3,6 @@ export const commonZh: Record<string, string> = {
   "common.appName": "Just Run",
   "common.nav.dashboard": "仪表盘",
   "common.nav.devices": "设备中心",
-  "common.nav.monitor": "监控告警",
   // Sidebar's single entry for both runtime tracks (page-merge spec §6.1/#1).
   "common.nav.containers": "容器与节点",
   // Kept on purpose (page-merge spec §6.6): the legacy `/docker` route still
@@ -97,7 +96,6 @@ export const commonEn: Record<string, string> = {
   "common.appName": "Just Run",
   "common.nav.dashboard": "Dashboard",
   "common.nav.devices": "Devices",
-  "common.nav.monitor": "Monitor alerts",
   "common.nav.containers": "Containers & Nodes",
   // Kept on purpose (page-merge spec §6.6): the legacy `/docker` route still
   // redirects, so bookmarks, external references and older landing pages keep

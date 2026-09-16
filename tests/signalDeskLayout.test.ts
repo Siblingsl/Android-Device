@@ -80,6 +80,21 @@ describe("Signal Desk layout", () => {
     );
   });
 
+  it("keeps the Dashboard recent row on the same stat-grid rails", () => {
+    // The 3-up recent row shares the stat rail: the same 7px gap token and
+    // three equal columns, so every vertical split lines up with the rows above.
+    expect(styles).toMatch(
+      /\.page-dashboard \.grid-stats\s*,\s*\.page-dashboard \.grid-2\s*,\s*\.page-dashboard \.grid-3\s*\{[^}]*--dashboard-grid-gap:\s*7px;/s,
+    );
+    for (const block of styles.match(/\.page-dashboard \.grid-3\s*\{[^}]*\}/gs) ?? []) {
+      expect(block).not.toMatch(/grid-template-columns:\s*[^;]*fr/);
+    }
+    expect(styles).toMatch(
+      /\.page-dashboard \.grid-3\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/s,
+    );
+    expect(styles).toMatch(/\.page-dashboard \.grid-3\s*\{[^}]*gap:\s*var\(--dashboard-grid-gap\);\s*\}/s);
+  });
+
   it("keeps device columns aligned across the table header and rows", () => {
     expect(styles).toMatch(/\.devices-table \{[^}]*table-layout:\s*fixed;/s);
     expect(styles).toMatch(/\.devices-table \.device-list-table-head \{[^}]*display:\s*table-row;/s);
@@ -108,9 +123,12 @@ describe("Signal Desk layout", () => {
   it("keeps the persisted monitor alert workspace reachable", () => {
     const app = read("src/App.tsx");
     const sidebar = read("src/components/layout/Sidebar.tsx");
+    const dashboard = read("src/pages/Dashboard.tsx");
     expect(app).toContain('import { MonitorAlertsPage } from "./pages/MonitorAlerts";');
     expect(app).toContain('<Route path="monitor" element={<MonitorAlertsPage />} />');
-    expect(sidebar).toContain('to: "/monitor"');
-    expect(sidebar).toContain('key: "common.nav.monitor"');
+    expect(sidebar).not.toContain('to: "/monitor"');
+    expect(sidebar).not.toContain('key: "common.nav.monitor"');
+    expect(dashboard).toContain('dashboard.card.monitorAlerts');
+    expect(dashboard).toContain('navigate("/monitor")');
   });
 });

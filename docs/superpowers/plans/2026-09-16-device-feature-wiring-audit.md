@@ -17,3 +17,10 @@
 - 不改变 QEMU、Docker、镜像和预装业务。
 - 不把真实设备、外部 AI 服务或原生窗口的人工验收冒充为自动化通过。
 - `DeviceControlBar`、`InteractiveTerminal`、`FileExplorer`、`GroupControlPanel` 和 `RecordingPanel` 若仅由新版工作区替代，则保留源码但不再重复展示。
+
+## 后续信息架构调整
+
+1. 设备详情保留当前设备的资源状态与最近告警，用于就地判断问题。
+2. Dashboard 增加跨设备告警摘要、最近告警和“查看全部”跳转。
+3. 移除侧边栏一级“监控告警”入口，但保留 `/monitor` 详细历史页，作为 Dashboard 和设备详情的深入入口。
+4. 仅调整前端展示与路由入口，不改动后端监控采集边界；后台持续采集仍是独立后续事项。
