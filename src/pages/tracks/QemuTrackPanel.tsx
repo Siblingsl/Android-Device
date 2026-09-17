@@ -21,6 +21,7 @@ import { useAppStore } from "../../stores/appStore";
 import { askConfirm } from "../../lib/dialogs";
 import { copyText } from "../../lib/clipboard";
 import { createRequestSequence } from "../../lib/requestSequence";
+import { runtimeProfileDefaults } from "../../lib/runtimeProfile";
 import type { TrackTaskInfo } from "../../lib/runtimeTrack";
 import { tStatic, useI18n } from "../../i18n";
 import type {
@@ -30,6 +31,7 @@ import type {
   QemuVerifyReport,
   QemuVmEntry,
   QemuRedroidCreateRequest,
+  ResourceProfile,
   MagiskAssets,
   SpoofProfileSummary,
 } from "../../types";
@@ -58,6 +60,7 @@ type NodeForm = {
 
 type InstanceForm = {
   name: string;
+  profile: ResourceProfile;
   cpus: string;
   memoryMib: string;
   width: string;
@@ -92,6 +95,7 @@ const initialNodeForm: NodeForm = {
 
 const initialInstanceForm: InstanceForm = {
   name: "r1",
+  profile: "standard",
   cpus: "1",
   memoryMib: "2048",
   width: "720",
@@ -463,6 +467,18 @@ export default function QemuTrackPanel({
       if (!next.spoofProfileId && !next.spoofProfile.trim()) next.spoofAbilist = next.cleanTraces = false;
       return next;
     });
+  };
+
+  const updateResourceProfile = (profile: ResourceProfile) => {
+    const node = vms.find((vm) => vm.name === selectedVm);
+    if (!node) return;
+    const defaults = runtimeProfileDefaults(profile, node.vcpus, node.memMib);
+    setInstanceForm((form) => ({
+      ...form,
+      profile,
+      cpus: String(defaults.cpus),
+      memoryMib: String(defaults.memoryMib),
+    }));
   };
 
   /**
@@ -846,6 +862,7 @@ export default function QemuTrackPanel({
     const request: QemuRedroidCreateRequest = {
       vm,
       name,
+      profile: instanceForm.profile,
       cpus: Number(instanceForm.cpus) || 0,
       memoryMib: Number(instanceForm.memoryMib) || 0,
       width: Number(instanceForm.width) || 0,
@@ -1408,6 +1425,19 @@ export default function QemuTrackPanel({
                 </div>
                 {upgradeTarget ? <p className="muted" style={{ gridColumn: "1 / -1" }}>{t("qemu.presets.upgradeHint")}</p> : <>
                 <div className="field">
+                  <label htmlFor="qemu-resource-profile">{t("qemu.instances.form.profile")}</label>
+                  <select
+                    id="qemu-resource-profile"
+                    value={instanceForm.profile}
+                    disabled={Boolean(busyKey)}
+                    onChange={(e) => updateResourceProfile(e.target.value as ResourceProfile)}
+                  >
+                    <option value="lean">{t("qemu.instances.form.profileLean")}</option>
+                    <option value="standard">{t("qemu.instances.form.profileStandard")}</option>
+                    <option value="full">{t("qemu.instances.form.profileFull")}</option>
+                  </select>
+                </div>
+                <div className="field">
                   <label>{t("qemu.instances.form.cpus")}</label>
                   <input
                     value={instanceForm.cpus}
@@ -1513,7 +1543,7 @@ export default function QemuTrackPanel({
                         <td>
                           <Button size="sm" disabled={Boolean(busyKey)} onClick={() => {
                             setUpgradeTarget(instance);
-                            setInstanceForm({ ...initialInstanceForm, name: instance.instance, androidVersion: instance.androidVersion || "", image: instance.image || "" });
+                            setInstanceForm({ ...initialInstanceForm, name: instance.instance, profile: instance.profile || "standard", androidVersion: instance.androidVersion || "", image: instance.image || "" });
                             setShowInstanceForm(true);
                           }}>{t("qemu.presets.upgrade")}</Button>
                           <Button size="sm" disabled={!instance.rollbackAvailable || Boolean(busyKey)} loading={busy === `instance-restore-${instance.instance}`} onClick={() => void restoreInstance(instance)}>{t("qemu.presets.restore")}</Button>

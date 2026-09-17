@@ -258,6 +258,8 @@ export interface RuntimeMetrics {
 
 export type MemoryPressure = "normal" | "caution" | "critical" | "unknown";
 
+export type ResourceProfile = "lean" | "standard" | "full";
+
 export type ResourceSnapshotSource = "host" | "qemu" | "guest" | "container" | "adb";
 
 /** Read-only host, QEMU, guest and container resource measurements. */
@@ -756,6 +758,7 @@ export interface QemuRedroidInstance {
   port: number;
   serial: string;
   status: string;
+  profile?: ResourceProfile;
   androidVersion?: string;
   image?: string;
   rollbackAvailable?: boolean;
@@ -799,6 +802,7 @@ export interface QemuRedroidCreateRequest {
   width: number;
   height: number;
   dpi: number;
+  profile?: ResourceProfile;
   image?: string;
   androidVersion?: string;
   installGapps?: boolean;

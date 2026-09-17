@@ -220,18 +220,125 @@ pub struct InstanceDefaults {
     pub width: u32,
     pub height: u32,
     pub dpi: u32,
+    pub install_gapps: bool,
+    pub install_magisk: bool,
+}
+
+/// Runtime footprint preset. These are conservative starting points, not a
+/// promise that every app fits; the actual measured snapshot remains the
+/// source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceProfile {
+    Lean,
+    Standard,
+    Full,
+}
+
+impl Default for ResourceProfile {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl ResourceProfile {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "lean" => Ok(Self::Lean),
+            "standard" | "" => Ok(Self::Standard),
+            "full" => Ok(Self::Full),
+            other => Err(format!(
+                "resource profile must be lean, standard, or full (got {other:?})"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lean => "lean",
+            Self::Standard => "standard",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn container_defaults(self, node_vcpus: u16, node_mem_mib: u32) -> InstanceDefaults {
+        let node_mem_mib = node_mem_mib.max(1024);
+        let reserved = (node_mem_mib / 4).max(512);
+        let available = node_mem_mib.saturating_sub(reserved);
+        let (cpus, memory_mib, install_gapps, install_magisk) = match self {
+            Self::Lean => (
+                ((node_vcpus as u32) / 4).max(1),
+                (available / 2).clamp(1024, 4096),
+                false,
+                false,
+            ),
+            Self::Standard => (
+                ((node_vcpus as u32) / 3).max(1),
+                (node_mem_mib / 4).clamp(1024, 8192),
+                false,
+                false,
+            ),
+            Self::Full => (
+                ((node_vcpus as u32) / 2).max(1),
+                (available / 1).clamp(1536, 8192),
+                true,
+                true,
+            ),
+        };
+        InstanceDefaults {
+            cpus,
+            memory_mib,
+            width: 720,
+            height: 1280,
+            dpi: 320,
+            install_gapps,
+            install_magisk,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceBudgetError {
+    InvalidNodeMemory,
+    InvalidInstanceMemory,
+    InsufficientHeadroom {
+        requested_mib: u64,
+        available_mib: u64,
+        headroom_mib: u64,
+    },
+}
+
+/// Validate a conservative node budget before asking Docker to create a
+/// container. The reserved headroom covers the guest OS, Docker and startup
+/// spikes; it intentionally does not equate a Docker limit with real usage.
+pub fn validate_resource_budget(
+    node_memory_mib: u32,
+    instance_memory_mib: u32,
+    running_instances: u32,
+) -> Result<(), ResourceBudgetError> {
+    if node_memory_mib == 0 {
+        return Err(ResourceBudgetError::InvalidNodeMemory);
+    }
+    if instance_memory_mib < 512 {
+        return Err(ResourceBudgetError::InvalidInstanceMemory);
+    }
+    let headroom_mib = (node_memory_mib / 4).max(512) as u64;
+    let available_mib = (node_memory_mib as u64).saturating_sub(headroom_mib);
+    let requested_mib = (instance_memory_mib as u64).saturating_mul(running_instances as u64);
+    if requested_mib > available_mib {
+        return Err(ResourceBudgetError::InsufficientHeadroom {
+            requested_mib,
+            available_mib,
+            headroom_mib,
+        });
+    }
+    Ok(())
 }
 
 pub fn defaults_for_node(node_vcpus: u16, node_mem_mib: u32) -> InstanceDefaults {
-    let cpus = ((node_vcpus as u32) / 3).clamp(1, 8);
-    let memory_mib = ((node_mem_mib / 4).max(1024)).min(8192);
-    InstanceDefaults {
-        cpus,
-        memory_mib,
-        width: 720,
-        height: 1280,
-        dpi: 320,
-    }
+    let mut defaults = ResourceProfile::Standard.container_defaults(node_vcpus, node_mem_mib);
+    defaults.cpus = defaults.cpus.clamp(1, 8);
+    defaults
 }
 
 #[cfg(test)]
@@ -411,5 +518,22 @@ mod tests {
         assert_eq!(rows[0].instance, "r13");
         assert_eq!(rows[0].memory_limit_bytes, None);
         assert_eq!(rows[0].oom_kills, None);
+    }
+
+    #[test]
+    fn lean_profile_does_not_enable_optional_preloads() {
+        let defaults = ResourceProfile::Lean.container_defaults(4, 4096);
+        assert_eq!(defaults.memory_mib, 1536);
+        assert!(!defaults.install_gapps);
+        assert!(!defaults.install_magisk);
+    }
+
+    #[test]
+    fn budget_rejects_two_instances_that_leave_no_node_headroom() {
+        let result = validate_resource_budget(4096, 2048, 2);
+        assert!(matches!(
+            result,
+            Err(ResourceBudgetError::InsufficientHeadroom { .. })
+        ));
     }
 }

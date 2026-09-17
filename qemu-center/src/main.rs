@@ -192,6 +192,9 @@ enum RedroidCmd {
         cpus: f64,
         #[arg(long, default_value_t = 2048)]
         memory: u32,
+        /// Resource profile used for validation/metadata: lean, standard, or full.
+        #[arg(long, default_value = "standard")]
+        profile: String,
         #[arg(long, default_value_t = 720)]
         width: u32,
         #[arg(long, default_value_t = 1280)]
@@ -318,6 +321,7 @@ fn main() {
                 name,
                 cpus,
                 memory,
+                profile,
                 width,
                 height,
                 dpi,
@@ -326,7 +330,7 @@ fn main() {
                 bind,
                 cgroup_parent,
             } => cmd_redroid_create(
-                &state_dir, &vm, &name, cpus, memory, width, height, dpi, &gpu_mode, image, bind, cgroup_parent,
+                &state_dir, &vm, &name, cpus, memory, &profile, width, height, dpi, &gpu_mode, image, bind, cgroup_parent,
             ),
             RedroidCmd::Start { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "start"),
             RedroidCmd::Stop { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "stop"),
@@ -1553,6 +1557,7 @@ fn cmd_redroid_create(
     inst: &str,
     cpus: f64,
     memory: u32,
+    profile: &str,
     width: u32,
     height: u32,
     dpi: u32,
@@ -1573,6 +1578,10 @@ fn cmd_redroid_create(
     let Some(gpu) = parse_gpu_mode(gpu_mode) else {
         return err_exit("gpu-mode must be 'guest' or 'host'");
     };
+    let profile = match redroid::ResourceProfile::parse(profile) {
+        Ok(profile) => profile,
+        Err(e) => return err_exit(&e),
+    };
     let mut registry = match vm::load_registry(state_dir) {
         Ok(r) => r,
         Err(e) => return err_exit(&e),
@@ -1583,6 +1592,16 @@ fn cmd_redroid_create(
     let container = redroid::container_name(inst);
     if entry.adb_assignments.contains_key(inst) {
         return err_exit(&format!("instance {inst:?} already assigned on VM {vm_name:?}"));
+    }
+    if let Err(error) = redroid::validate_resource_budget(
+        entry.mem_mib,
+        memory,
+        entry.adb_assignments.len().saturating_add(1) as u32,
+    ) {
+        return err_exit(&format!(
+            "resource profile {} cannot fit this VM: {error:?}",
+            profile.as_str()
+        ));
     }
     let Some(port) = entry.next_free_adb_port() else {
         return err_exit(&format!(

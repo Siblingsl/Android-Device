@@ -408,6 +408,7 @@ def details(docker, request):
         except (ValueError, RuntimeError):
             pass
         rows.append({"instance": instance, "androidVersion": version, "image": inspected["Config"]["Image"],
+                     "resourceProfile": inspected["Config"].get("Labels", {}).get("rdc.qemu.profile", "standard"),
                      "rollbackAvailable": docker.exists(name + "-preupgrade"),
                      "metrics": runtime_metrics(inspected)})
     print(json.dumps(rows))
@@ -437,7 +438,10 @@ def main(request):
             architecture = json.loads(docker.cli("image", "inspect", request["baseImage"]))[0]["Architecture"]
             if architecture != "amd64":
                 raise ValueError("QEMU presets require an x86_64/amd64 image")
-            docker.cli("build", "--label", "rdc.qemu.android=" + version, "-t", request["image"], request["context"], timeout=1200)
+            build_args = ["build", "--label", "rdc.qemu.android=" + version]
+            build_args.extend(["--label", "rdc.qemu.profile=" + (request.get("resourceProfile") or "standard")])
+            build_args.extend(["-t", request["image"], request["context"]])
+            docker.cli(*build_args, timeout=1200)
             print("[build] " + request["image"])
         elif action == "seed":
             docker.cli("volume", "create", "qc-" + name + "-data")

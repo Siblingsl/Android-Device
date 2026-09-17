@@ -20,6 +20,9 @@ fn valid_name(name: &str) -> bool {
 
 fn validate(req: &QemuRedroidCreateRequest, upgrade: bool) -> Result<(), String> {
     if !valid_name(&req.vm) || !valid_name(&req.name) { return Err("节点/实例名称无效".into()); }
+    if !matches!(req.profile.trim(), "" | "lean" | "standard" | "full") {
+        return Err("资源 profile 必须是 lean、standard 或 full".into());
+    }
     if !upgrade && (!req.cpus.is_finite() || req.cpus <= 0.0 || req.memory_mib < 512 || req.width == 0 || req.height == 0 || req.dpi == 0) {
         return Err("CPU、内存、分辨率和 DPI 必须是有效的正数（内存至少 512 MiB）".into());
     }
@@ -180,6 +183,7 @@ fn prepare(req: &QemuRedroidCreateRequest, base: &str, version: &str, work: &Pat
     let key = home.and_then(|p| std::fs::read_to_string(p.join(".android/adbkey.pub")).ok()).unwrap_or_default();
     if req.install_magisk && key.trim().is_empty() { return Err("未找到宿主 ADB 公钥，请先使用设备中心连接一次设备".into()); }
     Ok(json!({"name": req.name, "androidVersion": version, "baseImage": base,
+              "resourceProfile": if req.profile.trim().is_empty() { "standard" } else { req.profile.trim() },
               "installGapps": req.install_gapps, "installMagisk": req.install_magisk,
               "installLsposed": req.install_lsposed, "installCloak": req.install_cloak,
               "cleanTraces": req.clean_traces, "moduleIds": ids, "hidePackages": req.hide_packages,
@@ -278,6 +282,11 @@ pub fn enrich(vm: &str, rows: &mut [QemuRedroidInstance]) {
         if let Some(detail) = details.iter().find(|d| d["instance"] == row.instance) {
             row.android_version = detail["androidVersion"].as_str().unwrap_or("").into();
             row.image = detail["image"].as_str().unwrap_or("").into();
+            row.profile = match detail["resourceProfile"].as_str().unwrap_or("standard") {
+                "lean" => "lean".into(),
+                "full" => "full".into(),
+                _ => "standard".into(),
+            };
             row.rollback_available = detail["rollbackAvailable"].as_bool().unwrap_or(false);
             row.metrics = detail
                 .get("metrics")

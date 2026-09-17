@@ -125,6 +125,8 @@ pub struct QemuRedroidInstance {
     pub serial: String,
     pub status: String,
     #[serde(default)]
+    pub profile: String,
+    #[serde(default)]
     pub android_version: String,
     #[serde(default)]
     pub image: String,
@@ -185,6 +187,9 @@ pub struct QemuRedroidCreateRequest {
     pub width: u32,
     pub height: u32,
     pub dpi: u32,
+    /// `lean` | `standard` | `full`; absent requests remain standard.
+    #[serde(default = "default_resource_profile")]
+    pub profile: String,
     #[serde(default)]
     pub image: Option<String>,
     #[serde(default)]
@@ -218,6 +223,10 @@ pub struct QemuRedroidCreateRequest {
     #[serde(default)]
     pub clean_traces: bool,
 
+}
+
+fn default_resource_profile() -> String {
+    "standard".into()
 }
 
 // ------------------------------------------------------- raw JSON (CLI only) --
@@ -303,6 +312,8 @@ struct RawRedroidEntry {
     serial: String,
     #[serde(default)]
     status: String,
+    #[serde(default)]
+    profile: String,
 }
 
 #[derive(Deserialize)]
@@ -762,6 +773,9 @@ pub fn args_redroid_create(request: &QemuRedroidCreateRequest) -> Vec<String> {
     if let Some(image) = request.image.as_deref().filter(|s| !s.is_empty()) {
         args.extend(["--image".into(), image.into()]);
     }
+    if request.profile != "standard" && !request.profile.is_empty() {
+        args.extend(["--profile".into(), request.profile.clone()]);
+    }
     args
 }
 
@@ -885,6 +899,11 @@ pub fn parse_redroid_list_json(raw: &str) -> Result<Vec<QemuRedroidInstance>, St
             container: entry.container,
             port: entry.port,
             status: entry.status,
+            profile: if entry.profile.is_empty() {
+                "standard".into()
+            } else {
+                entry.profile
+            },
             android_version: String::new(),
             image: String::new(),
             rollback_available: false,
@@ -1411,6 +1430,34 @@ mod tests {
             args_redroid_stats("node1", Some("r13")),
             vec!["redroid", "stats", "node1", "r13", "--json"]
         );
+    }
+
+    #[test]
+    fn redroid_create_argv_serializes_only_nonstandard_profile() {
+        let mut request = QemuRedroidCreateRequest {
+            vm: "node1".into(),
+            name: "r1".into(),
+            cpus: 1.0,
+            memory_mib: 1536,
+            width: 720,
+            height: 1280,
+            dpi: 320,
+            profile: "lean".into(),
+            ..Default::default()
+        };
+        let args = args_redroid_create(&request);
+        assert!(args.windows(2).any(|pair| pair == ["--profile", "lean"]));
+        request.profile = "standard".into();
+        assert!(!args_redroid_create(&request).contains(&"--profile".into()));
+    }
+
+    #[test]
+    fn redroid_create_request_defaults_to_standard_profile() {
+        let request: QemuRedroidCreateRequest = serde_json::from_str(
+            r#"{"vm":"node1","name":"r1","cpus":1,"memoryMib":1536,"width":720,"height":1280,"dpi":320}"#,
+        )
+        .unwrap();
+        assert_eq!(request.profile, "standard");
     }
 
     #[test]
