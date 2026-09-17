@@ -1,8 +1,8 @@
 use crate::models::*;
 use crate::services::{
     adb, audit, battery, cloak, config, device, docker, geo, gnirehtet, log, proxy, recording,
-    root, scrcpy, settings, spoof, terminal, terminal_session, transfer, usage, wireless,
-    wsl_kernel,
+    resource_monitor, root, scrcpy, settings, spoof, terminal, terminal_session, transfer, usage,
+    wireless, wsl_kernel,
 };
 use base64::Engine;
 use serde::Deserialize;
@@ -48,6 +48,19 @@ pub async fn get_system_status() -> SystemStatus {
 #[tauri::command]
 pub async fn readiness_checklist() -> Vec<crate::services::readiness::ReadinessItem> {
     blocking(crate::services::readiness::checklist).await
+}
+
+/// Read-only host/QEMU resource snapshot. Guest/container fields remain
+/// unknown until the qemu-center stats command is implemented.
+#[tauri::command]
+pub async fn read_runtime_resource_snapshot(
+    vm: Option<String>,
+    instance: Option<String>,
+) -> Result<resource_monitor::RuntimeResourceSnapshot, String> {
+    blocking_res(move || {
+        resource_monitor::read_runtime_resource_snapshot(vm.as_deref(), instance.as_deref())
+    })
+    .await
 }
 
 // ---- Devices ----
@@ -1658,6 +1671,14 @@ pub async fn qemu_redroid_list(
     vm: String,
 ) -> Result<Vec<crate::services::qemu::QemuRedroidInstance>, String> {
     blocking_res(move || crate::services::qemu::redroid_list(&vm)).await
+}
+
+#[tauri::command]
+pub async fn qemu_redroid_stats(
+    vm: String,
+    instance: Option<String>,
+) -> Result<Vec<crate::services::qemu::QemuRedroidRuntimeStats>, String> {
+    blocking_res(move || crate::services::qemu::redroid_stats(&vm, instance.as_deref())).await
 }
 
 #[tauri::command]

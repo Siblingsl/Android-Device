@@ -11,6 +11,8 @@
 //! Container naming: `qc-<name>` — the `qc-` prefix keeps them greppable and
 //! unambiguous inside a guest that may also run unrelated containers.
 
+use serde::{Deserialize, Serialize};
+
 /// GPU mode for `androidboot.redroid_gpu_mode`. A QEMU guest has no `/dev/dri`
 /// unless a GPU device is passed through, so `Guest` (SwiftShader) is the
 /// correct default in this architecture; `Host` is supported for future
@@ -159,6 +161,40 @@ pub fn docker_ps_args() -> Vec<String> {
         "--format".into(),
         "{{.Names}}\\t{{.Status}}\\t{{.Ports}}".into(),
     ]
+}
+
+/// Read-only runtime measurements for one redroid container. A stopped or
+/// partially provisioned container is still represented; unavailable values
+/// stay `None` so callers never mistake missing data for zero usage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct RedroidRuntimeStats {
+    pub instance: String,
+    #[serde(default)]
+    pub container: String,
+    #[serde(default)]
+    pub status: String,
+    pub memory_limit_bytes: Option<u64>,
+    pub memory_current_bytes: Option<u64>,
+    pub memory_peak_bytes: Option<u64>,
+    pub oom_kills: Option<u64>,
+    pub cpu_usage_percent: Option<f64>,
+    pub boot_completed: Option<bool>,
+}
+
+/// CLI argv for `redroid stats <vm> [instance] --json`.
+pub fn redroid_stats_args(vm: &str, instance: Option<&str>) -> Vec<String> {
+    let mut args = vec!["redroid".into(), "stats".into(), vm.into()];
+    if let Some(instance) = instance.filter(|value| !value.is_empty()) {
+        args.push(instance.into());
+    }
+    args.push("--json".into());
+    args
+}
+
+/// Parse the stable JSON contract emitted by the stats command.
+pub fn parse_redroid_stats_json(raw: &str) -> Result<Vec<RedroidRuntimeStats>, String> {
+    serde_json::from_str(raw).map_err(|e| format!("parse redroid stats JSON failed: {e}"))
 }
 
 /// Judge `docker exec … getprop sys.boot_completed` output.
@@ -358,5 +394,22 @@ mod tests {
         assert_eq!(tiny.cpus, 1);
         assert_eq!(tiny.memory_mib, 1024);
         assert_eq!((big.width, big.height, big.dpi), (720, 1280, 320));
+    }
+
+    #[test]
+    fn stats_command_requests_cgroup_and_boot_state_without_mutation() {
+        let args = redroid_stats_args("node1", Some("r13"));
+        assert_eq!(args, vec!["redroid", "stats", "node1", "r13", "--json"]);
+    }
+
+    #[test]
+    fn stats_parser_preserves_missing_cgroup_values_as_none() {
+        let rows = parse_redroid_stats_json(
+            r#"[{"instance":"r13","memory_limit_bytes":null,"oom_kills":null}]"#,
+        )
+        .unwrap();
+        assert_eq!(rows[0].instance, "r13");
+        assert_eq!(rows[0].memory_limit_bytes, None);
+        assert_eq!(rows[0].oom_kills, None);
     }
 }

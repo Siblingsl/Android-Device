@@ -44,10 +44,12 @@ import type {
   QemuDoctorReport,
   QemuRedroidCreateRequest,
   QemuRedroidInstance,
+  QemuRedroidRuntimeStats,
   QemuVerifyReport,
   QemuVmCreateRequest,
   QemuVmEntry,
   ReadinessItem,
+  RuntimeResourceSnapshot,
 } from "../types";
 
 /** Unified Device Service — all device capabilities go through here */
@@ -68,6 +70,12 @@ export const DeviceService = {
   getSystemStatus: () => invoke<SystemStatus>("get_system_status"),
   /** First-use readiness checklist (Dashboard 待办卡). */
   readinessChecklist: () => invoke<ReadinessItem[]>("readiness_checklist"),
+  /** Read-only resource snapshot for the selected QEMU/Redroid runtime. */
+  readRuntimeResourceSnapshot: (vm?: string, instance?: string) =>
+    invoke<RuntimeResourceSnapshot>("read_runtime_resource_snapshot", {
+      vm: vm ?? null,
+      instance: instance ?? null,
+    }),
 
   // Devices
   listDevices: () => invoke<DeviceInfo[]>("list_devices"),
@@ -501,6 +509,11 @@ export const QemuService = {
     invoke<QemuCliOutput>("qemu_redroid_restore", { vm, name }),
   redroidList: (vm: string) =>
     invoke<QemuRedroidInstance[]>("qemu_redroid_list", { vm }),
+  redroidStats: (vm: string, instance?: string) =>
+    invoke<QemuRedroidRuntimeStats[]>("qemu_redroid_stats", {
+      vm,
+      instance: instance ?? null,
+    }),
   adbList: () => invoke<QemuAdbMapping[]>("qemu_adb_list"),
   verify: (vm: string) => invoke<QemuVerifyReport>("qemu_verify", { vm }),
 };

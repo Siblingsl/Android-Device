@@ -134,6 +134,22 @@ pub struct QemuRedroidInstance {
     pub metrics: Option<RuntimeMetrics>,
 }
 
+/// Read-only guest/container resource measurements returned by
+/// `qemu-center redroid stats`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QemuRedroidRuntimeStats {
+    pub instance: String,
+    pub container: String,
+    pub status: String,
+    pub memory_limit_bytes: Option<u64>,
+    pub memory_current_bytes: Option<u64>,
+    pub memory_peak_bytes: Option<u64>,
+    pub oom_kills: Option<u64>,
+    pub cpu_usage_percent: Option<f64>,
+    pub boot_completed: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QemuAdbMapping {
@@ -287,6 +303,22 @@ struct RawRedroidEntry {
     serial: String,
     #[serde(default)]
     status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RawRedroidRuntimeStats {
+    instance: String,
+    #[serde(default)]
+    container: String,
+    #[serde(default)]
+    status: String,
+    memory_limit_bytes: Option<u64>,
+    memory_current_bytes: Option<u64>,
+    memory_peak_bytes: Option<u64>,
+    oom_kills: Option<u64>,
+    cpu_usage_percent: Option<f64>,
+    boot_completed: Option<bool>,
 }
 
 // ------------------------------------------------------------- binary lookup --
@@ -737,6 +769,15 @@ pub fn args_redroid_list(vm: &str) -> Vec<String> {
     vec!["redroid".into(), "list".into(), vm.into(), "--json".into()]
 }
 
+pub fn args_redroid_stats(vm: &str, instance: Option<&str>) -> Vec<String> {
+    let mut args = vec!["redroid".into(), "stats".into(), vm.into()];
+    if let Some(instance) = instance.filter(|value| !value.is_empty()) {
+        args.push(instance.into());
+    }
+    args.push("--json".into());
+    args
+}
+
 pub fn args_adb_list() -> Vec<String> {
     vec!["adb".into(), "list".into(), "--json".into()]
 }
@@ -852,6 +893,24 @@ pub fn parse_redroid_list_json(raw: &str) -> Result<Vec<QemuRedroidInstance>, St
         .collect())
 }
 
+pub fn parse_redroid_stats_json(raw: &str) -> Result<Vec<QemuRedroidRuntimeStats>, String> {
+    let parsed: Vec<RawRedroidRuntimeStats> = parse_json(raw)?;
+    Ok(parsed
+        .into_iter()
+        .map(|row| QemuRedroidRuntimeStats {
+            instance: row.instance,
+            container: row.container,
+            status: row.status,
+            memory_limit_bytes: row.memory_limit_bytes,
+            memory_current_bytes: row.memory_current_bytes,
+            memory_peak_bytes: row.memory_peak_bytes,
+            oom_kills: row.oom_kills,
+            cpu_usage_percent: row.cpu_usage_percent,
+            boot_completed: row.boot_completed,
+        })
+        .collect())
+}
+
 pub fn parse_adb_list_json(raw: &str) -> Result<Vec<QemuAdbMapping>, String> {
     // The CLI serializes `Vec<(String, String, String)>` as an array of
     // three-element arrays: [serial, vm, instance].
@@ -936,6 +995,14 @@ pub fn redroid_list(vm: &str) -> Result<Vec<QemuRedroidInstance>, String> {
     let mut rows = parse_redroid_list_json(&output.stdout)?;
     crate::services::qemu_presets::enrich(vm, &mut rows);
     Ok(rows)
+}
+
+pub fn redroid_stats(
+    vm: &str,
+    instance: Option<&str>,
+) -> Result<Vec<QemuRedroidRuntimeStats>, String> {
+    let output = run_cli(&args_redroid_stats(vm, instance), Duration::from_secs(90))?;
+    parse_redroid_stats_json(&output.stdout)
 }
 
 pub fn adb_list() -> Result<Vec<QemuAdbMapping>, String> {
@@ -1332,6 +1399,31 @@ mod tests {
         assert_eq!(instances[0].status, "Up 3 minutes");
         assert_eq!(instances[1].serial, "127.0.0.1:24501");
         assert_eq!(instances[1].status, "unknown");
+    }
+
+    #[test]
+    fn redroid_stats_argv_supports_all_and_single_instance() {
+        assert_eq!(
+            args_redroid_stats("node1", None),
+            vec!["redroid", "stats", "node1", "--json"]
+        );
+        assert_eq!(
+            args_redroid_stats("node1", Some("r13")),
+            vec!["redroid", "stats", "node1", "r13", "--json"]
+        );
+    }
+
+    #[test]
+    fn redroid_stats_json_keeps_nullable_resource_fields() {
+        let rows = parse_redroid_stats_json(
+            r#"[{"instance":"r13","container":"qc-r13","status":"Up","memory_limit_bytes":null,"memory_current_bytes":123,"memory_peak_bytes":null,"oom_kills":null,"cpu_usage_percent":null,"boot_completed":true}]"#,
+        )
+        .unwrap();
+        assert_eq!(rows[0].instance, "r13");
+        assert_eq!(rows[0].memory_current_bytes, Some(123));
+        assert_eq!(rows[0].memory_limit_bytes, None);
+        assert_eq!(rows[0].oom_kills, None);
+        assert_eq!(rows[0].boot_completed, Some(true));
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub fn run() {
             get_dashboard,
             get_system_status,
             readiness_checklist,
+            read_runtime_resource_snapshot,
             // Devices
             list_devices,
             list_devices_unified,
@@ -274,6 +275,7 @@ pub fn run() {
             qemu_redroid_upgrade,
             qemu_redroid_restore,
             qemu_redroid_list,
+            qemu_redroid_stats,
             qemu_adb_list,
             qemu_verify,
         ])

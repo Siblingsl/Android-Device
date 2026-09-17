@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { DeviceService } from "./deviceService";
+import { DeviceService, QemuService } from "./deviceService";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../lib/errors", () => ({
@@ -45,5 +45,59 @@ describe("DeviceService tracked file transfers", () => {
       operationId: "op-2",
     });
     expect(invoke).toHaveBeenNthCalledWith(2, "cancel_file_transfer", { operationId: "op-2" });
+  });
+
+  it("maps the read-only runtime resource snapshot query", async () => {
+    const snapshot = {
+      capturedAt: "2026-09-17T04:00:00Z",
+      hostTotalBytes: 16_000,
+      hostAvailableBytes: null,
+      qemuPrivateBytes: null,
+      qemuWorkingSetBytes: null,
+      wslPrivateBytes: null,
+      vmMemoryMiB: 4096,
+      vmVcpus: 4,
+      instanceMemoryLimitBytes: null,
+      instanceMemoryCurrentBytes: null,
+      instanceMemoryPeakBytes: null,
+      instanceOomKills: null,
+      bootCompleted: null,
+      appReadyMs: null,
+      source: "host",
+    } as const;
+    vi.mocked(invoke).mockResolvedValueOnce(snapshot);
+
+    const result = await DeviceService.readRuntimeResourceSnapshot("node1", "r13");
+
+    expect(invoke).toHaveBeenCalledWith("read_runtime_resource_snapshot", {
+      vm: "node1",
+      instance: "r13",
+    });
+    expect(result).toEqual(snapshot);
+  });
+
+  it("maps nullable QEMU redroid stats without changing missing values", async () => {
+    const stats = [
+      {
+        instance: "r13",
+        container: "qc-r13",
+        status: "running",
+        memoryLimitBytes: null,
+        memoryCurrentBytes: 123,
+        memoryPeakBytes: null,
+        oomKills: null,
+        cpuUsagePercent: null,
+        bootCompleted: true,
+      },
+    ];
+    vi.mocked(invoke).mockResolvedValueOnce(stats);
+
+    const result = await QemuService.redroidStats("node1", "r13");
+
+    expect(invoke).toHaveBeenCalledWith("qemu_redroid_stats", {
+      vm: "node1",
+      instance: "r13",
+    });
+    expect(result).toEqual(stats);
   });
 });

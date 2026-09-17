@@ -113,6 +113,39 @@ pub fn cmd_docker_ps_qc() -> &'static str {
     "docker ps -a --filter name=^qc- --format '{{.Names}}\\t{{.Status}}\\t{{.Ports}}'"
 }
 
+/// Read-only machine-readable collection for redroid runtime stats.
+///
+/// Each line has a fixed prefix so the CLI can safely combine Docker inspect
+/// JSON with nullable cgroup/CPU/boot measurements without parsing human
+/// tables. The command deliberately uses `ps -a`, so exited containers remain
+/// visible and can be reported with their last known status.
+pub fn cmd_redroid_stats(instance: Option<&str>) -> String {
+    let filter = match instance {
+        Some(name) => format!("^qc-{name}$"),
+        None => "^qc-".to_string(),
+    };
+    format!(
+        r#"set +e
+for id in $(docker ps -a --filter 'name={filter}' --format '{{{{.ID}}}}'); do
+  docker inspect "$id" --format 'QC_INSPECT	{{{{json .}}}}'
+  metrics=$(docker exec "$id" sh -c '
+    current=
+    peak=
+    oom=
+    if [ -r /sys/fs/cgroup/memory.current ]; then current=$(cat /sys/fs/cgroup/memory.current); elif [ -r /sys/fs/cgroup/memory.usage_in_bytes ]; then current=$(cat /sys/fs/cgroup/memory.usage_in_bytes); fi
+    if [ -r /sys/fs/cgroup/memory.peak ]; then peak=$(cat /sys/fs/cgroup/memory.peak); elif [ -r /sys/fs/cgroup/memory.max_usage_in_bytes ]; then peak=$(cat /sys/fs/cgroup/memory.max_usage_in_bytes); fi
+    if [ -r /sys/fs/cgroup/memory.events ]; then oom=$(awk "\$1 == \\"oom_kill\\" {{ print \$2 }}" /sys/fs/cgroup/memory.events); fi
+    printf "%s|%s|%s" "$current" "$peak" "$oom"
+  ' 2>/dev/null)
+  printf 'QC_CGROUP\t%s\t%s\n' "$id" "$metrics"
+  cpu=$(docker stats --no-stream --format '{{{{.CPUPerc}}}}' "$id" 2>/dev/null | tr -d '%')
+  printf 'QC_CPU\t%s\t%s\n' "$id" "$cpu"
+  boot=$(docker exec "$id" getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
+  printf 'QC_BOOT\t%s\t%s\n' "$id" "$boot"
+done"#
+    )
+}
+
 /// Parse one line of [`cmd_docker_ps_qc`] output (Name\\tStatus\\tPorts).
 /// Lines for non-`qc-` containers yield `None`.
 pub fn parse_docker_ps_line(line: &str) -> Option<(String, String, String)> {
@@ -255,6 +288,21 @@ mod tests {
         );
         assert!(cmd_docker_ps_qc().contains("--filter name=^qc-"));
         assert!(cmd_docker_ps_qc().contains("{{.Names}}"));
+    }
+
+    #[test]
+    fn redroid_stats_command_is_read_only_and_machine_parseable() {
+        let command = cmd_redroid_stats(Some("r13"));
+        assert!(command.contains("docker ps -a"));
+        assert!(command.contains("QC_INSPECT"));
+        assert!(command.contains("QC_CGROUP"));
+        assert!(command.contains("memory.current"));
+        assert!(command.contains("memory.peak"));
+        assert!(command.contains("getprop sys.boot_completed"));
+        assert!(command.contains("docker stats --no-stream"));
+        assert!(command.contains("^qc-r13$"));
+        assert!(!command.contains("docker stop"));
+        assert!(!command.contains("docker rm"));
     }
 
     #[test]

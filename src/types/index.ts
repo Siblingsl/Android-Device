@@ -256,6 +256,29 @@ export interface RuntimeMetrics {
   finishedAt: string | null;
 }
 
+export type MemoryPressure = "normal" | "caution" | "critical" | "unknown";
+
+export type ResourceSnapshotSource = "host" | "qemu" | "guest" | "container" | "adb";
+
+/** Read-only host, QEMU, guest and container resource measurements. */
+export interface RuntimeResourceSnapshot {
+  capturedAt: string;
+  hostTotalBytes: number | null;
+  hostAvailableBytes: number | null;
+  qemuPrivateBytes: number | null;
+  qemuWorkingSetBytes: number | null;
+  wslPrivateBytes: number | null;
+  vmMemoryMiB: number | null;
+  vmVcpus: number | null;
+  instanceMemoryLimitBytes: number | null;
+  instanceMemoryCurrentBytes: number | null;
+  instanceMemoryPeakBytes: number | null;
+  instanceOomKills: number | null;
+  bootCompleted: boolean | null;
+  appReadyMs: number | null;
+  source: ResourceSnapshotSource;
+}
+
 export interface DockerContainer {
   id: string;
   name: string;
@@ -737,6 +760,18 @@ export interface QemuRedroidInstance {
   image?: string;
   rollbackAvailable?: boolean;
   metrics?: RuntimeMetrics | null;
+}
+
+export interface QemuRedroidRuntimeStats {
+  instance: string;
+  container: string;
+  status: string;
+  memoryLimitBytes: number | null;
+  memoryCurrentBytes: number | null;
+  memoryPeakBytes: number | null;
+  oomKills: number | null;
+  cpuUsagePercent: number | null;
+  bootCompleted: boolean | null;
 }
 
 export interface QemuAdbMapping {

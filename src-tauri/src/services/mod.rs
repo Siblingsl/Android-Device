@@ -17,6 +17,7 @@ pub mod preset;
 pub mod qemu;
 pub mod qemu_presets;
 pub mod readiness;
+pub mod resource_monitor;
 pub mod recording;
 pub mod root;
 pub mod scrcpy;

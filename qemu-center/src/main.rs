@@ -8,6 +8,7 @@
 //! all logic here is unit-tested as pure functions; actual QEMU/SSH/docker
 //! execution needs a real WHPX-capable host (`doctor` / `verify`).
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -217,6 +218,14 @@ enum RedroidCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read-only memory, CPU, OOM and boot measurements from the guest.
+    Stats {
+        vm: String,
+        /// Restrict the report to one instance.
+        instance: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -322,6 +331,9 @@ fn main() {
             RedroidCmd::Start { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "start"),
             RedroidCmd::Stop { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "stop"),
             RedroidCmd::List { vm, json } => cmd_redroid_list(&state_dir, &vm, json),
+            RedroidCmd::Stats { vm, instance, json } => {
+                cmd_redroid_stats(&state_dir, &vm, instance.as_deref(), json)
+            }
         },
         Cmd::Adb { cmd } => match cmd {
             AdbCmd::Map { vm, name } => cmd_adb_map(&state_dir, &vm, name),
@@ -1687,6 +1699,208 @@ fn cmd_redroid_list(state_dir: &Path, vm_name: &str, json: bool) -> i32 {
     0
 }
 
+fn optional_u64(value: Option<&serde_json::Value>) -> Option<u64> {
+    let value = value?;
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().filter(|n| *n >= 0).map(|n| n as u64))
+}
+
+fn optional_metric(raw: &str) -> Option<u64> {
+    let value = raw.trim();
+    if value.is_empty() || value == "max" {
+        None
+    } else {
+        value.parse().ok()
+    }
+}
+
+fn parse_guest_redroid_stats(raw: &str) -> Result<Vec<redroid::RedroidRuntimeStats>, String> {
+    let mut rows = BTreeMap::<String, redroid::RedroidRuntimeStats>::new();
+    let mut cgroups = BTreeMap::<String, (Option<u64>, Option<u64>, Option<u64>)>::new();
+    let mut cpus = BTreeMap::<String, Option<f64>>::new();
+    let mut boots = BTreeMap::<String, Option<bool>>::new();
+
+    for line in raw.lines() {
+        if let Some(json) = line.strip_prefix("QC_INSPECT\t") {
+            let value: serde_json::Value = serde_json::from_str(json)
+                .map_err(|e| format!("invalid Docker inspect row: {e}"))?;
+            let id = value
+                .get("Id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| "Docker inspect row has no Id".to_string())?
+                .to_string();
+            let container = value
+                .get("Name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim_start_matches('/')
+                .to_string();
+            let Some(instance) = container.strip_prefix("qc-") else {
+                continue;
+            };
+            let status = value
+                .pointer("/State/Status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let memory_limit_bytes = optional_u64(value.pointer("/HostConfig/Memory"))
+                .filter(|limit| *limit > 0);
+            rows.insert(
+                id,
+                redroid::RedroidRuntimeStats {
+                    instance: instance.to_string(),
+                    container,
+                    status,
+                    memory_limit_bytes,
+                    memory_current_bytes: None,
+                    memory_peak_bytes: None,
+                    oom_kills: None,
+                    cpu_usage_percent: None,
+                    boot_completed: None,
+                },
+            );
+        } else if let Some(fields) = line.strip_prefix("QC_CGROUP\t") {
+            let mut parts = fields.splitn(2, '\t');
+            let Some(id) = parts.next() else { continue };
+            let values: Vec<_> = parts.next().unwrap_or_default().split('|').collect();
+            if values.len() == 3 {
+                cgroups.insert(
+                    id.to_string(),
+                    (
+                        optional_metric(values[0]),
+                        optional_metric(values[1]),
+                        optional_metric(values[2]),
+                    ),
+                );
+            }
+        } else if let Some(fields) = line.strip_prefix("QC_CPU\t") {
+            let mut parts = fields.splitn(2, '\t');
+            let Some(id) = parts.next() else { continue };
+            let value = parts
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite() && *value >= 0.0);
+            cpus.insert(id.to_string(), value);
+        } else if let Some(fields) = line.strip_prefix("QC_BOOT\t") {
+            let mut parts = fields.splitn(2, '\t');
+            let Some(id) = parts.next() else { continue };
+            let value = match parts.next().unwrap_or_default().trim() {
+                "1" => Some(true),
+                "0" => Some(false),
+                _ => None,
+            };
+            boots.insert(id.to_string(), value);
+        }
+    }
+
+    for (id, row) in &mut rows {
+        if let Some((current, peak, oom)) = cgroups.get(id) {
+            row.memory_current_bytes = *current;
+            row.memory_peak_bytes = *peak;
+            row.oom_kills = *oom;
+        }
+        if let Some(cpu) = cpus.get(id) {
+            row.cpu_usage_percent = *cpu;
+        }
+        if let Some(boot) = boots.get(id) {
+            row.boot_completed = *boot;
+        }
+    }
+
+    Ok(rows.into_values().collect())
+}
+
+fn cmd_redroid_stats(
+    state_dir: &Path,
+    vm_name: &str,
+    instance: Option<&str>,
+    json: bool,
+) -> i32 {
+    if let Some(instance) = instance {
+        if let Err(e) = redroid::validate_instance_name(instance) {
+            return err_exit(&e);
+        }
+    }
+    let entry = match get_vm(state_dir, vm_name) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    let argv = ssh_cmd_for(&entry, state_dir, &guest::cmd_redroid_stats(instance));
+    let out = exec::run_command(&argv, Duration::from_secs(90));
+    if !out.success {
+        return err_exit(&format!(
+            "redroid stats failed: {}",
+            out.stderr_last_line()
+        ));
+    }
+    let mut rows = match parse_guest_redroid_stats(&out.stdout) {
+        Ok(rows) => rows,
+        Err(e) => return err_exit(&e),
+    };
+    // Keep registry assignments visible even if Docker was removed or the
+    // guest command could not inspect a particular container.
+    for name in entry.adb_assignments.keys() {
+        if instance.is_some_and(|wanted| wanted != name) {
+            continue;
+        }
+        if rows.iter().any(|row| row.instance == *name) {
+            continue;
+        }
+        rows.push(redroid::RedroidRuntimeStats {
+            instance: name.clone(),
+            container: redroid::container_name(name),
+            status: "unknown".into(),
+            memory_limit_bytes: None,
+            memory_current_bytes: None,
+            memory_peak_bytes: None,
+            oom_kills: None,
+            cpu_usage_percent: None,
+            boot_completed: None,
+        });
+    }
+    rows.sort_by(|left, right| left.instance.cmp(&right.instance));
+    if json {
+        match serde_json::to_string_pretty(&rows) {
+            Ok(text) => println!("{text}"),
+            Err(e) => return err_exit(&format!("serialize redroid stats: {e}")),
+        }
+        return 0;
+    }
+    println!(
+        "{:<16} {:<12} {:>14} {:>14} {:>10} {:>8}",
+        "INSTANCE", "STATUS", "CURRENT", "PEAK", "OOM KILLS", "BOOT"
+    );
+    for row in rows {
+        println!(
+            "{:<16} {:<12} {:>14} {:>14} {:>10} {:>8}",
+            row.instance,
+            row.status,
+            format_stat_bytes(row.memory_current_bytes),
+            format_stat_bytes(row.memory_peak_bytes),
+            row.oom_kills
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".into()),
+            match row.boot_completed {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "n/a",
+            }
+        );
+    }
+    0
+}
+
+fn format_stat_bytes(value: Option<u64>) -> String {
+    value
+        .map(|bytes| format!("{:.1} MiB", bytes as f64 / 1_048_576.0))
+        .unwrap_or_else(|| "n/a".into())
+}
+
 // ------------------------------------------------------------------ adb ops -
 
 fn cmd_adb_map(state_dir: &Path, vm_name: &str, inst: Option<String>) -> i32 {
@@ -1741,7 +1955,7 @@ fn cmd_adb_list(state_dir: &Path, json: bool) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_parent_dir;
+    use super::{ensure_parent_dir, parse_guest_redroid_stats};
     use std::path::{Path, PathBuf};
 
     /// Unique scratch dir per test (no external dev-deps — same pattern as the
@@ -1786,5 +2000,24 @@ mod tests {
         // "n1_ed25519" in the CWD has an empty parent — nothing to create.
         let parent = ensure_parent_dir(Path::new("n1_ed25519")).unwrap();
         assert!(parent.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn guest_stats_parser_joins_inspect_cgroup_cpu_and_boot_rows() {
+        let raw = concat!(
+            "QC_INSPECT\t{\"Id\":\"abc\",\"Name\":\"/qc-r13\",\"State\":{\"Status\":\"running\"},\"HostConfig\":{\"Memory\":2147483648}}\n",
+            "QC_CGROUP\tabc\t123|456|7\n",
+            "QC_CPU\tabc\t0.25\n",
+            "QC_BOOT\tabc\t1\n"
+        );
+        let rows = parse_guest_redroid_stats(raw).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].instance, "r13");
+        assert_eq!(rows[0].memory_limit_bytes, Some(2_147_483_648));
+        assert_eq!(rows[0].memory_current_bytes, Some(123));
+        assert_eq!(rows[0].memory_peak_bytes, Some(456));
+        assert_eq!(rows[0].oom_kills, Some(7));
+        assert_eq!(rows[0].cpu_usage_percent, Some(0.25));
+        assert_eq!(rows[0].boot_completed, Some(true));
     }
 }
