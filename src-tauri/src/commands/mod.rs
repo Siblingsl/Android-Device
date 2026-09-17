@@ -1,12 +1,17 @@
 use crate::models::*;
 use crate::services::{
-    adb, audit, battery, cloak, config, device, docker, geo, gnirehtet, log, proxy, recording,
-    resource_monitor, root, scrcpy, settings, spoof, terminal, terminal_session, transfer, usage,
-    wireless, wsl_kernel,
+    adb, art, audit, battery, cloak, config, device, docker, geo, gnirehtet, log, proxy, recording,
+    resource_monitor, root, runtime_scheduler, scrcpy, settings, spoof, terminal, terminal_session,
+    transfer, usage, wireless, wsl_kernel,
 };
 use base64::Engine;
+use once_cell::sync::Lazy;
 use serde::Deserialize;
+use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
+
+static RUNTIME_SCHEDULER: Lazy<parking_lot::Mutex<runtime_scheduler::SchedulerState>> =
+    Lazy::new(|| parking_lot::Mutex::new(runtime_scheduler::SchedulerState::default()));
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tauri::async_runtime::spawn_blocking(f)
@@ -50,8 +55,17 @@ pub async fn readiness_checklist() -> Vec<crate::services::readiness::ReadinessI
     blocking(crate::services::readiness::checklist).await
 }
 
-/// Read-only host/QEMU resource snapshot. Guest/container fields remain
-/// unknown until the qemu-center stats command is implemented.
+#[tauri::command]
+pub async fn optimize_app_art(
+    serial: String,
+    package: String,
+    mode: art::ArtMode,
+) -> Result<art::ArtOptimizationResult, String> {
+    blocking_res(move || art::optimize_app(&serial, &package, mode)).await
+}
+
+/// Read-only host/QEMU resource snapshot. Guest/container fields are filled by
+/// the QEMU-specific stats command when the caller requests that track.
 #[tauri::command]
 pub async fn read_runtime_resource_snapshot(
     vm: Option<String>,
@@ -59,6 +73,150 @@ pub async fn read_runtime_resource_snapshot(
 ) -> Result<resource_monitor::RuntimeResourceSnapshot, String> {
     blocking_res(move || {
         resource_monitor::read_runtime_resource_snapshot(vm.as_deref(), instance.as_deref())
+    })
+    .await
+}
+
+fn runtime_policy() -> runtime_scheduler::LifecyclePolicy {
+    let settings = settings::get();
+    runtime_scheduler::LifecyclePolicy {
+        idle_timeout_minutes: settings.runtime_idle_timeout_minutes,
+        keep_vm_warm: settings.runtime_keep_vm_warm,
+        max_parallel_starts: settings.runtime_max_parallel_starts.max(1),
+        protected_instance_ids: settings.runtime_protected_instance_ids,
+    }
+}
+
+#[tauri::command]
+pub async fn runtime_mark_activity(instance: String, kind: String) -> Result<(), String> {
+    blocking_res(move || {
+        let kind = runtime_scheduler::parse_activity_kind(&kind)?;
+        let mut scheduler = RUNTIME_SCHEDULER.lock();
+        scheduler.update_policy(runtime_policy());
+        scheduler.mark_activity(&instance, kind, SystemTime::now());
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn runtime_request_start(
+    vm: String,
+    instance: String,
+) -> Result<runtime_scheduler::StartDecision, String> {
+    blocking_res(move || {
+        let snapshot = resource_monitor::read_runtime_resource_snapshot(
+            Some(&vm),
+            Some(&instance),
+        )
+        .unwrap_or_default();
+        let pressure = resource_monitor::classify_memory_pressure(snapshot.host_available_bytes);
+        if pressure == resource_monitor::MemoryPressure::Critical {
+            return Ok(runtime_scheduler::StartDecision::Blocked(pressure));
+        }
+        {
+            let mut scheduler = RUNTIME_SCHEDULER.lock();
+            scheduler.update_policy(runtime_policy());
+            if !matches!(
+                scheduler.request_start(&vm, &instance),
+                runtime_scheduler::StartDecision::Starting
+            ) {
+                return Ok(runtime_scheduler::StartDecision::Queued);
+            }
+        }
+        let result = crate::services::qemu::redroid_start(&vm, &instance);
+        let mut scheduler = RUNTIME_SCHEDULER.lock();
+        match result {
+            Ok(output) if output.success => {
+                scheduler.mark_activity(
+                    &instance,
+                    runtime_scheduler::ActivityKind::UserWindow,
+                    SystemTime::now(),
+                );
+                Ok(scheduler.finish_start(&vm, true))
+            }
+            Ok(output) => {
+                let _ = scheduler.finish_start(&vm, false);
+                Ok(runtime_scheduler::StartDecision::Failed(
+                    output.stderr.trim().to_string(),
+                ))
+            }
+            Err(error) => {
+                let _ = scheduler.finish_start(&vm, false);
+                Ok(runtime_scheduler::StartDecision::Failed(error))
+            }
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn runtime_release_idle(
+    vm: String,
+    instance: String,
+) -> Result<runtime_scheduler::IdleReleaseResult, String> {
+    blocking_res(move || {
+        let now = SystemTime::now();
+        let mut scheduler = RUNTIME_SCHEDULER.lock();
+        scheduler.update_policy(runtime_policy());
+        if !scheduler.is_reclaimable(&instance, now) {
+            let protected = scheduler
+                .policy()
+                .protected_instance_ids
+                .iter()
+                .any(|id| id == &instance);
+            let reason = if protected {
+                "protected"
+            } else {
+                "active_or_unknown"
+            };
+            return Ok(runtime_scheduler::IdleReleaseResult {
+                instance,
+                released: false,
+                reason: reason.into(),
+            });
+        }
+        let keep_vm_warm = scheduler.policy().keep_vm_warm;
+        drop(scheduler);
+        let result = crate::services::qemu::redroid_stop(&vm, &instance);
+        match result {
+            Ok(output) if output.success => {
+                if !keep_vm_warm {
+                    let vm_result = crate::services::qemu::vm_stop(&vm);
+                    if let Ok(vm_output) = &vm_result {
+                        if !vm_output.success {
+                            return Ok(runtime_scheduler::IdleReleaseResult {
+                                instance,
+                                released: false,
+                                reason: format!("node_stop_failed: {}", vm_output.stderr.trim()),
+                            });
+                        }
+                    } else if let Err(error) = vm_result {
+                        return Ok(runtime_scheduler::IdleReleaseResult {
+                            instance,
+                            released: false,
+                            reason: format!("node_stop_failed: {error}"),
+                        });
+                    }
+                }
+                RUNTIME_SCHEDULER.lock().clear_instance(&instance);
+                Ok(runtime_scheduler::IdleReleaseResult {
+                    instance,
+                    released: true,
+                    reason: "idle".into(),
+                })
+            }
+            Ok(output) => Ok(runtime_scheduler::IdleReleaseResult {
+                instance,
+                released: false,
+                reason: format!("stop_failed: {}", output.stderr.trim()),
+            }),
+            Err(error) => Ok(runtime_scheduler::IdleReleaseResult {
+                instance,
+                released: false,
+                reason: format!("stop_failed: {error}"),
+            }),
+        }
     })
     .await
 }

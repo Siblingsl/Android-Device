@@ -45,11 +45,15 @@ import type {
   QemuRedroidCreateRequest,
   QemuRedroidInstance,
   QemuRedroidRuntimeStats,
+  RuntimeIdleReleaseResult,
+  RuntimeStartDecision,
   QemuVerifyReport,
   QemuVmCreateRequest,
   QemuVmEntry,
   ReadinessItem,
   RuntimeResourceSnapshot,
+  ArtMode,
+  ArtOptimizationResult,
 } from "../types";
 
 /** Unified Device Service — all device capabilities go through here */
@@ -472,6 +476,12 @@ export const DeviceService = {
   switchWslKernel: (mode: "custom" | "default", apply = false) =>
     invoke<ShellResult>("switch_wsl_kernel", { mode, apply }),
   verifyWslBinder: () => invoke<ShellResult>("verify_wsl_binder"),
+  optimizeAppArt: (serial: string, packageName: string, mode: ArtMode) =>
+    invoke<ArtOptimizationResult>("optimize_app_art", {
+      serial,
+      package: packageName,
+      mode,
+    }),
 };
 
 /**
@@ -514,6 +524,12 @@ export const QemuService = {
       vm,
       instance: instance ?? null,
     }),
+  runtimeMarkActivity: (instance: string, kind: string) =>
+    invoke<void>("runtime_mark_activity", { instance, kind }),
+  runtimeRequestStart: (vm: string, instance: string) =>
+    invoke<RuntimeStartDecision>("runtime_request_start", { vm, instance }),
+  runtimeReleaseIdle: (vm: string, instance: string) =>
+    invoke<RuntimeIdleReleaseResult>("runtime_release_idle", { vm, instance }),
   adbList: () => invoke<QemuAdbMapping[]>("qemu_adb_list"),
   verify: (vm: string) => invoke<QemuVerifyReport>("qemu_verify", { vm }),
 };

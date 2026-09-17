@@ -100,4 +100,50 @@ describe("DeviceService tracked file transfers", () => {
     });
     expect(result).toEqual(stats);
   });
+
+  it("maps runtime lifecycle activity and idle reclaim commands", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ state: "queued" })
+      .mockResolvedValueOnce({ instance: "r13", released: false, reason: "active_or_unknown" });
+
+    await QemuService.runtimeMarkActivity("r13", "user_window");
+    await QemuService.runtimeRequestStart("node1", "r13");
+    await QemuService.runtimeReleaseIdle("node1", "r13");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "runtime_mark_activity", {
+      instance: "r13",
+      kind: "user_window",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_request_start", {
+      vm: "node1",
+      instance: "r13",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, "runtime_release_idle", {
+      vm: "node1",
+      instance: "r13",
+    });
+  });
+
+  it("maps the bounded ART experiment command", async () => {
+    const result = {
+      serial: "127.0.0.1:24501",
+      package: "com.xingin.xhs",
+      mode: "speed-profile",
+      success: true,
+      exitCode: 0,
+      elapsedMs: 120,
+      output: "Success",
+      warning: "measure the result",
+    } as const;
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await DeviceService.optimizeAppArt("127.0.0.1:24501", "com.xingin.xhs", "speed-profile");
+
+    expect(invoke).toHaveBeenCalledWith("optimize_app_art", {
+      serial: "127.0.0.1:24501",
+      package: "com.xingin.xhs",
+      mode: "speed-profile",
+    });
+  });
 });

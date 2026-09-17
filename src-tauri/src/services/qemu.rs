@@ -783,6 +783,10 @@ pub fn args_redroid_list(vm: &str) -> Vec<String> {
     vec!["redroid".into(), "list".into(), vm.into(), "--json".into()]
 }
 
+pub fn args_redroid_lifecycle(action: &str, vm: &str, instance: &str) -> Vec<String> {
+    vec!["redroid".into(), action.into(), vm.into(), instance.into()]
+}
+
 pub fn args_redroid_stats(vm: &str, instance: Option<&str>) -> Vec<String> {
     let mut args = vec!["redroid".into(), "stats".into(), vm.into()];
     if let Some(instance) = instance.filter(|value| !value.is_empty()) {
@@ -1022,6 +1026,14 @@ pub fn redroid_stats(
 ) -> Result<Vec<QemuRedroidRuntimeStats>, String> {
     let output = run_cli(&args_redroid_stats(vm, instance), Duration::from_secs(90))?;
     parse_redroid_stats_json(&output.stdout)
+}
+
+pub fn redroid_start(vm: &str, instance: &str) -> Result<QemuCliOutput, String> {
+    run_cli(&args_redroid_lifecycle("start", vm, instance), Duration::from_secs(90))
+}
+
+pub fn redroid_stop(vm: &str, instance: &str) -> Result<QemuCliOutput, String> {
+    run_cli(&args_redroid_lifecycle("stop", vm, instance), Duration::from_secs(90))
 }
 
 pub fn adb_list() -> Result<Vec<QemuAdbMapping>, String> {
@@ -1429,6 +1441,18 @@ mod tests {
         assert_eq!(
             args_redroid_stats("node1", Some("r13")),
             vec!["redroid", "stats", "node1", "r13", "--json"]
+        );
+    }
+
+    #[test]
+    fn redroid_lifecycle_argv_targets_one_instance_without_shell_flags() {
+        assert_eq!(
+            args_redroid_lifecycle("start", "node1", "r13"),
+            vec!["redroid", "start", "node1", "r13"]
+        );
+        assert_eq!(
+            args_redroid_lifecycle("stop", "node1", "r13"),
+            vec!["redroid", "stop", "node1", "r13"]
         );
     }
 

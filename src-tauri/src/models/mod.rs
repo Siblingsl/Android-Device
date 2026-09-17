@@ -108,6 +108,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_runtime_idle_timeout_minutes() -> u32 {
+    30
+}
+
+fn default_runtime_max_parallel_starts() -> u32 {
+    1
+}
+
 fn default_gnirehtet_path() -> String {
     "gnirehtet".into()
 }
@@ -422,6 +430,19 @@ pub struct AppSettings {
     /// deviceId (or serial) → list of tag names. Lives in settings.json.
     #[serde(default)]
     pub device_tags: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// Minutes without a recorded runtime activity before an explicit idle
+    /// release may stop a redroid instance.
+    #[serde(default = "default_runtime_idle_timeout_minutes")]
+    pub runtime_idle_timeout_minutes: u32,
+    /// Keep the QEMU VM alive while releasing individual idle containers.
+    #[serde(default = "default_true")]
+    pub runtime_keep_vm_warm: bool,
+    /// Maximum number of serialized QEMU/container starts.
+    #[serde(default = "default_runtime_max_parallel_starts")]
+    pub runtime_max_parallel_starts: u32,
+    /// Instance ids that must never be automatically reclaimed.
+    #[serde(default)]
+    pub runtime_protected_instance_ids: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -463,6 +484,10 @@ impl Default for AppSettings {
             battery_auto_refresh: Some(true),
             default_track: None,
             device_tags: None,
+            runtime_idle_timeout_minutes: 30,
+            runtime_keep_vm_warm: true,
+            runtime_max_parallel_starts: 1,
+            runtime_protected_instance_ids: Vec::new(),
         }
     }
 }

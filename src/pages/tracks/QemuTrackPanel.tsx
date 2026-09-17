@@ -915,6 +915,7 @@ export default function QemuTrackPanel({
         created?.serial || result.stdout.match(/127\.0\.0\.1:\d+/)?.[0] || "";
       setCreatedSerial(serial);
       setStatusText(t(upgradeTarget ? "qemu.presets.upgraded" : "qemu.instances.created", { name, serial: serial || "-" }));
+      markRuntimeActivity(name, "user_window");
       setShowInstanceForm(false);
       setUpgradeTarget(null);
     } catch (error) {
@@ -985,6 +986,101 @@ export default function QemuTrackPanel({
       setStatusText(t("qemu.instances.copied", { serial }));
     } catch (error) {
       setStatusText(errText(error));
+    }
+  };
+
+  const markRuntimeActivity = (instance: string, kind: string) => {
+    const mark = QemuService.runtimeMarkActivity;
+    if (typeof mark !== "function") return;
+    void mark(instance, kind).catch(() => {
+      // Activity is advisory. A telemetry failure must never interrupt a user action.
+    });
+  };
+
+  const startInstance = async (instance: QemuRedroidInstance) => {
+    if (!selectedVm || busyKey) return;
+    setBusy(`instance-start-${instance.instance}`);
+    setStatusText(t("qemu.instances.starting"));
+    markRuntimeActivity(instance.instance, "user_window");
+    try {
+      const start = QemuService.runtimeRequestStart;
+      if (typeof start !== "function") {
+        setStatusText(t("qemu.instances.startUnavailable"));
+        return;
+      }
+      const decision = await start(selectedVm, instance.instance);
+      if (decision.state === "ready" || decision.state === "starting") {
+        setStatusText(t("qemu.instances.started", { name: instance.instance }));
+        await loadInstances(selectedVm, true);
+      } else if (decision.state === "queued") {
+        setStatusText(t("qemu.instances.startQueued"));
+      } else if (decision.state === "blocked") {
+        setStatusText(t("qemu.instances.startBlocked"));
+      } else {
+        setStatusText(("detail" in decision && decision.detail) || t("qemu.instances.createFailed"));
+      }
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const releaseIdleInstance = async (instance: QemuRedroidInstance) => {
+    if (!selectedVm || busyKey) return;
+    if (!(await askConfirm(t("qemu.instances.releaseConfirm", { name: instance.instance })))) return;
+    setBusy(`instance-release-${instance.instance}`);
+    try {
+      const release = QemuService.runtimeReleaseIdle;
+      if (typeof release !== "function") {
+        setStatusText(t("qemu.instances.releaseUnavailable"));
+        return;
+      }
+      const result = await release(selectedVm, instance.instance);
+      setStatusText(
+        result.released
+          ? t("qemu.instances.released", { name: instance.instance })
+          : t("qemu.instances.notReleased", { reason: result.reason }),
+      );
+      if (result.released) await loadInstances(selectedVm, true);
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const optimizeArt = async (instance: QemuRedroidInstance) => {
+    const packageName = window.prompt(t("qemu.instances.artPackagePrompt"), "com.xingin.xhs")?.trim();
+    if (!packageName) return;
+    const mode = window.prompt(t("qemu.instances.artModePrompt"), "speed-profile")?.trim() || "speed-profile";
+    if (mode !== "speed-profile" && mode !== "verify-only" && mode !== "reset") {
+      setStatusText(t("qemu.instances.artModeInvalid"));
+      return;
+    }
+    if (mode === "reset" && !(await askConfirm(t("qemu.instances.artResetConfirm", { package: packageName })))) return;
+    const optimize = DeviceService.optimizeAppArt;
+    if (typeof optimize !== "function") {
+      setStatusText(t("qemu.instances.artUnavailable"));
+      return;
+    }
+    setBusy(`instance-art-${instance.instance}`);
+    markRuntimeActivity(instance.instance, "automation");
+    try {
+      const result = await optimize(instance.serial, packageName, mode);
+      setStatusText(
+        result.success
+          ? t("qemu.instances.artDone", { package: packageName, ms: result.elapsedMs })
+          : result.output || t("qemu.instances.artFailed"),
+      );
+      if (result.output) appendLog([result.output, result.warning]);
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -1542,11 +1638,23 @@ export default function QemuTrackPanel({
                         <td>{instance.status}</td>
                         <td>
                           <Button size="sm" disabled={Boolean(busyKey)} onClick={() => {
+                            markRuntimeActivity(instance.instance, "user_window");
                             setUpgradeTarget(instance);
                             setInstanceForm({ ...initialInstanceForm, name: instance.instance, profile: instance.profile || "standard", androidVersion: instance.androidVersion || "", image: instance.image || "" });
                             setShowInstanceForm(true);
                           }}>{t("qemu.presets.upgrade")}</Button>
+                          {!/up|running/i.test(instance.status) ? (
+                            <Button size="sm" icon={<Play size={12} />} disabled={Boolean(busyKey)} loading={busy === `instance-start-${instance.instance}`} onClick={() => void startInstance(instance)}>
+                              {t("qemu.instances.start")}
+                            </Button>
+                          ) : null}
                           <Button size="sm" disabled={!instance.rollbackAvailable || Boolean(busyKey)} loading={busy === `instance-restore-${instance.instance}`} onClick={() => void restoreInstance(instance)}>{t("qemu.presets.restore")}</Button>
+                          <Button size="sm" variant="ghost" icon={<Square size={12} />} disabled={Boolean(busyKey)} loading={busy === `instance-release-${instance.instance}`} onClick={() => void releaseIdleInstance(instance)}>
+                            {t("qemu.instances.releaseIdle")}
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={Boolean(busyKey)} loading={busy === `instance-art-${instance.instance}`} onClick={() => void optimizeArt(instance)}>
+                            {t("qemu.instances.art")}
+                          </Button>
                           <Button
                             size="sm"
                             variant="ghost"

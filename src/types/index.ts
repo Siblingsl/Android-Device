@@ -589,6 +589,11 @@ export interface AppSettings {
   resourceAlertThreshold: number;
   deviceRefreshIntervalSecs: number;
   deviceMonitorRules: Record<string, DeviceMonitorRule>;
+  /** QEMU lifecycle policy; absent on older settings files, backend defaults apply. */
+  runtimeIdleTimeoutMinutes?: number;
+  runtimeKeepVmWarm?: boolean;
+  runtimeMaxParallelStarts?: number;
+  runtimeProtectedInstanceIds?: string[];
   /** Per-device grouping tags: deviceId|serial → tag names (tags ARE groups). */
   deviceTags?: Record<string, string[]> | null;
 }
@@ -775,6 +780,30 @@ export interface QemuRedroidRuntimeStats {
   oomKills: number | null;
   cpuUsagePercent: number | null;
   bootCompleted: boolean | null;
+}
+
+export type RuntimeStartDecision =
+  | { state: "starting" | "ready" | "queued" }
+  | { state: "blocked"; detail?: string }
+  | { state: "failed"; detail?: string };
+
+export interface RuntimeIdleReleaseResult {
+  instance: string;
+  released: boolean;
+  reason: string;
+}
+
+export type ArtMode = "verify-only" | "speed-profile" | "reset";
+
+export interface ArtOptimizationResult {
+  serial: string;
+  package: string;
+  mode: ArtMode;
+  success: boolean;
+  exitCode: number;
+  elapsedMs: number;
+  output: string;
+  warning: string;
 }
 
 export interface QemuAdbMapping {

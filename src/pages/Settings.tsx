@@ -556,6 +556,68 @@ export function SettingsPage() {
               </div>
             </Card>
 
+            <Card className="track-card" title={t("settings.card.runtimePolicy")}>
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="settings-runtime-idle-timeout">{t("settings.runtimeIdleTimeout")}</label>
+                  <div className="row">
+                    <input
+                      id="settings-runtime-idle-timeout"
+                      type="number"
+                      min={0}
+                      max={1440}
+                      value={form.runtimeIdleTimeoutMinutes ?? 30}
+                      onChange={(e) => set("runtimeIdleTimeoutMinutes", Math.max(0, Math.min(1440, Number(e.target.value) || 0)))}
+                    />
+                    <span className="muted">{t("settings.minutes")}</span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    {t("settings.runtimeIdleTimeoutHint")}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>{t("settings.runtimeKeepVmWarm")}</label>
+                  <label className="row">
+                    <input
+                      type="checkbox"
+                      checked={form.runtimeKeepVmWarm !== false}
+                      onChange={(e) => set("runtimeKeepVmWarm", e.target.checked)}
+                    />
+                    {t("settings.enabled")}
+                  </label>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    {t("settings.runtimeKeepVmWarmHint")}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="settings-runtime-max-starts">{t("settings.runtimeMaxParallelStarts")}</label>
+                  <input
+                    id="settings-runtime-max-starts"
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={Math.max(1, form.runtimeMaxParallelStarts ?? 1)}
+                    onChange={(e) => set("runtimeMaxParallelStarts", Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+                  />
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    {t("settings.runtimeMaxParallelStartsHint")}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="settings-runtime-protected">{t("settings.runtimeProtectedInstances")}</label>
+                  <textarea
+                    id="settings-runtime-protected"
+                    rows={3}
+                    value={(form.runtimeProtectedInstanceIds ?? []).join("\n")}
+                    onChange={(e) => set("runtimeProtectedInstanceIds", e.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean))}
+                  />
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    {t("settings.runtimeProtectedInstancesHint")}
+                  </div>
+                </div>
+              </div>
+            </Card>
+
             <Card
               className="stale-metadata-card"
               title={t("settings.card.staleMetadata")}

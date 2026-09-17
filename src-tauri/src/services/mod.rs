@@ -1,4 +1,5 @@
 pub mod adb;
+pub mod art;
 pub mod audit;
 pub mod battery;
 pub mod cache;
@@ -18,6 +19,7 @@ pub mod qemu;
 pub mod qemu_presets;
 pub mod readiness;
 pub mod resource_monitor;
+pub mod runtime_scheduler;
 pub mod recording;
 pub mod root;
 pub mod scrcpy;

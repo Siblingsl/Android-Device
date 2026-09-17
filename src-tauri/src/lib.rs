@@ -54,6 +54,9 @@ pub fn run() {
             get_system_status,
             readiness_checklist,
             read_runtime_resource_snapshot,
+            runtime_mark_activity,
+            runtime_request_start,
+            runtime_release_idle,
             // Devices
             list_devices,
             list_devices_unified,
@@ -260,6 +263,7 @@ pub fn run() {
             get_wsl_kernel_status,
             switch_wsl_kernel,
             verify_wsl_binder,
+            optimize_app_art,
             // QEMU track (qemu-center CLI bridge)
             qemu_doctor,
             qemu_setup,
