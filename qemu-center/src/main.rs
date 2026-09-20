@@ -118,7 +118,9 @@ enum VmCmd {
         image: PathBuf,
         #[arg(long, default_value_t = 4)]
         cpus: u16,
-        #[arg(long, default_value_t = 4096)]
+        /// Guest RAM. 3072 MiB is the balanced default; use 4096+ for a
+        /// full single-instance profile after measuring the host budget.
+        #[arg(long, default_value_t = 3072)]
         mem: u32,
         /// Virtual disk size (the qcow2 overlay grows on demand).
         #[arg(long, default_value_t = 40)]
@@ -148,6 +150,8 @@ enum VmCmd {
     },
     /// Launch the VM (detached; no console).
     Start { name: String },
+    /// Change guest RAM for the next start; the VM must be stopped.
+    SetMemory { name: String, mem: u32 },
     /// Graceful ACPI shutdown via the VM's QMP endpoint.
     Stop { name: String },
     /// List registered nodes.
@@ -171,7 +175,7 @@ enum VmCmd {
 
 #[derive(Subcommand)]
 enum GuestCmd {
-    /// Wait until SSH answers (polls `true` over ssh).
+    /// Wait until the guest is provisioned and ready for redroid.
     Wait {
         vm: String,
         #[arg(long, default_value_t = 300)]
@@ -188,10 +192,12 @@ enum RedroidCmd {
         vm: String,
         /// Instance name: lowercase [a-z0-9-] (container becomes qc-<name>).
         name: String,
-        #[arg(long, default_value_t = 1.0)]
-        cpus: f64,
-        #[arg(long, default_value_t = 2048)]
-        memory: u32,
+        /// Optional CPU override; omitted values come from `--profile`.
+        #[arg(long)]
+        cpus: Option<f64>,
+        /// Optional memory override in MiB; omitted values come from `--profile`.
+        #[arg(long)]
+        memory: Option<u32>,
         /// Resource profile used for validation/metadata: lean, standard, or full.
         #[arg(long, default_value = "standard")]
         profile: String,
@@ -213,8 +219,14 @@ enum RedroidCmd {
         #[arg(long)]
         cgroup_parent: Option<String>,
     },
-    Start { vm: String, name: String },
-    Stop { vm: String, name: String },
+    Start {
+        vm: String,
+        name: String,
+    },
+    Stop {
+        vm: String,
+        name: String,
+    },
     /// List instances registered on the node.
     List {
         vm: String,
@@ -273,7 +285,11 @@ fn main() {
             SetupCmd::Image { distro } => cmd_setup_image(&state_dir, &distro),
             SetupCmd::All { distro } => cmd_setup_all(&state_dir, &distro),
         },
-        Cmd::Verify { vm, container, json } => cmd_verify(&state_dir, vm, container, json),
+        Cmd::Verify {
+            vm,
+            container,
+            json,
+        } => cmd_verify(&state_dir, vm, container, json),
         Cmd::Vm { cmd } => match cmd {
             VmCmd::Create {
                 name,
@@ -304,6 +320,7 @@ fn main() {
                 auto_setup,
             ),
             VmCmd::Start { name } => cmd_vm_start(&state_dir, &name),
+            VmCmd::SetMemory { name, mem } => cmd_vm_set_memory(&state_dir, &name, mem),
             VmCmd::Stop { name } => cmd_vm_stop(&state_dir, &name),
             VmCmd::List { json } => cmd_vm_list(&state_dir, json),
             VmCmd::Delete { name, purge } => cmd_vm_delete(&state_dir, &name, purge),
@@ -330,9 +347,23 @@ fn main() {
                 bind,
                 cgroup_parent,
             } => cmd_redroid_create(
-                &state_dir, &vm, &name, cpus, memory, &profile, width, height, dpi, &gpu_mode, image, bind, cgroup_parent,
+                &state_dir,
+                &vm,
+                &name,
+                cpus,
+                memory,
+                &profile,
+                width,
+                height,
+                dpi,
+                &gpu_mode,
+                image,
+                bind,
+                cgroup_parent,
             ),
-            RedroidCmd::Start { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "start"),
+            RedroidCmd::Start { vm, name } => {
+                cmd_redroid_lifecycle(&state_dir, &vm, &name, "start")
+            }
             RedroidCmd::Stop { vm, name } => cmd_redroid_lifecycle(&state_dir, &vm, &name, "stop"),
             RedroidCmd::List { vm, json } => cmd_redroid_list(&state_dir, &vm, json),
             RedroidCmd::Stats { vm, instance, json } => {
@@ -389,7 +420,7 @@ fn ssh_cmd_for(entry: &VmEntry, state_dir: &Path, remote: &str) -> Vec<String> {
 
 /// Run a docker command inside the guest over ssh.
 fn guest_docker(entry: &VmEntry, state_dir: &Path, docker_args: &[String]) -> exec::RunOutcome {
-    let remote = format!("docker {}", docker_args.iter().map(|s| format!("'{}'", s.replace('\'', "'\"'\"'"))).collect::<Vec<_>>().join(" "));
+    let remote = guest::docker_command(docker_args);
     let argv = ssh_cmd_for(entry, state_dir, &remote);
     let cmd = argv_to_display(&argv);
     println!("$ {cmd}");
@@ -425,7 +456,11 @@ fn cmd_doctor(state_dir: &Path, json: bool) -> i32 {
         print!("{}", report.to_text());
         let _ = std::io::stdout().flush();
     }
-    if report.checks.iter().any(|c| c.status == doctor::CheckStatus::Fail) {
+    if report
+        .checks
+        .iter()
+        .any(|c| c.status == doctor::CheckStatus::Fail)
+    {
         2
     } else {
         0
@@ -434,7 +469,12 @@ fn cmd_doctor(state_dir: &Path, json: bool) -> i32 {
 
 // ----------------------------------------------------------------- verify ---
 
-fn cmd_verify(state_dir: &Path, vm_name: Option<String>, container: Option<String>, json: bool) -> i32 {
+fn cmd_verify(
+    state_dir: &Path,
+    vm_name: Option<String>,
+    container: Option<String>,
+    json: bool,
+) -> i32 {
     let vm_name = match vm_name {
         Some(n) => n,
         None => match vm::load_registry(state_dir) {
@@ -511,12 +551,7 @@ fn cmd_setup_whpx(state_dir: &Path) -> i32 {
             Ok(body) => {
                 // The elevated child writes "<exit_code>\n<dism stdout>".
                 let mut parts = body.splitn(2, '\n');
-                let exit_code: i32 = parts
-                    .next()
-                    .unwrap_or("-1")
-                    .trim()
-                    .parse()
-                    .unwrap_or(-1);
+                let exit_code: i32 = parts.next().unwrap_or("-1").trim().parse().unwrap_or(-1);
                 let dism_stdout = parts.next().unwrap_or("");
                 match setup::classify_dism_output(exit_code, dism_stdout) {
                     setup::DismOutcome::AlreadyEnabled => {
@@ -726,7 +761,10 @@ fn cmd_setup_image(state_dir: &Path, distro: &str) -> i32 {
         println!("$ {}", argv_to_display(&argv));
         let out = exec::run_command(&argv, Duration::from_secs(300));
         if !out.success {
-            eprintln!("warn: could not fetch SHA256SUMS ({}); image will be kept unverifiable", out.stderr_last_line());
+            eprintln!(
+                "warn: could not fetch SHA256SUMS ({}); image will be kept unverifiable",
+                out.stderr_last_line()
+            );
             return None;
         }
         std::fs::read_to_string(&sums_path)
@@ -740,13 +778,20 @@ fn cmd_setup_image(state_dir: &Path, distro: &str) -> i32 {
         let out = exec::run_command(&argv, Duration::from_secs(120));
         out.success.then_some(out.stdout.trim().to_string())
     });
-    match setup::image_download_plan(existing.as_deref(), existing_sha.as_deref(), expected.as_deref()) {
+    match setup::image_download_plan(
+        existing.as_deref(),
+        existing_sha.as_deref(),
+        expected.as_deref(),
+    ) {
         setup::ImagePlan::SkipVerified(p) => {
             println!("image already present and SHA256-verified: {}", p.display());
             return 0;
         }
         setup::ImagePlan::SkipUnverifiable(p) => {
-            println!("image already present (no upstream digest available to verify): {}", p.display());
+            println!(
+                "image already present (no upstream digest available to verify): {}",
+                p.display()
+            );
             return 0;
         }
         setup::ImagePlan::Download => {}
@@ -778,7 +823,10 @@ fn cmd_setup_image(state_dir: &Path, distro: &str) -> i32 {
         }
         println!("SHA256 verified: {}", dest.display());
     }
-    println!("next: qemu-center vm create node1 --image {}", dest.display());
+    println!(
+        "next: qemu-center vm create node1 --image {}",
+        dest.display()
+    );
     0
 }
 
@@ -795,7 +843,10 @@ fn cmd_setup_all(state_dir: &Path, distro: &str) -> i32 {
         // Distinguish "already enabled" from "just enabled, reboot needed".
         let argv = doctor::powershell_feature_command("HypervisorPlatform");
         let out = exec::run_command(&argv, Duration::from_secs(30));
-        if !matches!(doctor::parse_feature_state(&out.stdout), doctor::FeatureState::Enabled) {
+        if !matches!(
+            doctor::parse_feature_state(&out.stdout),
+            doctor::FeatureState::Enabled
+        ) {
             needs_reboot = true;
         }
     }
@@ -804,11 +855,19 @@ fn cmd_setup_all(state_dir: &Path, distro: &str) -> i32 {
         println!("ONE REBOOT is required to finish enabling WHPX. After rebooting: qemu-center doctor (should be all-green).");
     }
     let failed = [image_code, qemu_code, whpx_code].iter().any(|&c| c != 0);
-    if failed { 1 } else { 0 }
+    if failed {
+        1
+    } else {
+        0
+    }
 }
 
 fn status_word(code: i32) -> &'static str {
-    if code == 0 { "done" } else { "FAILED (see above)" }
+    if code == 0 {
+        "done"
+    } else {
+        "FAILED (see above)"
+    }
 }
 
 /// The elevated child half of `setup whpx`: runs DISM, writes its exit code
@@ -820,8 +879,16 @@ fn cmd_elevated_whpx(state_dir: &Path) -> i32 {
     let argv = setup::dism_enable_command();
     println!("$ {}", argv_to_display(&argv));
     let out = exec::run_command(&argv, Duration::from_secs(1800));
-    setup::write_marker(state_dir, MARKER_WHPX, &format!("{}\n{}", out.exit_code, out.stdout));
-    if out.success || out.exit_code == 1168 { 0 } else { 1 }
+    setup::write_marker(
+        state_dir,
+        MARKER_WHPX,
+        &format!("{}\n{}", out.exit_code, out.stdout),
+    );
+    if out.success || out.exit_code == 1168 {
+        0
+    } else {
+        1
+    }
 }
 
 // ---------------------------------------------------------------- vm create -
@@ -864,8 +931,14 @@ fn cmd_vm_create(
     let missing = setup::missing_prereqs(&pre);
     if !missing.is_empty() {
         if auto_setup {
-            println!("missing prerequisites: {} — running setup automatically (--auto-setup)",
-                missing.iter().map(|p| p.id()).collect::<Vec<_>>().join(", "));
+            println!(
+                "missing prerequisites: {} — running setup automatically (--auto-setup)",
+                missing
+                    .iter()
+                    .map(|p| p.id())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             for p in &missing {
                 let code = match p {
                     setup::Prereq::WhpxFeature => cmd_setup_whpx(state_dir),
@@ -914,6 +987,9 @@ fn cmd_vm_create(
     }
     if adb_port_count == 0 {
         return err_exit("adb_port_count must be > 0");
+    }
+    if !(1536..=16384).contains(&mem) {
+        return err_exit("mem must be between 1536 MiB and 16384 MiB");
     }
     let mut registry = match vm::load_registry(state_dir) {
         Ok(r) => r,
@@ -1050,9 +1126,15 @@ fn cmd_vm_create(
     }
 
     println!("VM {name} created.");
-    println!("  disk:        {}", vm::vm_disk_path(state_dir, name).display());
+    println!(
+        "  disk:        {}",
+        vm::vm_disk_path(state_dir, name).display()
+    );
     println!("  base image:  {}", base_image.display());
-    println!("  seed image:  {}", vm::vm_seed_image(state_dir, name).display());
+    println!(
+        "  seed image:  {}",
+        vm::vm_seed_image(state_dir, name).display()
+    );
     println!("  ssh:         host port {ssh_port} -> guest 22");
     println!("  adb block:   {adb_block_display}");
     println!("  next:        qemu-center vm start {name} && qemu-center guest wait {name}");
@@ -1069,6 +1151,29 @@ fn cmd_vm_start(state_dir: &Path, name: &str) -> i32 {
     let Some(entry) = registry.get(name) else {
         return err_exit(&format!("VM {name:?} not registered (run `vm create`)"));
     };
+    match probe_vm_liveness(entry.qmp_host_port) {
+        vm::VmLiveness::Running => return err_exit(&format!("VM {name:?} is already running")),
+        vm::VmLiveness::Unknown => {
+            return err_exit(&format!(
+                "cannot start VM {name:?} while QMP state is unknown"
+            ));
+        }
+        vm::VmLiveness::Stopped => {}
+    }
+    let host_available_bytes = doctor::host_available_memory_bytes();
+    if vm::should_block_vm_start(host_available_bytes, entry.mem_mib) {
+        let available_mib = host_available_bytes.unwrap_or_default() / (1024 * 1024);
+        let required_mib = vm::vm_start_required_memory_mib(entry.mem_mib);
+        return err_exit(&format!(
+            "host available memory is too low to start VM {name:?}: current {available_mib} MiB, required at least {required_mib} MiB (VM {mem} MiB + 1024 MiB headroom); release idle instances or choose a smaller node",
+            mem = entry.mem_mib
+        ));
+    }
+    if host_available_bytes.is_none() {
+        eprintln!(
+            "warning: host available memory could not be verified; proceeding with this explicit single VM start"
+        );
+    }
     let opts = LaunchOptions {
         qemu_bin: doctor::discover_qemu_bin_with(Some(state_dir))
             .map(|p| p.display().to_string())
@@ -1109,16 +1214,59 @@ fn cmd_vm_start(state_dir: &Path, name: &str) -> i32 {
     };
     match pid {
         Ok(p) => {
+            if cfg!(windows) {
+                let pid = match p.parse::<u32>() {
+                    Ok(pid) => pid,
+                    Err(e) => return err_exit(&format!("invalid QEMU PID {p:?}: {e}")),
+                };
+                if let Err(e) = std::fs::write(vm::vm_pid_path(state_dir, name), format!("{pid}\n"))
+                {
+                    return err_exit(&format!("record QEMU PID for {name}: {e}"));
+                }
+            }
             println!("QEMU started ({p}).");
-            println!("  ssh:  ssh -p {} -i {} rdc@127.0.0.1", entry.ssh_host_port,
-                vm::vm_ssh_key_path(state_dir, name).display());
+            println!(
+                "  ssh:  ssh -p {} -i {} rdc@127.0.0.1",
+                entry.ssh_host_port,
+                vm::vm_ssh_key_path(state_dir, name).display()
+            );
             println!("  log:  {}", log_path.display());
-            println!("  console: {}", vm::vm_console_log_path(state_dir, name).display());
+            println!(
+                "  console: {}",
+                vm::vm_console_log_path(state_dir, name).display()
+            );
             println!("  next: qemu-center guest wait {name}");
             0
         }
         Err(e) => err_exit(&format!("QEMU failed to start: {e}")),
     }
+}
+
+// --------------------------------------------------------- vm set-memory -
+
+fn cmd_vm_set_memory(state_dir: &Path, name: &str, memory_mib: u32) -> i32 {
+    let mut registry = match vm::load_registry(state_dir) {
+        Ok(r) => r,
+        Err(e) => return err_exit(&e),
+    };
+    let Some(entry) = registry.get(name).cloned() else {
+        return err_exit(&format!("VM {name:?} not registered"));
+    };
+    let liveness = probe_vm_liveness(entry.qmp_host_port);
+    if let Err(error) = vm::validate_memory_reconfiguration(liveness, memory_mib) {
+        return err_exit(&error);
+    }
+    let old_memory_mib = entry.mem_mib;
+    let Some(updated) = registry.get_mut(name) else {
+        return err_exit(&format!("VM {name:?} disappeared from state.json"));
+    };
+    updated.mem_mib = memory_mib;
+    if let Err(error) = vm::save_registry(state_dir, &registry) {
+        return err_exit(&error);
+    }
+    println!("VM {name} memory changed from {old_memory_mib} MiB to {memory_mib} MiB.");
+    println!("The new value takes effect on the next graceful VM start.");
+    0
 }
 
 // ------------------------------------------------------------------ vm stop -
@@ -1133,8 +1281,10 @@ fn cmd_vm_stop(state_dir: &Path, name: &str) -> i32 {
     };
     match stop_via_qmp(entry.qmp_host_port) {
         Ok(()) => {
-            println!("ACPI powerdown requested via QMP (QEMU will exit once the guest powers off).");
-            println!("If the guest ignores ACPI, kill the qemu-system process manually.");
+            println!(
+                "ACPI powerdown requested via QMP (QEMU will exit once the guest powers off)."
+            );
+            println!("If the guest ignores ACPI, inspect guest/QEMU logs and wait; do not force-kill a QEMU that may still own its qcow2 disk.");
             0
         }
         Err(e) => err_exit(&format!(
@@ -1148,8 +1298,7 @@ fn cmd_vm_stop(state_dir: &Path, name: &str) -> i32 {
 fn stop_via_qmp(qmp_port: u16) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
     let addr = format!("127.0.0.1:{qmp_port}");
-    let stream = std::net::TcpStream::connect(&addr)
-        .map_err(|e| format!("connect {addr}: {e}"))?;
+    let stream = std::net::TcpStream::connect(&addr).map_err(|e| format!("connect {addr}: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
@@ -1165,7 +1314,9 @@ fn stop_via_qmp(qmp_port: u16) -> Result<(), String> {
     for frame in vm::qmp_stop_frames() {
         writeln!(writer, "{frame}").map_err(|e| format!("write: {e}"))?;
         let mut reply = String::new();
-        reader.read_line(&mut reply).map_err(|e| format!("read: {e}"))?;
+        reader
+            .read_line(&mut reply)
+            .map_err(|e| format!("read: {e}"))?;
         if !vm::qmp_reply_is_ok(&reply) {
             return Err(format!("QMP rejected {frame}: {}", reply.trim()));
         }
@@ -1215,25 +1366,89 @@ fn cmd_vm_list(state_dir: &Path, json: bool) -> i32 {
 
 // ---------------------------------------------------------------- vm delete -
 
+fn purge_vm_artifacts(state_dir: &Path, name: &str) -> Result<(), String> {
+    let dir = vm::vm_dir(state_dir, name);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => println!("removed {}", dir.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove {}: {e}", dir.display())),
+    }
+    for key in [
+        vm::vm_ssh_key_path(state_dir, name),
+        vm::vm_ssh_key_pub_path(state_dir, name),
+    ] {
+        match std::fs::remove_file(&key) {
+            Ok(()) => println!("removed {}", key.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("remove {}: {e}", key.display())),
+        }
+    }
+    Ok(())
+}
+
+/// A local bind is an independent check that no listener currently owns the
+/// QMP port. It complements the recorded QEMU PID when a proxy swallows the
+/// connection-refused signal and the normal QMP probe can only say unknown.
+fn qmp_port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Probe VM liveness with a conservative host-wide fallback for Windows
+/// setups where a stopped QEMU port can remain black-holed instead of
+/// returning connection refused.  A host process probe is consulted only
+/// after QMP times out; any positive or failed process probe stays unknown.
+fn probe_vm_liveness(qmp_port: u16) -> vm::VmLiveness {
+    let probe = qmp::probe(qmp_port, qmp::PROBE_TIMEOUT);
+    let host_has_qemu_process = if probe == vm::QmpProbe::TimedOut {
+        match exec::host_has_qemu_process() {
+            Ok(value) => Some(value),
+            Err(error) => {
+                eprintln!("warning: host QEMU process probe failed: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    vm::vm_liveness_from_qmp_probe_with_host_process_check(probe, host_has_qemu_process)
+}
+
 fn cmd_vm_delete(state_dir: &Path, name: &str, purge: bool) -> i32 {
     let mut registry = match vm::load_registry(state_dir) {
         Ok(r) => r,
         Err(e) => return err_exit(&e),
     };
-    if !registry.contains(name) {
+    let Some(entry) = registry.get(name).cloned() else {
         return err_exit(&format!("VM {name:?} not registered"));
+    };
+    let liveness = probe_vm_liveness(entry.qmp_host_port);
+    let delete_check = if liveness == vm::VmLiveness::Unknown {
+        let pid = std::fs::read_to_string(vm::vm_pid_path(state_dir, name))
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok());
+        let process_alive = pid.and_then(|pid| exec::pid_is_alive(pid).ok());
+        vm::delete_plan_with_shutdown_proof(
+            liveness,
+            pid.is_some(),
+            process_alive,
+            qmp_port_is_free(entry.qmp_host_port),
+        )
+    } else {
+        vm::delete_plan(liveness)
+    };
+    if let Err(reason) = delete_check {
+        return err_exit(&format!("refusing to delete {name}: {reason}"));
     }
     registry.vms.retain(|v| v.name != name);
     if let Err(e) = vm::save_registry(state_dir, &registry) {
         return err_exit(&e);
     }
     if purge {
-        let dir = vm::vm_dir(state_dir, name);
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => println!("removed {}", dir.display()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return err_exit(&format!("remove {}: {e}", dir.display())),
+        if let Err(e) = purge_vm_artifacts(state_dir, name) {
+            return err_exit(&e);
         }
+    } else {
+        let _ = std::fs::remove_file(vm::vm_pid_path(state_dir, name));
     }
     println!("VM {name} deleted (registry updated).");
     0
@@ -1262,37 +1477,28 @@ fn cmd_vm_snapshot(state_dir: &Path, name: &str, tag: &str) -> i32 {
     // Bug A: `qemu-img snapshot -c` against a disk a running QEMU has open
     // corrupts the qcow2 (invalid snapshot table entry; the image then fails to
     // open at all). Resolve liveness first and pick the only legal writer.
-    let liveness = vm::vm_liveness_from_qmp_probe(qmp::probe(
-        entry.qmp_host_port,
-        qmp::PROBE_TIMEOUT,
-    ));
+    let liveness = probe_vm_liveness(entry.qmp_host_port);
     match vm::snapshot_plan(liveness, true) {
         vm::SnapshotPlan::Skip(why) => {
             return err_exit(&format!("refusing to snapshot {name}: {why}"));
         }
         vm::SnapshotPlan::QmpInternal => {
-            let device = match qmp::device_for_disk(
-                entry.qmp_host_port,
-                &disk,
-                qmp::PROBE_TIMEOUT,
-            ) {
+            let device = match qmp::device_for_disk(entry.qmp_host_port, &disk, qmp::PROBE_TIMEOUT)
+            {
                 Ok(d) => d,
                 Err(e) => {
                     return err_exit(&format!(
-                        "cannot address the live disk over QMP ({e}) — no qemu-img write was attempted"
-                    ))
+                    "cannot address the live disk over QMP ({e}) — no qemu-img write was attempted"
+                ))
                 }
             };
             println!(
                 "$ QMP blockdev-snapshot-internal-sync device={device} name={tag} (live VM, port {})",
                 entry.qmp_host_port
             );
-            if let Err(e) = qmp::internal_snapshot(
-                entry.qmp_host_port,
-                &device,
-                tag,
-                qmp::COMMAND_TIMEOUT,
-            ) {
+            if let Err(e) =
+                qmp::internal_snapshot(entry.qmp_host_port, &device, tag, qmp::COMMAND_TIMEOUT)
+            {
                 return err_exit(&format!(
                     "QMP internal snapshot failed: {e} — no qemu-img write was attempted"
                 ));
@@ -1313,12 +1519,18 @@ fn cmd_vm_snapshot(state_dir: &Path, name: &str, tag: &str) -> i32 {
     println!("$ {}", argv_to_display(&argv));
     let out = exec::run_command(&argv, Duration::from_secs(300));
     if !out.success {
-        return err_exit(&format!("qemu-img snapshot failed: {}", out.stderr_last_line()));
+        return err_exit(&format!(
+            "qemu-img snapshot failed: {}",
+            out.stderr_last_line()
+        ));
     }
     if let Err(e) = register_snapshot(state_dir, &mut registry, name, tag) {
         return err_exit(&e);
     }
-    println!("snapshot {tag:?} created on {} (VM was stopped).", disk.display());
+    println!(
+        "snapshot {tag:?} created on {} (VM was stopped).",
+        disk.display()
+    );
     0
 }
 
@@ -1361,7 +1573,7 @@ fn cmd_vm_restore(state_dir: &Path, name: &str, tag: &str) -> i32 {
     // refused instead of corrupted — there is no QMP equivalent here, because
     // applying a snapshot under a live guest would leave it running on stale
     // in-memory state.
-    let liveness = vm::vm_liveness_from_qmp_probe(qmp::probe(qmp_port, qmp::PROBE_TIMEOUT));
+    let liveness = probe_vm_liveness(qmp_port);
     match vm::snapshot_plan(liveness, true) {
         vm::SnapshotPlan::QemuImg => {}
         vm::SnapshotPlan::QmpInternal => {
@@ -1418,22 +1630,46 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     if registry.contains(new_name) {
         return err_exit(&format!("VM {new_name:?} already exists"));
     }
-    let Some(src) = registry.get(name) else {
+    let Some(src) = registry.get(name).cloned() else {
         return err_exit(&format!("VM {name:?} not registered"));
     };
+    let liveness = probe_vm_liveness(src.qmp_host_port);
+    if let Err(reason) = vm::clone_plan(liveness) {
+        return err_exit(&format!("refusing to clone {name}: {reason}"));
+    }
     let qemu_img = match doctor::discover_qemu_img_with(Some(state_dir)) {
         Some(p) => p.display().to_string(),
         None => return err_exit("qemu-img not found — run `qemu-center doctor`"),
     };
+    let clone_dir = vm::vm_dir(state_dir, new_name);
+    if clone_dir.exists() {
+        return err_exit(&format!(
+            "refusing to clone into existing VM artifact directory {}",
+            clone_dir.display()
+        ));
+    }
+    if let Err(error) = std::fs::create_dir_all(&clone_dir) {
+        return err_exit(&format!(
+            "cannot create clone directory {}: {error}",
+            clone_dir.display()
+        ));
+    }
     let clone_disk = vm::vm_disk_path(state_dir, new_name);
     let argv = vm::qemu_img_create_overlay(&qemu_img, &clone_disk, &src.disk, None);
     println!("$ {}", argv_to_display(&argv));
     let t0 = std::time::Instant::now();
     let out = exec::run_command(&argv, Duration::from_secs(300));
     if !out.success {
-        return err_exit(&format!("qemu-img clone failed: {}", out.stderr_last_line()));
+        let _ = std::fs::remove_dir_all(&clone_dir);
+        return err_exit(&format!(
+            "qemu-img clone failed: {}",
+            out.stderr_last_line()
+        ));
     }
-    println!("clone written in {} ms (qcow2 backing file — no data copied).", t0.elapsed().as_millis());
+    println!(
+        "clone written in {} ms (qcow2 backing file — no data copied).",
+        t0.elapsed().as_millis()
+    );
 
     // Ports: a clone is a *second node* — its own ssh/qmp ports and its own
     // adb block. Cloud-init does not re-run on a clone (the guest is already
@@ -1441,17 +1677,30 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     let mut used = registry.used_ports();
     let ssh_port = match vm::next_free_port(&used, vm::DEFAULT_SSH_PORT_BASE) {
         Some(p) => p,
-        None => return err_exit("no free ssh host port"),
+        None => {
+            let _ = std::fs::remove_dir_all(&clone_dir);
+            return err_exit("no free ssh host port");
+        }
     };
     used.insert(ssh_port);
     let qmp_port = match vm::next_free_port(&used, vm::DEFAULT_QMP_PORT_BASE) {
         Some(p) => p,
-        None => return err_exit("no free qmp host port"),
+        None => {
+            let _ = std::fs::remove_dir_all(&clone_dir);
+            return err_exit("no free qmp host port");
+        }
     };
     used.insert(qmp_port);
-    let adb_ports = match vm::allocate_port_block(&used, vm::DEFAULT_ADB_PORT_BASE, src.adb_ports.len().max(1) as u16) {
+    let adb_ports = match vm::allocate_port_block(
+        &used,
+        vm::DEFAULT_ADB_PORT_BASE,
+        src.adb_ports.len().max(1) as u16,
+    ) {
         Ok(p) => p,
-        Err(e) => return err_exit(&e.to_string()),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&clone_dir);
+            return err_exit(&e.to_string());
+        }
     };
     let entry = VmEntry {
         name: new_name.to_string(),
@@ -1471,6 +1720,7 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     };
     registry.vms.push(entry);
     if let Err(e) = vm::save_registry(state_dir, &registry) {
+        let _ = std::fs::remove_dir_all(&clone_dir);
         return err_exit(&e);
     }
     println!("VM {new_name} cloned from {name} (ssh port {ssh_port}).");
@@ -1501,11 +1751,35 @@ fn cmd_guest_wait(state_dir: &Path, name: &str, timeout_secs: u64) -> i32 {
         let out = exec::run_command(&argv, Duration::from_secs(15));
         if out.success {
             println!("guest SSH reachable after {attempt} attempt(s).");
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!(
+                "error: guest not reachable within {timeout_secs}s (last: {})",
+                out.stderr_last_line()
+            );
+            eprintln!("  poll: {cmd}");
+            return 1;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+
+    let readiness_argv = ssh_cmd_for(&entry, state_dir, guest::cmd_guest_bootstrap_ready());
+    let readiness_cmd = argv_to_display(&readiness_argv);
+    let mut readiness_attempt = 0u32;
+    loop {
+        readiness_attempt += 1;
+        let out = exec::run_command(&readiness_argv, Duration::from_secs(15));
+        if out.success {
+            println!("guest provisioning ready after {readiness_attempt} readiness attempt(s).");
             return 0;
         }
         if std::time::Instant::now() >= deadline {
-            eprintln!("error: guest not reachable within {timeout_secs}s (last: {})", out.stderr_last_line());
-            eprintln!("  poll: {cmd}");
+            eprintln!(
+                "error: guest SSH is reachable but provisioning was not ready within {timeout_secs}s (last: {})",
+                out.stderr_last_line()
+            );
+            eprintln!("  poll: {readiness_cmd}");
             return 1;
         }
         std::thread::sleep(Duration::from_secs(2));
@@ -1555,8 +1829,8 @@ fn cmd_redroid_create(
     state_dir: &Path,
     vm_name: &str,
     inst: &str,
-    cpus: f64,
-    memory: u32,
+    cpus_override: Option<f64>,
+    memory_override: Option<u32>,
     profile: &str,
     width: u32,
     height: u32,
@@ -1568,8 +1842,15 @@ fn cmd_redroid_create(
 ) -> i32 {
     for bind in &binds {
         let parts: Vec<_> = bind.split(':').collect();
-        if parts.len() != 3 || !parts[0].starts_with('/') || !parts[1].starts_with('/') || parts[2] != "ro" || bind.contains([',', '\n', '\r']) {
-            return err_exit("bind must be an absolute guest source:target:ro without commas/newlines");
+        if parts.len() != 3
+            || !parts[0].starts_with('/')
+            || !parts[1].starts_with('/')
+            || parts[2] != "ro"
+            || bind.contains([',', '\n', '\r'])
+        {
+            return err_exit(
+                "bind must be an absolute guest source:target:ro without commas/newlines",
+            );
         }
     }
     if let Err(e) = redroid::validate_instance_name(inst) {
@@ -1589,14 +1870,41 @@ fn cmd_redroid_create(
     let Some(entry) = registry.get(vm_name) else {
         return err_exit(&format!("VM {vm_name:?} not registered"));
     };
+    let (cpus, memory) = match redroid::resolve_instance_resources(
+        profile,
+        entry.vcpus,
+        entry.mem_mib,
+        cpus_override,
+        memory_override,
+    ) {
+        Ok(resources) => resources,
+        Err(error) => return err_exit(&error),
+    };
     let container = redroid::container_name(inst);
     if entry.adb_assignments.contains_key(inst) {
-        return err_exit(&format!("instance {inst:?} already assigned on VM {vm_name:?}"));
+        return err_exit(&format!(
+            "instance {inst:?} already assigned on VM {vm_name:?}"
+        ));
     }
+
+    // A stopped container keeps its ADB assignment and data volume, but it no
+    // longer competes for the node's runtime memory. Prefer a fresh, read-only
+    // Docker status count so idle release can make room for a new instance.
+    // If the guest is down or the status output is incomplete, stay
+    // conservative and charge every registered assignment as before.
+    let registered_instances = entry.adb_assignments.len() as u32;
+    let running_instances = {
+        let live = guest_docker(entry, state_dir, &redroid::docker_ps_args());
+        if live.success {
+            guest::parse_running_redroid_count(&live.stdout).unwrap_or(registered_instances)
+        } else {
+            registered_instances
+        }
+    };
     if let Err(error) = redroid::validate_resource_budget(
         entry.mem_mib,
         memory,
-        entry.adb_assignments.len().saturating_add(1) as u32,
+        running_instances.saturating_add(1),
     ) {
         return err_exit(&format!(
             "resource profile {} cannot fit this VM: {error:?}",
@@ -1624,11 +1932,21 @@ fn cmd_redroid_create(
     let entry = registry.get(vm_name).expect("checked above");
     let vol = guest_docker(entry, state_dir, &redroid::docker_volume_create_args(inst));
     if !vol.success {
-        println!("note: volume create failed (continuing; docker run -v will retry): {}", vol.stderr_last_line());
+        println!(
+            "note: volume create failed (continuing; docker run -v will retry): {}",
+            vol.stderr_last_line()
+        );
     }
-    let run = guest_docker(entry, state_dir, &redroid::redroid_create_args_with_mounts(&spec, &binds, cgroup_parent.as_deref()));
+    let run = guest_docker(
+        entry,
+        state_dir,
+        &redroid::redroid_create_args_with_mounts(&spec, &binds, cgroup_parent.as_deref()),
+    );
     if !run.success {
-        return err_exit(&format!("docker run failed in guest: {}", run.stderr_last_line()));
+        return err_exit(&format!(
+            "docker run failed in guest: {}",
+            run.stderr_last_line()
+        ));
     }
     let Some(e) = registry.get_mut(vm_name) else {
         return err_exit("VM disappeared from registry");
@@ -1651,7 +1969,11 @@ fn cmd_redroid_lifecycle(state_dir: &Path, vm_name: &str, inst: &str, action: &s
     if action != "start" && action != "stop" {
         return err_exit("action must be start|stop");
     }
-    let out = guest_docker(&entry, state_dir, &redroid::docker_lifecycle_args(action, inst));
+    let out = guest_docker(
+        &entry,
+        state_dir,
+        &redroid::docker_lifecycle_args(action, inst),
+    );
     if out.success {
         println!("{action} {} ok.", redroid::container_name(inst));
         0
@@ -1707,13 +2029,26 @@ fn cmd_redroid_list(state_dir: &Path, vm_name: &str, json: bool) -> i32 {
         println!("no instances assigned on VM {vm_name}");
         return 0;
     }
-    println!("{:<16} {:<10} {:<22} {}", "INSTANCE", "PORT", "SERIAL", "STATUS");
+    println!(
+        "{:<16} {:<10} {:<22} {}",
+        "INSTANCE", "PORT", "SERIAL", "STATUS"
+    );
     for (name, port) in &entry.adb_assignments {
         let status = status_by_name
             .get(&redroid::container_name(name))
             .map(String::as_str)
-            .unwrap_or(if live.success { "not found" } else { "unknown (vm down?)" });
-        println!("{:<16} {:<10} {:<22} {}", name, port, verify::adb_serial(*port), status);
+            .unwrap_or(if live.success {
+                "not found"
+            } else {
+                "unknown (vm down?)"
+            });
+        println!(
+            "{:<16} {:<10} {:<22} {}",
+            name,
+            port,
+            verify::adb_serial(*port),
+            status
+        );
     }
     0
 }
@@ -1764,8 +2099,8 @@ fn parse_guest_redroid_stats(raw: &str) -> Result<Vec<redroid::RedroidRuntimeSta
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown")
                 .to_string();
-            let memory_limit_bytes = optional_u64(value.pointer("/HostConfig/Memory"))
-                .filter(|limit| *limit > 0);
+            let memory_limit_bytes =
+                optional_u64(value.pointer("/HostConfig/Memory")).filter(|limit| *limit > 0);
             rows.insert(
                 id,
                 redroid::RedroidRuntimeStats {
@@ -1817,16 +2152,27 @@ fn parse_guest_redroid_stats(raw: &str) -> Result<Vec<redroid::RedroidRuntimeSta
         }
     }
 
+    // `docker inspect` returns the full 64-character ID, while `docker ps
+    // --format '{{.ID}}'` returns the short 12-character ID. Accept either
+    // form so the independently collected metrics can be joined reliably.
+    fn metric_for_id<'a, T>(metrics: &'a BTreeMap<String, T>, id: &str) -> Option<&'a T> {
+        metrics.get(id).or_else(|| {
+            metrics.iter().find_map(|(metric_id, value)| {
+                (id.starts_with(metric_id) || metric_id.starts_with(id)).then_some(value)
+            })
+        })
+    }
+
     for (id, row) in &mut rows {
-        if let Some((current, peak, oom)) = cgroups.get(id) {
+        if let Some((current, peak, oom)) = metric_for_id(&cgroups, id) {
             row.memory_current_bytes = *current;
             row.memory_peak_bytes = *peak;
             row.oom_kills = *oom;
         }
-        if let Some(cpu) = cpus.get(id) {
+        if let Some(cpu) = metric_for_id(&cpus, id) {
             row.cpu_usage_percent = *cpu;
         }
-        if let Some(boot) = boots.get(id) {
+        if let Some(boot) = metric_for_id(&boots, id) {
             row.boot_completed = *boot;
         }
     }
@@ -1834,12 +2180,7 @@ fn parse_guest_redroid_stats(raw: &str) -> Result<Vec<redroid::RedroidRuntimeSta
     Ok(rows.into_values().collect())
 }
 
-fn cmd_redroid_stats(
-    state_dir: &Path,
-    vm_name: &str,
-    instance: Option<&str>,
-    json: bool,
-) -> i32 {
+fn cmd_redroid_stats(state_dir: &Path, vm_name: &str, instance: Option<&str>, json: bool) -> i32 {
     if let Some(instance) = instance {
         if let Err(e) = redroid::validate_instance_name(instance) {
             return err_exit(&e);
@@ -1852,10 +2193,7 @@ fn cmd_redroid_stats(
     let argv = ssh_cmd_for(&entry, state_dir, &guest::cmd_redroid_stats(instance));
     let out = exec::run_command(&argv, Duration::from_secs(90));
     if !out.success {
-        return err_exit(&format!(
-            "redroid stats failed: {}",
-            out.stderr_last_line()
-        ));
+        return err_exit(&format!("redroid stats failed: {}", out.stderr_last_line()));
     }
     let mut rows = match parse_guest_redroid_stats(&out.stdout) {
         Ok(rows) => rows,
@@ -1974,7 +2312,7 @@ fn cmd_adb_list(state_dir: &Path, json: bool) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_parent_dir, parse_guest_redroid_stats};
+    use super::{ensure_parent_dir, parse_guest_redroid_stats, purge_vm_artifacts};
     use std::path::{Path, PathBuf};
 
     /// Unique scratch dir per test (no external dev-deps — same pattern as the
@@ -1997,7 +2335,10 @@ mod tests {
         let key_path = dir.join("keys").join("probe-test_ed25519");
         let parent = ensure_parent_dir(&key_path).expect("parent dir must be creatable");
         assert_eq!(parent, dir.join("keys"));
-        assert!(dir.join("keys").is_dir(), "keys/ must exist before ssh-keygen");
+        assert!(
+            dir.join("keys").is_dir(),
+            "keys/ must exist before ssh-keygen"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2038,5 +2379,38 @@ mod tests {
         assert_eq!(rows[0].oom_kills, Some(7));
         assert_eq!(rows[0].cpu_usage_percent, Some(0.25));
         assert_eq!(rows[0].boot_completed, Some(true));
+    }
+
+    #[test]
+    fn guest_stats_parser_joins_short_docker_ids_to_full_inspect_ids() {
+        let raw = concat!(
+            "QC_INSPECT\t{\"Id\":\"abcdef1234567890\",\"Name\":\"/qc-r13\",\"State\":{\"Status\":\"running\"},\"HostConfig\":{\"Memory\":2147483648}}\n",
+            "QC_CGROUP\tabcdef123456\t123|456|7\n",
+            "QC_CPU\tabcdef123456\t2.19\n",
+            "QC_BOOT\tabcdef123456\t1\n"
+        );
+        let rows = parse_guest_redroid_stats(raw).unwrap();
+        assert_eq!(rows[0].memory_current_bytes, Some(123));
+        assert_eq!(rows[0].memory_peak_bytes, Some(456));
+        assert_eq!(rows[0].oom_kills, Some(7));
+        assert_eq!(rows[0].cpu_usage_percent, Some(2.19));
+        assert_eq!(rows[0].boot_completed, Some(true));
+    }
+
+    #[test]
+    fn purge_vm_artifacts_removes_node_directory_and_ssh_keys() {
+        let dir = scratch("purge");
+        std::fs::create_dir_all(dir.join("vms/matrix3072")).unwrap();
+        std::fs::create_dir_all(dir.join("keys")).unwrap();
+        std::fs::write(dir.join("vms/matrix3072/disk.qcow2"), b"test disk").unwrap();
+        std::fs::write(dir.join("keys/matrix3072_ed25519"), b"private").unwrap();
+        std::fs::write(dir.join("keys/matrix3072_ed25519.pub"), b"public").unwrap();
+
+        purge_vm_artifacts(&dir, "matrix3072").expect("purge should remove all node artifacts");
+
+        assert!(!dir.join("vms/matrix3072").exists());
+        assert!(!dir.join("keys/matrix3072_ed25519").exists());
+        assert!(!dir.join("keys/matrix3072_ed25519.pub").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -403,6 +403,143 @@ pub fn where_exists(exe: &str) -> bool {
     run_command(&argv, Duration::from_secs(10)).success
 }
 
+/// Parse one `tasklist /FO CSV /NH` row without relying on localized headers.
+#[cfg(windows)]
+pub fn tasklist_contains_pid(output: &str, pid: u32) -> bool {
+    let expected = pid.to_string();
+    output.lines().any(|line| {
+        line.split(',')
+            .nth(1)
+            .map(|value| value.trim().trim_matches('"') == expected)
+            .unwrap_or(false)
+    })
+}
+
+/// Parse `tasklist /FO CSV /NH` without relying on localized headers and
+/// report whether any QEMU system process is present.  This is intentionally
+/// host-wide: a positive result cannot identify ownership of a particular
+/// VM, while a successful empty result proves that no QEMU process can own
+/// any VM disk on this host.
+pub fn tasklist_contains_qemu_process(output: &str) -> bool {
+    output.lines().any(|line| {
+        let image_name = line
+            .split(',')
+            .next()
+            .map(|value| value.trim().trim_matches('"'))
+            .unwrap_or_default();
+        let image_name = image_name
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(image_name)
+            .to_ascii_lowercase();
+        image_name.starts_with("qemu-system-")
+    })
+}
+
+/// Best-effort host-wide QEMU process probe used only to turn a black-holed
+/// QMP endpoint into a safe stopped result.  A command failure is returned to
+/// the caller so the liveness decision remains fail-closed.
+pub fn host_has_qemu_process() -> io::Result<bool> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("tasklist");
+        cmd.args(["/FO", "CSV", "/NH"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        no_window(&mut cmd);
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        return Ok(tasklist_contains_qemu_process(&String::from_utf8_lossy(
+            &output.stdout,
+        )));
+    }
+
+    #[cfg(unix)]
+    {
+        let output = Command::new("ps")
+            .args(["-e", "-o", "comm="])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        return Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|name| {
+                name.trim()
+                    .rsplit(['\\', '/'])
+                    .next()
+                    .unwrap_or(name.trim())
+                    .to_ascii_lowercase()
+                    .starts_with("qemu-system-")
+            }));
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "host process probing is unsupported on this platform",
+        ))
+    }
+}
+
+/// Best-effort liveness probe for a PID recorded by `vm start`.
+///
+/// A PID that is still alive is always treated as unsafe by delete.  Probe
+/// failure is returned to the caller rather than being weakened to "dead".
+pub fn pid_is_alive(pid: u32) -> io::Result<bool> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("tasklist");
+        let filter = format!("PID eq {pid}");
+        cmd.args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        no_window(&mut cmd);
+        let output = cmd.output()?;
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        return Ok(tasklist_contains_pid(
+            &String::from_utf8_lossy(&output.stdout),
+            pid,
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        let status = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()?;
+        return Ok(status.success());
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "PID liveness probing is unsupported on this platform",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +549,19 @@ mod tests {
     const HELPER_ENV: &str = "QC_TEST_DETACHED_HELPER";
     /// Log file the helper points its detached child at.
     const HELPER_LOG: &str = "qemu-center-detached-stdio-test.log";
+
+    #[test]
+    fn tasklist_qemu_probe_ignores_headers_and_other_processes() {
+        let output = concat!(
+            "\"Image Name\",\"PID\",\"Session Name\",\"Session#\",\"Mem Usage\"\n",
+            "\"explorer.exe\",\"100\",\"Console\",\"1\",\"10,000 K\"\n",
+            "\"C:\\\\Program Files\\\\QEMU\\\\qemu-system-x86_64.exe\",\"200\",\"Console\",\"1\",\"20,000 K\"\n",
+        );
+        assert!(tasklist_contains_qemu_process(output));
+        assert!(!tasklist_contains_qemu_process(
+            "\"explorer.exe\",\"100\",\"Console\",\"1\",\"10,000 K\"\n"
+        ));
+    }
 
     #[test]
     fn detached_spawn_reports_immediate_exit_and_current_error() {
@@ -444,6 +594,18 @@ mod tests {
         assert!(error.contains("7"), "{error}");
         assert!(error.contains("QC_STARTUP_FAILED"), "{error}");
         assert!(!error.contains("stale error"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tasklist_pid_parser_ignores_other_rows_and_localized_headers() {
+        let output = concat!(
+            "\"Image Name\",\"PID\",\"Session Name\",\"Session#\",\"Mem Usage\"\n",
+            "\"other.exe\",\"12\",\"Console\",\"1\",\"1,000 K\"\n",
+            "\"qemu-system-x86_64.exe\",\"3456\",\"Console\",\"1\",\"3,072 K\"\n",
+        );
+        assert!(tasklist_contains_pid(output, 3456));
+        assert!(!tasklist_contains_pid(output, 3457));
     }
 
     /// The long-lived child the helper detaches; stands in for QEMU. `ping` is

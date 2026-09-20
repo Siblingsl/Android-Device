@@ -265,7 +265,10 @@ pub fn qemu_command(o: &LaunchOptions) -> Vec<String> {
     // about what the guest was doing. Both accelerators get it: a hang under
     // TCG needs the same evidence.
     a.push("-serial".into());
-    a.push(format!("file:{}", qemu_path_arg(&console_log_path(&o.disk))));
+    a.push(format!(
+        "file:{}",
+        qemu_path_arg(&console_log_path(&o.disk))
+    ));
     // Per-VM QMP socket for `vm stop` (`system_powerdown`).
     a.push("-qmp".into());
     a.push(format!(
@@ -593,9 +596,7 @@ pub fn vm_ssh_key_path(state_dir: &Path, name: &str) -> PathBuf {
 }
 
 pub fn vm_ssh_key_pub_path(state_dir: &Path, name: &str) -> PathBuf {
-    state_dir
-        .join("keys")
-        .join(format!("{name}_ed25519.pub"))
+    state_dir.join("keys").join(format!("{name}_ed25519.pub"))
 }
 
 pub fn vm_known_hosts_path(state_dir: &Path, name: &str) -> PathBuf {
@@ -609,6 +610,13 @@ pub fn vm_known_hosts_path(state_dir: &Path, name: &str) -> PathBuf {
 /// operator wants instead of `/dev/null` when a VM fails to boot.
 pub fn vm_qemu_log_path(state_dir: &Path, name: &str) -> PathBuf {
     vm_dir(state_dir, name).join("qemu.log")
+}
+
+/// PID marker written when a detached QEMU is started on the host.  It is a
+/// runtime safety aid for environments where a local proxy hides a closed QMP
+/// port; it is not used as a replacement for a positive QMP running probe.
+pub fn vm_pid_path(state_dir: &Path, name: &str) -> PathBuf {
+    vm_dir(state_dir, name).join("qemu.pid")
 }
 
 /// Host-side path of a VM's guest serial console log, derived from the disk
@@ -651,8 +659,8 @@ pub fn load_registry(state_dir: &Path) -> Result<Registry, String> {
     if !path.exists() {
         return Ok(Registry::default());
     }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     if raw.trim().is_empty() {
         return Ok(Registry::default());
     }
@@ -669,13 +677,8 @@ pub fn save_registry(state_dir: &Path, reg: &Registry) -> Result<(), String> {
     let tmp = state_dir.join("state.json.tmp");
     let body = serde_json::to_string_pretty(reg).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| {
-        format!(
-            "rename {} -> {}: {e}",
-            tmp.display(),
-            path.display()
-        )
-    })
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))
 }
 
 /// Now, as unix seconds (std-only; no chrono in this crate).
@@ -781,17 +784,14 @@ fn normalize_image_path(p: &str) -> String {
 pub fn qmp_device_for_disk(query_block_reply: &str, disk: &Path) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(query_block_reply.trim()).ok()?;
     let want = normalize_image_path(&disk.to_string_lossy());
-    v.get("return")?
-        .as_array()?
-        .iter()
-        .find_map(|dev| {
-            let file = dev.pointer("/inserted/file")?.as_str()?;
-            if normalize_image_path(file) == want {
-                dev.get("device")?.as_str().map(str::to_string)
-            } else {
-                None
-            }
-        })
+    v.get("return")?.as_array()?.iter().find_map(|dev| {
+        let file = dev.pointer("/inserted/file")?.as_str()?;
+        if normalize_image_path(file) == want {
+            dev.get("device")?.as_str().map(str::to_string)
+        } else {
+            None
+        }
+    })
 }
 
 // ------------------------------------------------- live-disk write safety ----
@@ -828,6 +828,106 @@ pub fn vm_liveness_from_qmp_probe(probe: QmpProbe) -> VmLiveness {
         QmpProbe::Answered => VmLiveness::Running,
         QmpProbe::Refused => VmLiveness::Stopped,
         QmpProbe::TimedOut => VmLiveness::Unknown,
+    }
+}
+
+/// Map a QMP probe onto liveness when an independent host process probe is
+/// available.  A host-wide "no QEMU process exists" result is stronger than
+/// a black-holed QMP connection: there cannot be a QEMU owner for this VM's
+/// disk.  Any failed, unavailable, or positive process probe remains
+/// fail-closed as [`VmLiveness::Unknown`].
+pub fn vm_liveness_from_qmp_probe_with_host_process_check(
+    probe: QmpProbe,
+    host_has_qemu_process: Option<bool>,
+) -> VmLiveness {
+    match (probe, host_has_qemu_process) {
+        (QmpProbe::TimedOut, Some(false)) => VmLiveness::Stopped,
+        _ => vm_liveness_from_qmp_probe(probe),
+    }
+}
+
+pub const MIN_VM_MEMORY_MIB: u32 = 1536;
+pub const MAX_VM_MEMORY_MIB: u32 = 16384;
+pub const VM_START_HEADROOM_MIB: u64 = 1024;
+const BYTES_PER_MIB: u64 = 1024 * 1024;
+
+/// Return whether a new QEMU process would exceed the host's requested
+/// memory budget. `None` preserves the explicit-start compatibility path.
+pub fn should_block_vm_start(host_available_bytes: Option<u64>, vm_memory_mib: u32) -> bool {
+    let Some(host_available_bytes) = host_available_bytes else {
+        return false;
+    };
+    if vm_memory_mib == 0 {
+        return true;
+    }
+    let required_bytes = u64::from(vm_memory_mib)
+        .saturating_add(VM_START_HEADROOM_MIB)
+        .saturating_mul(BYTES_PER_MIB);
+    host_available_bytes < required_bytes
+}
+
+pub fn vm_start_required_memory_mib(vm_memory_mib: u32) -> u64 {
+    u64::from(vm_memory_mib).saturating_add(VM_START_HEADROOM_MIB)
+}
+
+/// Validate the only safe state transition for changing a node's QEMU RAM.
+/// The registry is updated only while QMP proves that no QEMU owns the disk;
+/// running or unknown liveness is deliberately treated as unsafe.
+pub fn validate_memory_reconfiguration(
+    liveness: VmLiveness,
+    memory_mib: u32,
+) -> Result<(), String> {
+    match liveness {
+        VmLiveness::Running => Err("cannot change VM memory while QEMU is running".into()),
+        VmLiveness::Unknown => Err("cannot change VM memory while QEMU state is unknown".into()),
+        VmLiveness::Stopped if !(MIN_VM_MEMORY_MIB..=MAX_VM_MEMORY_MIB).contains(&memory_mib) => {
+            Err(format!(
+                "VM memory must be between {MIN_VM_MEMORY_MIB} and {MAX_VM_MEMORY_MIB} MiB"
+            ))
+        }
+        VmLiveness::Stopped => Ok(()),
+    }
+}
+
+/// A backing-file clone is only a coherent experiment baseline when the
+/// source disk is not being changed by a live guest.
+pub fn clone_plan(liveness: VmLiveness) -> Result<(), &'static str> {
+    match liveness {
+        VmLiveness::Stopped => Ok(()),
+        VmLiveness::Running => Err("cannot clone a VM while QEMU is running"),
+        VmLiveness::Unknown => Err("cannot clone a VM while QEMU state is unknown"),
+    }
+}
+
+/// A node may only be forgotten or purged after QMP proves that no QEMU
+/// process owns its disk or state directory. Forgetting a live node would
+/// leave an untracked process; purging one could destroy its active qcow2.
+pub fn delete_plan(liveness: VmLiveness) -> Result<(), &'static str> {
+    match liveness {
+        VmLiveness::Stopped => Ok(()),
+        VmLiveness::Running => Err("cannot delete a VM while QEMU is running"),
+        VmLiveness::Unknown => Err("cannot delete a VM while QEMU state is unknown"),
+    }
+}
+
+/// A QMP endpoint can be hidden by a local proxy even after a graceful
+/// shutdown.  In that case deletion is still safe only when this process has
+/// a recorded QEMU PID, the PID is gone, and the QMP port can be bound again.
+/// Keeping this decision pure makes the fail-closed rule independently
+/// testable; the OS probes live in the CLI layer.
+pub fn delete_plan_with_shutdown_proof(
+    liveness: VmLiveness,
+    recorded_pid: bool,
+    process_alive: Option<bool>,
+    qmp_port_free: bool,
+) -> Result<(), &'static str> {
+    if liveness != VmLiveness::Unknown {
+        return delete_plan(liveness);
+    }
+    if recorded_pid && process_alive == Some(false) && qmp_port_free {
+        Ok(())
+    } else {
+        Err("cannot delete a VM while QEMU state is unknown")
     }
 }
 
@@ -971,7 +1071,10 @@ mod tests {
                 Some("file:C:/qc/vms/node1/console.log"),
                 "-serial wrong for {accel:?}"
             );
-            assert!(s.contains("-display none"), "display disturbed for {accel:?}");
+            assert!(
+                s.contains("-display none"),
+                "display disturbed for {accel:?}"
+            );
             assert!(
                 s.contains("-qmp tcp:127.0.0.1:23300,server=on,wait=off"),
                 "QMP disturbed for {accel:?}"
@@ -990,8 +1093,14 @@ mod tests {
             PathBuf::from("C:/qc/vms/node1/console.log")
         );
         // Relative/malformed disks must not panic and must not escape the cwd.
-        assert_eq!(console_log_path(Path::new("disk.qcow2")), PathBuf::from("console.log"));
-        assert_eq!(console_log_path(Path::new("")), PathBuf::from("console.log"));
+        assert_eq!(
+            console_log_path(Path::new("disk.qcow2")),
+            PathBuf::from("console.log")
+        );
+        assert_eq!(
+            console_log_path(Path::new("")),
+            PathBuf::from("console.log")
+        );
     }
 
     /// Real-machine shape: the state dir is a Windows path with backslashes, so
@@ -1069,12 +1178,23 @@ mod tests {
         assert_eq!(rules[0].host_port, 22300);
         assert_eq!(rules[0].guest_port, 22);
         assert_eq!(rules[1].to_hostfwd(), "tcp::24500-:24500");
-        assert_eq!(PortForward { host_port: 5353, guest_port: 5353, udp: true }.to_hostfwd(), "udp::5353-:5353");
+        assert_eq!(
+            PortForward {
+                host_port: 5353,
+                guest_port: 5353,
+                udp: true
+            }
+            .to_hostfwd(),
+            "udp::5353-:5353"
+        );
     }
 
     #[test]
     fn netdev_arg_has_id_and_no_trailing_comma_without_forwards() {
-        assert_eq!(netdev_user_arg(22300, &[]), "user,id=net0,hostfwd=tcp::22300-:22");
+        assert_eq!(
+            netdev_user_arg(22300, &[]),
+            "user,id=net0,hostfwd=tcp::22300-:22"
+        );
     }
 
     // --- qemu-img + validation ---
@@ -1084,7 +1204,14 @@ mod tests {
         let d = Path::new("/s/vms/a/disk.qcow2");
         assert_eq!(
             qemu_img_create("qemu-img", d, 40),
-            vec!["qemu-img", "create", "-f", "qcow2", "/s/vms/a/disk.qcow2", "40G"]
+            vec![
+                "qemu-img",
+                "create",
+                "-f",
+                "qcow2",
+                "/s/vms/a/disk.qcow2",
+                "40G"
+            ]
         );
         assert_eq!(
             qemu_img_create_overlay("qemu-img", d, Path::new("/s/base.img"), None),
@@ -1102,11 +1229,23 @@ mod tests {
         );
         assert_eq!(
             qemu_img_snapshot_create("qemu-img", d, "clean-1"),
-            vec!["qemu-img", "snapshot", "-c", "clean-1", "/s/vms/a/disk.qcow2"]
+            vec![
+                "qemu-img",
+                "snapshot",
+                "-c",
+                "clean-1",
+                "/s/vms/a/disk.qcow2"
+            ]
         );
         assert_eq!(
             qemu_img_snapshot_apply("qemu-img", d, "clean-1"),
-            vec!["qemu-img", "snapshot", "-a", "clean-1", "/s/vms/a/disk.qcow2"]
+            vec![
+                "qemu-img",
+                "snapshot",
+                "-a",
+                "clean-1",
+                "/s/vms/a/disk.qcow2"
+            ]
         );
         assert_eq!(
             qemu_img_info("qemu-img", d),
@@ -1323,7 +1462,9 @@ mod tests {
         assert!(f[1].contains("system_powerdown"));
         assert!(qmp_reply_is_ok(r#"{"return": {}}"#));
         assert!(qmp_reply_is_ok(r#"{"return": {}}"#));
-        assert!(!qmp_reply_is_ok(r#"{"error": {"class": "GenericError", "desc": "x"}}"#));
+        assert!(!qmp_reply_is_ok(
+            r#"{"error": {"class": "GenericError", "desc": "x"}}"#
+        ));
         assert!(!qmp_reply_is_ok("not json"));
         assert!(qmp_greeting_received(
             r#"{"QMP": {"version": {"qemu": {"major": 8}}, "capabilities": []}}"#
@@ -1346,7 +1487,10 @@ mod tests {
         assert_eq!(v["arguments"]["name"], "verify-1789462000");
 
         assert_eq!(qmp_query_block_frame(), r#"{"execute":"query-block"}"#);
-        assert_eq!(qmp_capabilities_frame(), r#"{"execute":"qmp_capabilities"}"#);
+        assert_eq!(
+            qmp_capabilities_frame(),
+            r#"{"execute":"qmp_capabilities"}"#
+        );
         // The shutdown frames must reuse the same capabilities frame.
         assert_eq!(qmp_stop_frames()[0], qmp_capabilities_frame());
 
@@ -1431,8 +1575,14 @@ mod tests {
             SnapshotPlan::Skip(_)
         ));
         // Only a *proven* stopped VM goes through qemu-img.
-        assert_eq!(snapshot_plan(VmLiveness::Stopped, true), SnapshotPlan::QemuImg);
-        assert_eq!(snapshot_plan(VmLiveness::Stopped, false), SnapshotPlan::QemuImg);
+        assert_eq!(
+            snapshot_plan(VmLiveness::Stopped, true),
+            SnapshotPlan::QemuImg
+        );
+        assert_eq!(
+            snapshot_plan(VmLiveness::Stopped, false),
+            SnapshotPlan::QemuImg
+        );
         // Every skip reason names the hazard so reports stay honest.
         for liveness in [VmLiveness::Running, VmLiveness::Unknown] {
             match snapshot_plan(liveness, false) {
@@ -1462,6 +1612,26 @@ mod tests {
     }
 
     #[test]
+    fn timed_out_qmp_becomes_stopped_only_with_host_wide_process_proof() {
+        assert_eq!(
+            vm_liveness_from_qmp_probe_with_host_process_check(QmpProbe::TimedOut, Some(false)),
+            VmLiveness::Stopped
+        );
+        assert_eq!(
+            vm_liveness_from_qmp_probe_with_host_process_check(QmpProbe::TimedOut, Some(true)),
+            VmLiveness::Unknown
+        );
+        assert_eq!(
+            vm_liveness_from_qmp_probe_with_host_process_check(QmpProbe::TimedOut, None),
+            VmLiveness::Unknown
+        );
+        assert_eq!(
+            vm_liveness_from_qmp_probe_with_host_process_check(QmpProbe::Answered, Some(false)),
+            VmLiveness::Running
+        );
+    }
+
+    #[test]
     fn qemu_img_snapshot_delete_command() {
         let d = Path::new("/s/vms/a/disk.qcow2");
         assert_eq!(
@@ -1487,5 +1657,56 @@ mod tests {
         );
         // The seed disk stays id-less (never snapshotted, never addressed by QMP).
         assert!(!s.contains("seed.img,if=virtio,format=raw,read-only=on,id="));
+    }
+
+    #[test]
+    fn node_memory_reconfiguration_is_stopped_only_and_bounded() {
+        assert!(validate_memory_reconfiguration(VmLiveness::Stopped, 3072).is_ok());
+        assert!(validate_memory_reconfiguration(VmLiveness::Stopped, 1536).is_ok());
+        assert!(validate_memory_reconfiguration(VmLiveness::Stopped, 1535).is_err());
+        assert!(validate_memory_reconfiguration(VmLiveness::Stopped, 16385).is_err());
+        assert!(validate_memory_reconfiguration(VmLiveness::Running, 3072).is_err());
+        assert!(validate_memory_reconfiguration(VmLiveness::Unknown, 3072).is_err());
+    }
+
+    #[test]
+    fn vm_start_memory_headroom_blocks_known_shortage_but_preserves_unknown_compatibility() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert!(should_block_vm_start(Some(3 * GIB), 3072));
+        assert!(!should_block_vm_start(Some(4 * GIB), 3072));
+        assert!(!should_block_vm_start(Some(5 * GIB), 3072));
+        assert!(!should_block_vm_start(None, 3072));
+        assert!(should_block_vm_start(Some(8 * GIB), 0));
+    }
+
+    #[test]
+    fn clone_requires_a_qmp_proven_stopped_source() {
+        assert!(clone_plan(VmLiveness::Stopped).is_ok());
+        assert!(clone_plan(VmLiveness::Running).is_err());
+        assert!(clone_plan(VmLiveness::Unknown).is_err());
+    }
+
+    #[test]
+    fn delete_requires_a_qmp_proven_stopped_vm() {
+        assert!(delete_plan(VmLiveness::Stopped).is_ok());
+        assert!(delete_plan(VmLiveness::Running).is_err());
+        assert!(delete_plan(VmLiveness::Unknown).is_err());
+    }
+
+    #[test]
+    fn delete_accepts_unknown_qmp_only_with_a_dead_recorded_process_and_free_port() {
+        assert!(
+            delete_plan_with_shutdown_proof(VmLiveness::Unknown, true, Some(false), true).is_ok()
+        );
+        assert!(
+            delete_plan_with_shutdown_proof(VmLiveness::Unknown, false, Some(false), true).is_err()
+        );
+        assert!(
+            delete_plan_with_shutdown_proof(VmLiveness::Unknown, true, Some(true), true).is_err()
+        );
+        assert!(delete_plan_with_shutdown_proof(VmLiveness::Unknown, true, None, true).is_err());
+        assert!(
+            delete_plan_with_shutdown_proof(VmLiveness::Unknown, true, Some(false), false).is_err()
+        );
     }
 }
