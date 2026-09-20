@@ -14,13 +14,13 @@ use crate::services::authorization::{
     ProtectedCapability, RegistrationProof, SessionProof, SignedExecutionGrant, SignedLease,
 };
 use crate::services::secure_store::{
-    ensure_device_identity_with, load_signing_key_with, DeviceIdentity, SecureStore,
-    SecureStoreError, WindowsSecureStore,
+    ensure_device_identity_with, load_device_signer_with, DeviceIdentity, DeviceSigner,
+    SecureStore, SecureStoreError, WindowsSecureStore,
 };
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use ed25519_dalek::{Signer, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use once_cell::sync::{Lazy, OnceCell};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -259,6 +259,8 @@ where
         &mut self,
     ) -> Result<CompleteRegistrationResponse, AuthorizationError> {
         let identity = self.identity()?;
+        let signer = self.signer()?;
+        ensure_signer_matches_identity(&identity, &signer)?;
         let response = self
             .transport
             .register(RegisterRequest {
@@ -266,15 +268,14 @@ where
                 device_id: identity.device_id.clone(),
                 client_version: self.client_version.clone(),
                 platform: self.platform.clone(),
-                device_public_key: identity.public_key,
-                client_key_algorithm: ClientKeyAlgorithm::Ed25519DpapiV1,
+                device_public_key: signer.public_key_base64url(),
+                client_key_algorithm: signer.algorithm(),
                 requested_product: self.product.clone(),
             })
             .await?;
         if response.device_id != identity.device_id {
             return Err(AuthorizationError::BindingMismatch);
         }
-        let signing_key = self.signing_key()?;
         let proof = RegistrationProof {
             client_id: &response.client_id,
             challenge: &response.challenge,
@@ -285,7 +286,8 @@ where
             .complete_registration(CompleteRegistrationRequest {
                 client_id: response.client_id.clone(),
                 challenge: response.challenge,
-                signature: URL_SAFE_NO_PAD.encode(signing_key.sign(&payload).to_bytes()),
+                signature: URL_SAFE_NO_PAD
+                    .encode(signer.sign_canonical(&payload).map_err(map_store_error)?),
             })
             .await?;
         if complete.client_id != response.client_id || complete.device_id != identity.device_id {
@@ -303,6 +305,8 @@ where
         capabilities: Vec<ProtectedCapability>,
     ) -> Result<AuthorizationSession, AuthorizationError> {
         let identity = self.identity()?;
+        let signer = self.signer()?;
+        ensure_signer_matches_identity(&identity, &signer)?;
         let registration = self
             .registration()?
             .ok_or(AuthorizationError::NotRegistered)?;
@@ -324,7 +328,8 @@ where
                 client_version: self.client_version.clone(),
                 nonce,
                 capabilities: capabilities.clone(),
-                signature: URL_SAFE_NO_PAD.encode(self.signing_key()?.sign(&payload).to_bytes()),
+                signature: URL_SAFE_NO_PAD
+                    .encode(signer.sign_canonical(&payload).map_err(map_store_error)?),
             })
             .await?;
         let lease_clock = self.verify_lease(
@@ -348,6 +353,8 @@ where
             .clone()
             .ok_or(AuthorizationError::NotRegistered)?;
         let identity = self.identity()?;
+        let signer = self.signer()?;
+        ensure_signer_matches_identity(&identity, &signer)?;
         let registration = self
             .registration()?
             .ok_or(AuthorizationError::NotRegistered)?;
@@ -369,7 +376,7 @@ where
                     device_id: identity.device_id.clone(),
                     nonce,
                     signature: URL_SAFE_NO_PAD
-                        .encode(self.signing_key()?.sign(&payload).to_bytes()),
+                        .encode(signer.sign_canonical(&payload).map_err(map_store_error)?),
                 },
             )
             .await?;
@@ -466,6 +473,8 @@ where
             .as_ref()
             .ok_or(AuthorizationError::NotRegistered)?;
         let identity = self.identity()?;
+        let signer = self.signer()?;
+        ensure_signer_matches_identity(&identity, &signer)?;
         let session_id = &session.lease.claims.session_id;
         validate_session_binding(&session.lease.claims, &identity.device_id, session_id)?;
         require_capability(&session.lease.claims, ProtectedCapability::ProtectedPreset)?;
@@ -511,9 +520,9 @@ where
         let mut response = response;
         response.device_proof = Some(
             URL_SAFE_NO_PAD.encode(
-                self.signing_key()?
-                    .sign(response.payload.as_bytes())
-                    .to_bytes(),
+                signer
+                    .sign_canonical(response.payload.as_bytes())
+                    .map_err(map_store_error)?,
             ),
         );
         Ok(response)
@@ -627,8 +636,8 @@ where
         ensure_device_identity_with(&self.store).map_err(map_store_error)
     }
 
-    fn signing_key(&self) -> Result<ed25519_dalek::SigningKey, AuthorizationError> {
-        load_signing_key_with(&self.store).map_err(map_store_error)
+    fn signer(&self) -> Result<DeviceSigner, AuthorizationError> {
+        load_device_signer_with(&self.store).map_err(map_store_error)
     }
 
     fn registration(&self) -> Result<Option<RegistrationRecord>, AuthorizationError> {
@@ -699,6 +708,17 @@ fn ensure_registration_matches(
     identity: &DeviceIdentity,
 ) -> Result<(), AuthorizationError> {
     if registration.device_id == identity.device_id {
+        Ok(())
+    } else {
+        Err(AuthorizationError::BindingMismatch)
+    }
+}
+
+fn ensure_signer_matches_identity(
+    identity: &DeviceIdentity,
+    signer: &DeviceSigner,
+) -> Result<(), AuthorizationError> {
+    if identity.public_key == signer.public_key_base64url() {
         Ok(())
     } else {
         Err(AuthorizationError::BindingMismatch)
@@ -1345,7 +1365,7 @@ mod tests {
     use crate::services::authorization::ExecutionGrantClaims;
     use crate::services::secure_store::{ensure_device_identity_with, MemorySecureStore};
     use async_trait::async_trait;
-    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Mutex;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1364,6 +1384,22 @@ mod tests {
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["client_key_algorithm"], "ed25519-dpapi-v1");
+    }
+
+    #[test]
+    fn signer_public_key_must_match_the_stable_device_identity() {
+        let store = MemorySecureStore::default();
+        ensure_device_identity_with(&store).unwrap();
+        let signer = load_device_signer_with(&store).unwrap();
+        let identity = DeviceIdentity {
+            install_id: "install-a".into(),
+            device_id: "device-a".into(),
+            public_key: "different-public-key".into(),
+        };
+        assert_eq!(
+            ensure_signer_matches_identity(&identity, &signer),
+            Err(AuthorizationError::BindingMismatch)
+        );
     }
 
     #[derive(Default)]

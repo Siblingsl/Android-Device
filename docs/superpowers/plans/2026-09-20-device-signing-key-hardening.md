@@ -95,12 +95,12 @@
   `sign_canonical(payload)`, while retaining `MemorySecureStore` for tests.
 - Existing DPAPI records continue to load as the Ed25519 signer.
 
-- [ ] **Step 1: Write failing signer tests**
+- [x] **Step 1: Write failing signer tests**
 
   Add tests for Ed25519 signer round-trip, public-key-only identity serialization,
   and rejection when key metadata is incomplete or the stored public key changes.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
   ```powershell
   cargo test --manifest-path src-tauri/Cargo.toml services::secure_store
@@ -108,19 +108,23 @@
 
   Expected: missing signer methods or failing assertions.
 
-- [ ] **Step 3: Implement the abstraction and migrate client call sites**
+- [x] **Step 3: Implement the abstraction and migrate client call sites**
 
   Replace direct `load_signing_key_with(...).sign(...)` calls in registration,
   session, heartbeat, and device-proof creation with the signer interface. Keep
   the current DPAPI Ed25519 implementation as the compatibility backend.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
+
+  Cargo accepts one test filter per invocation, so run the two focused suites
+  as separate commands:
 
   ```powershell
-  cargo test --manifest-path src-tauri/Cargo.toml services::secure_store services::authorization_client
+  cargo test --manifest-path src-tauri/Cargo.toml services::secure_store
+  cargo test --manifest-path src-tauri/Cargo.toml services::authorization_client
   ```
 
-- [ ] **Step 5: Commit the signer abstraction**
+- [x] **Step 5: Commit the signer abstraction**
 
   ```powershell
   git add src-tauri/src/services/secure_store.rs src-tauri/src/services/authorization_client.rs
