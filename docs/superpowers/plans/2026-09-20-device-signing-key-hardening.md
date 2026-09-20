@@ -246,7 +246,7 @@
 - Modify: `docs/superpowers/plans/2026-09-20-device-signing-key-hardening.md`
 - Create: `work/runtime-core-protection-20260917/evidence/E-054-device-signing-key-hardening-20260920.md`
 
-- [ ] **Step 1: Run all repository gates**
+- [x] **Step 1: Run all repository gates**
 
   ```powershell
   npx tsc --noEmit
@@ -258,10 +258,8 @@
   git diff --check
   ```
 
-  Result: TypeScript, Vitest, qemu-center, authorization-service, guest Python,
-  and diff checks pass. The Tauri suite is 293 passed / 1 failed / 2 ignored;
-  the only failure is the pre-existing Windows PowerShell/ConPTY PTY round-trip
-  test, so this step remains open.
+  Result: TypeScript, Vitest, Tauri, qemu-center, authorization-service, guest
+  Python, and diff checks pass. Tauri is 294 passed / 0 failed / 2 ignored.
 
 - [x] **Step 2: Build release binaries and scan them**
 
@@ -278,7 +276,7 @@
   privileged attacker on the original machine can still invoke legitimate
   signing operations while the client is running.
 
-- [ ] **Step 4: Mark this plan complete only after all gates pass**
+- [x] **Step 4: Mark this plan complete only after all gates pass**
 
   Do not remove `docs/AI-HANDOFF-NEXT-STEPS.md`; P7 and production acceptance
   remain separate until the user completes them.

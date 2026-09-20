@@ -117,6 +117,13 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
 
     let mut command = CommandBuilder::new(&binary);
     command.args(args);
+    #[cfg(windows)]
+    if kind == "local" {
+        // A Unix-style TERM=dumb inherited from a host automation shell makes
+        // Windows PowerShell/ConPTY stop in its VT initialization sequence.
+        // The local Windows shell does not need that variable.
+        command.env_remove("TERM");
+    }
     let mut child = match pair.slave.spawn_command(command) {
         Ok(child) => child,
         Err(error) => {
