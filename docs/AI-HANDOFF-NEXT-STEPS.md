@@ -15,7 +15,7 @@
 |---|---|
 | `npx tsc --noEmit` | 0 错误 |
 | `npx vitest run` | **60 文件 / 460 用例全绿** |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | 294 通过 / 0 失败 / 2 忽略；Windows PTY 已隔离 Unix `TERM` 环境变量 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 296 通过 / 0 失败 / 2 忽略；Windows PTY 已隔离 Unix `TERM` 环境变量 |
 | `cargo test --manifest-path qemu-center/Cargo.toml` | 215 个库测试 + 8 个命令行测试通过 / 0 失败 |
 | `npm run build` | 成功（仅一条既有 chunk 体积警告，非错误） |
 
@@ -112,7 +112,7 @@
 - 已补齐“下载授权 ≠ 执行授权”边界：服务端 `/v1/execution-grants` 依据已发布核心哈希签发短时工作流票据；Rust 将票据绑定到设备、会话、版本、VM/实例并验签；guest runner 在 Docker 操作前使用发布时嵌入的公钥验签、校验自身文件哈希，并向服务端一次性消费 grant JTI。`rdc-auth-admin artifact publish-runner` 同时渲染公钥和 HTTPS consume URL，证据见 E-035。
 - 证据与验收：`docs/2026-09-17-runtime-memory-and-core-delivery-report.md`、`docs/2026-09-17-runtime-memory-authorization-acceptance.md`、`work/runtime-core-protection-20260917/evidence/`。
 - 实验矩阵模板与当前 full 基线：`docs/qa/2026-09-17-runtime-memory-optimization-matrix.md`；进程构成证据：`work/runtime-core-protection-20260917/evidence/E-005-app-process-breakdown.md`。
-- 自动化门槛记录：`tsc` 通过；Vitest 60 文件/460 用例全绿；qemu-center 215+8 通过；authorization-service 23 库测试+2 管理工具测试+2 启动配置测试+3 集成通过；guest runner 17 个 Python 测试；Release 构建与核心明文扫描通过；`git diff --check` 通过。Tauri 全量现为 294 通过、0 失败、2 忽略；Windows 本机 shell 仅对 local PTY 清除继承的 Unix `TERM` 环境变量，设备 ADB shell 不受影响，证据见 `E-056`。执行票据负向覆盖包含过期、签名篡改、动作/设备/核心绑定、设备私钥证明缺失/错误、服务端 artifact 哈希不匹配、artifact/workflow 错配、nonce 重放、grant JTI 一次性消费、runner 自身篡改、消费服务不可达以及消费失败时不构造 Docker；最终复验见 `E-017`、`E-018`、`E-020`、`E-023`、`E-025`、`E-026`、`E-027`、`E-028`、`E-029`、`E-030`、`E-031`、`E-032`、`E-033`、`E-034`、`E-035`、`E-036`、`E-037`、`E-040`、`E-041`、`E-045`、`E-046`、`E-048`、`E-049`、`E-050`、`E-052`、`E-053`、`E-054`、`E-055`、`E-056`、`E-058`、`E-059`、`E-060`；删除护栏/密钥清理复验见 `E-013`、`E-015`。
+- 自动化门槛记录：`tsc` 通过；Vitest 60 文件/460 用例全绿；qemu-center 215+8 通过；authorization-service 23 库测试+2 管理工具测试+2 启动配置测试+3 集成通过；guest runner 17 个 Python 测试；Release 构建与核心明文扫描通过；`git diff --check` 通过。Tauri 全量现为 296 通过、0 失败、2 忽略；Windows 本机 shell 仅对 local PTY 清除继承的 Unix `TERM` 环境变量，设备 ADB shell 不受影响，证据见 `E-056`。执行票据负向覆盖包含过期、签名篡改、动作/设备/核心绑定、设备私钥证明缺失/错误、服务端 artifact 哈希不匹配、artifact/workflow 错配、nonce 重放、grant JTI 一次性消费、runner 自身篡改、消费服务不可达以及消费失败时不构造 Docker；最终复验见 `E-017`、`E-018`、`E-020`、`E-023`、`E-025`、`E-026`、`E-027`、`E-028`、`E-029`、`E-030`、`E-031`、`E-032`、`E-033`、`E-034`、`E-035`、`E-036`、`E-037`、`E-040`、`E-041`、`E-045`、`E-046`、`E-048`、`E-049`、`E-050`、`E-052`、`E-053`、`E-054`、`E-055`、`E-056`、`E-058`、`E-059`、`E-060`；删除护栏/密钥清理复验见 `E-013`、`E-015`。
 - 安全边界：无法承诺绝对反逆向；guest 运行时明文仍可能被管理员/root/调试器提取，最高价值算法必须继续服务端化。
 - 安全代码审查已完成第一轮：修复已有客户端注册在设备私钥 proof-of-possession
   前修改版本/撤销会话的拒绝服务缺陷；证据为 E-006。生产 TLS、账号、撤销、

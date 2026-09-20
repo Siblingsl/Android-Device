@@ -6,7 +6,7 @@
 
 - [x] `npx tsc --noEmit`
 - [x] `npx vitest run`（60 文件 / 460 用例）
-- [x] `cargo test --manifest-path src-tauri/Cargo.toml`（294 通过 / 0 失败 / 2 忽略）
+- [x] `cargo test --manifest-path src-tauri/Cargo.toml`（296 通过 / 0 失败 / 2 忽略）
 - [x] `cargo test --manifest-path qemu-center/Cargo.toml`（215 库 + 8 CLI 通过）
 - [x] `cargo test --manifest-path authorization-service/Cargo.toml`（23 库测试 + 2 管理工具测试 + 2 启动配置测试 + 3 集成通过）
 - [x] `git diff --check`
