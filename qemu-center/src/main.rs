@@ -1426,14 +1426,73 @@ fn copy_clone_ssh_identity(
             pairs[0].1.display()
         ));
     }
+    if let Err(error) = harden_private_key_permissions(&pairs[0].1) {
+        let _ = std::fs::remove_file(&pairs[0].1);
+        return Err(format!(
+            "secure cloned VM SSH private key {} failed: {error}",
+            pairs[0].1.display()
+        ));
+    }
     if let Err(error) = std::fs::copy(&pairs[1].0, &pairs[1].1) {
         let _ = std::fs::remove_file(&pairs[0].1);
+        let _ = std::fs::remove_file(&pairs[1].1);
         return Err(format!(
             "copy source VM SSH public key to {} failed: {error}",
             pairs[1].1.display()
         ));
     }
     Ok(())
+}
+
+/// `std::fs::copy` preserves bytes, not the source ACL. A clone's private key
+/// therefore needs an explicit platform-specific permission pass before the
+/// new VM can be used. Never make a private key readable by the keys directory
+/// or by inherited general-user principals.
+fn harden_private_key_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let whoami = exec::run_command(&["whoami".into()], Duration::from_secs(10));
+        if !whoami.success {
+            return Err(format!("whoami failed: {}", whoami.stderr_last_line()));
+        }
+        let principal = whoami
+            .stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .ok_or_else(|| "whoami returned no principal".to_string())?;
+        if principal.chars().any(char::is_whitespace) {
+            return Err("whoami returned an invalid principal".into());
+        }
+        let args = vec![
+            "icacls".into(),
+            path.to_string_lossy().into_owned(),
+            "/inheritance:r".into(),
+            "/grant:r".into(),
+            "*S-1-5-18:F".into(),     // SYSTEM
+            "*S-1-5-32-544:F".into(), // BUILTIN\Administrators
+            format!("{principal}:F"),
+        ];
+        let result = exec::run_command(&args, Duration::from_secs(10));
+        if !result.success {
+            return Err(format!("icacls failed: {}", result.stderr_last_line()));
+        }
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 /// A local bind is an independent check that no listener currently owns the
@@ -2367,9 +2426,11 @@ fn cmd_adb_list(state_dir: &Path, json: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        copy_clone_ssh_identity, ensure_parent_dir, parse_guest_redroid_stats, purge_vm_artifacts,
+        copy_clone_ssh_identity, ensure_parent_dir, exec, parse_guest_redroid_stats,
+        purge_vm_artifacts,
     };
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     /// Unique scratch dir per test (no external dev-deps — same pattern as the
     /// lib tests in vm.rs).
@@ -2486,6 +2547,34 @@ mod tests {
         assert_eq!(
             std::fs::read(dir.join("keys/clone_ed25519.pub")).unwrap(),
             b"public-key"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clone_private_key_does_not_keep_inherited_windows_acl() {
+        let dir = scratch("clone-ssh-acl");
+        std::fs::create_dir_all(dir.join("keys")).unwrap();
+        std::fs::write(dir.join("keys/source_ed25519"), b"private-key").unwrap();
+        std::fs::write(dir.join("keys/source_ed25519.pub"), b"public-key").unwrap();
+
+        copy_clone_ssh_identity(&dir, "source", "clone").expect("identity copy should succeed");
+
+        let output = exec::run_command(
+            &[
+                "icacls".into(),
+                dir.join("keys/clone_ed25519")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            Duration::from_secs(10),
+        );
+        assert!(output.success, "icacls failed: {}", output.stderr);
+        assert!(
+            !output.stdout.lines().any(|line| line.contains("(I)")),
+            "clone private key kept inherited ACL: {}",
+            output.stdout
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -7,7 +7,7 @@
 - [x] `npx tsc --noEmit`
 - [x] `npx vitest run`（60 文件 / 460 用例）
 - [x] `cargo test --manifest-path src-tauri/Cargo.toml`（294 通过 / 0 失败 / 2 忽略）
-- [x] `cargo test --manifest-path qemu-center/Cargo.toml`（215 库 + 7 CLI 通过）
+- [x] `cargo test --manifest-path qemu-center/Cargo.toml`（215 库 + 8 CLI 通过）
 - [x] `cargo test --manifest-path authorization-service/Cargo.toml`（23 库测试 + 2 管理工具测试 + 2 启动配置测试 + 3 集成通过）
 - [x] `git diff --check`
 
@@ -71,6 +71,12 @@ force-stop 小红书可降低 guest current，但 QEMU working set 基本不变�
 完成后，QEMU working set 约 `1.89 GiB`、guest available 约 `1.54 GiB`、宿主可用约
 `2.8 GiB`。该节点没有安装小红书或执行登录/浏览，因此 2048 MiB 目前只作为低内存
 候选，不替代 3072 MiB standard 的业务验收；证据见 `E-059`。
+
+随后在隔离克隆上以 `4 vCPU / 2048 MiB` 启动真实 Redroid lean 实例（容器上限 1024 MiB），
+WHPX、SSH、binderfs、Docker、`sys.boot_completed=1` 和宿主 ADB 均通过；容器 current/peak
+已贴近 1024 MiB、OOM=0，QEMU working set 约 `2.07 GiB`、宿主可用约 `3.42 GiB`。
+该实例未安装小红书，2048 MiB 仍只适合作为单实例 lean 实验下限，不替代 3072 MiB
+standard 推荐；证据见 `E-060`。
 
 | 节点内存 | 档案 | 场景 | 记录 |
 |---:|---|---|---|
