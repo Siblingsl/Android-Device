@@ -1386,6 +1386,56 @@ fn purge_vm_artifacts(state_dir: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A backing-file clone contains the source guest's authorized SSH key. Keep
+/// the host-side key path aligned with that guest identity; cloud-init is not
+/// re-run for a clone, so generating a fresh host key here would make the
+/// cloned VM unreachable. The caller removes these exact copied files if a
+/// later clone-registration step fails.
+fn copy_clone_ssh_identity(
+    state_dir: &Path,
+    source_name: &str,
+    clone_name: &str,
+) -> Result<(), String> {
+    let pairs = [
+        (
+            vm::vm_ssh_key_path(state_dir, source_name),
+            vm::vm_ssh_key_path(state_dir, clone_name),
+        ),
+        (
+            vm::vm_ssh_key_pub_path(state_dir, source_name),
+            vm::vm_ssh_key_pub_path(state_dir, clone_name),
+        ),
+    ];
+    if let Some((_, destination)) = pairs.iter().find(|(_, destination)| destination.exists()) {
+        return Err(format!(
+            "refusing to overwrite existing clone SSH key {}",
+            destination.display()
+        ));
+    }
+    for (source, _destination) in &pairs {
+        if !source.is_file() {
+            return Err(format!(
+                "source VM SSH key is missing: {}",
+                source.display()
+            ));
+        }
+    }
+    if let Err(error) = std::fs::copy(&pairs[0].0, &pairs[0].1) {
+        return Err(format!(
+            "copy source VM SSH private key to {} failed: {error}",
+            pairs[0].1.display()
+        ));
+    }
+    if let Err(error) = std::fs::copy(&pairs[1].0, &pairs[1].1) {
+        let _ = std::fs::remove_file(&pairs[0].1);
+        return Err(format!(
+            "copy source VM SSH public key to {} failed: {error}",
+            pairs[1].1.display()
+        ));
+    }
+    Ok(())
+}
+
 /// A local bind is an independent check that no listener currently owns the
 /// QMP port. It complements the recorded QEMU PID when a proxy swallows the
 /// connection-refused signal and the normal QMP probe can only say unknown.
@@ -1666,6 +1716,10 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
             out.stderr_last_line()
         ));
     }
+    if let Err(error) = copy_clone_ssh_identity(state_dir, name, new_name) {
+        let _ = std::fs::remove_dir_all(&clone_dir);
+        return err_exit(&format!("cannot prepare clone SSH identity: {error}"));
+    }
     println!(
         "clone written in {} ms (qcow2 backing file — no data copied).",
         t0.elapsed().as_millis()
@@ -1678,7 +1732,7 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     let ssh_port = match vm::next_free_port(&used, vm::DEFAULT_SSH_PORT_BASE) {
         Some(p) => p,
         None => {
-            let _ = std::fs::remove_dir_all(&clone_dir);
+            let _ = purge_vm_artifacts(state_dir, new_name);
             return err_exit("no free ssh host port");
         }
     };
@@ -1686,7 +1740,7 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     let qmp_port = match vm::next_free_port(&used, vm::DEFAULT_QMP_PORT_BASE) {
         Some(p) => p,
         None => {
-            let _ = std::fs::remove_dir_all(&clone_dir);
+            let _ = purge_vm_artifacts(state_dir, new_name);
             return err_exit("no free qmp host port");
         }
     };
@@ -1698,7 +1752,7 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     ) {
         Ok(p) => p,
         Err(e) => {
-            let _ = std::fs::remove_dir_all(&clone_dir);
+            let _ = purge_vm_artifacts(state_dir, new_name);
             return err_exit(&e.to_string());
         }
     };
@@ -1720,7 +1774,7 @@ fn cmd_vm_clone(state_dir: &Path, name: &str, new_name: &str) -> i32 {
     };
     registry.vms.push(entry);
     if let Err(e) = vm::save_registry(state_dir, &registry) {
-        let _ = std::fs::remove_dir_all(&clone_dir);
+        let _ = purge_vm_artifacts(state_dir, new_name);
         return err_exit(&e);
     }
     println!("VM {new_name} cloned from {name} (ssh port {ssh_port}).");
@@ -2312,7 +2366,9 @@ fn cmd_adb_list(state_dir: &Path, json: bool) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_parent_dir, parse_guest_redroid_stats, purge_vm_artifacts};
+    use super::{
+        copy_clone_ssh_identity, ensure_parent_dir, parse_guest_redroid_stats, purge_vm_artifacts,
+    };
     use std::path::{Path, PathBuf};
 
     /// Unique scratch dir per test (no external dev-deps — same pattern as the
@@ -2411,6 +2467,26 @@ mod tests {
         assert!(!dir.join("vms/matrix3072").exists());
         assert!(!dir.join("keys/matrix3072_ed25519").exists());
         assert!(!dir.join("keys/matrix3072_ed25519.pub").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clone_copies_the_source_ssh_identity_for_the_cloned_disk() {
+        let dir = scratch("clone-ssh");
+        std::fs::create_dir_all(dir.join("keys")).unwrap();
+        std::fs::write(dir.join("keys/source_ed25519"), b"private-key").unwrap();
+        std::fs::write(dir.join("keys/source_ed25519.pub"), b"public-key").unwrap();
+
+        copy_clone_ssh_identity(&dir, "source", "clone").expect("identity copy should succeed");
+
+        assert_eq!(
+            std::fs::read(dir.join("keys/clone_ed25519")).unwrap(),
+            b"private-key"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("keys/clone_ed25519.pub")).unwrap(),
+            b"public-key"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

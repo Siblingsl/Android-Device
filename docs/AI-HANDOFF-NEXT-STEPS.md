@@ -185,7 +185,7 @@
 | 6 | 仓库根残留临时文件 | `.tmp-tauri-dev.log`、`.tmp-tauri-dev2.log`、`_p1.txt`、`_p2.txt`（均已被 gitignore，属历史产物） |
 | 7 | `qemu-center/state/` 残留 | `disk.corrupt-backup-20260915.qcow2`（约 4 GB 历史备份）+ `presets/job-*` 空目录，可清理 |
 | 8 | 对比视图指标口径 | 健康度是**轨道级**（非实例级）；QEMU 侧快照仅覆盖**当前所选节点**的实例（UI 已用 scope note 声明） |
-| 9 | 运行时优化与授权生产验收 | 应用级暂停、临界压力闲置回收、未知压力并发护栏、共享节点闲置释放护栏、critical 压力温热节点保护、桌面/CLI 双层 VM 内存预检查、full profile 新建内存护栏、内存优先缺省回收、per-operation execution grant 和 entitlement 即时撤销已实现；已补充隔离 3072 MiB lean/standard XHS 样本（E-039、E-042、E-043）、新建 3072 MiB/2 vCPU lean 独立样本（E-051）、4096 MiB/full r13 最新前台与 force-stop 对照（E-047）、默认策略回归（E-048）、critical 覆盖回归（E-049）、真实授权服务进程冒烟（E-044）、共享节点停止安全证据（E-045）、entitlement 撤销证据（E-046）和 QMP 超时主机进程安全兜底/隔离克隆证据（E-058）；仍需按 `docs/2026-09-17-runtime-memory-authorization-acceptance.md` 完成人工登录/连续浏览/30 分钟内存矩阵、真实服务 TLS/账号部署、断网/篡改/复制/票据重放演练和生产密钥轮换；完成前不得宣称省下固定 GB 或“绝对反逆向” |
+| 9 | 运行时优化与授权生产验收 | 应用级暂停、临界压力闲置回收、未知压力并发护栏、共享节点闲置释放护栏、critical 压力温热节点保护、桌面/CLI 双层 VM 内存预检查、full profile 新建内存护栏、内存优先缺省回收、per-operation execution grant 和 entitlement 即时撤销已实现；已补充隔离 3072 MiB lean/standard XHS 样本（E-039、E-042、E-043）、新建 3072 MiB/2 vCPU lean 独立样本（E-051）、4096 MiB/full r13 最新前台与 force-stop 对照（E-047）、默认策略回归（E-048）、critical 覆盖回归（E-049）、真实授权服务进程冒烟（E-044）、共享节点停止安全证据（E-045）、entitlement 撤销证据（E-046）、QMP 超时主机进程安全兜底/隔离克隆证据（E-058）和 2048 MiB QEMU 基座样本/克隆 SSH 身份修复证据（E-059）；仍需按 `docs/2026-09-17-runtime-memory-authorization-acceptance.md` 完成人工登录/连续浏览/30 分钟内存矩阵、真实服务 TLS/账号部署、断网/篡改/复制/票据重放演练和生产密钥轮换；完成前不得宣称省下固定 GB 或“绝对反逆向” |
 
 ---
 
