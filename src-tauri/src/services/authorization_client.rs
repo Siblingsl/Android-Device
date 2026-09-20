@@ -14,8 +14,8 @@ use crate::services::authorization::{
     ProtectedCapability, RegistrationProof, SessionProof, SignedExecutionGrant, SignedLease,
 };
 use crate::services::secure_store::{
-    ensure_device_identity_with, load_device_signer_with, DeviceIdentity, DeviceSigner,
-    SecureStore, SecureStoreError, WindowsSecureStore,
+    load_or_create_device_material_with, DeviceAuthMaterial, DeviceIdentity, DeviceSecurityLevel,
+    DeviceSecurityPolicy, DeviceSigner, SecureStore, SecureStoreError, WindowsSecureStore,
 };
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -228,6 +228,7 @@ pub struct AuthorizationClient<T, S> {
     client_version: String,
     platform: String,
     product: String,
+    security_policy: DeviceSecurityPolicy,
     session: Option<AuthorizationSession>,
 }
 
@@ -244,6 +245,26 @@ where
         platform: impl Into<String>,
         product: impl Into<String>,
     ) -> Self {
+        Self::new_with_security_policy(
+            transport,
+            store,
+            trusted_keys,
+            client_version,
+            platform,
+            product,
+            DeviceSecurityPolicy::default(),
+        )
+    }
+
+    pub fn new_with_security_policy(
+        transport: T,
+        store: S,
+        trusted_keys: Vec<TrustedAuthorizationKey>,
+        client_version: impl Into<String>,
+        platform: impl Into<String>,
+        product: impl Into<String>,
+        security_policy: DeviceSecurityPolicy,
+    ) -> Self {
         Self {
             transport,
             store,
@@ -251,6 +272,7 @@ where
             client_version: client_version.into(),
             platform: platform.into(),
             product: product.into(),
+            security_policy,
             session: None,
         }
     }
@@ -632,12 +654,24 @@ where
             .map_err(map_store_error)
     }
 
+    fn material(&self) -> Result<DeviceAuthMaterial, AuthorizationError> {
+        load_or_create_device_material_with(&self.store, self.security_policy)
+            .map_err(map_store_error)
+    }
+
     fn identity(&self) -> Result<DeviceIdentity, AuthorizationError> {
-        ensure_device_identity_with(&self.store).map_err(map_store_error)
+        Ok(self.material()?.identity)
     }
 
     fn signer(&self) -> Result<DeviceSigner, AuthorizationError> {
-        load_device_signer_with(&self.store).map_err(map_store_error)
+        Ok(self.material()?.signer)
+    }
+
+    fn security_snapshot(
+        &self,
+    ) -> Result<(DeviceSecurityLevel, ClientKeyAlgorithm), AuthorizationError> {
+        let material = self.material()?;
+        Ok((material.security_level, material.signer.algorithm()))
     }
 
     fn registration(&self) -> Result<Option<RegistrationRecord>, AuthorizationError> {
@@ -776,6 +810,9 @@ pub struct AuthorizationRuntimeStatus {
     pub session_id: Option<String>,
     pub expires_at: Option<i64>,
     pub detail: Option<String>,
+    pub security_level: Option<DeviceSecurityLevel>,
+    pub key_algorithm: Option<ClientKeyAlgorithm>,
+    pub hardware_required: bool,
 }
 
 pub type RuntimeAuthorizationClient =
@@ -911,17 +948,51 @@ pub fn configured_runtime_client() -> Result<RuntimeAuthorizationClient, Authori
     )?;
     let transport = HttpAuthorizationTransport::new(&config.base_url)?;
     let store = WindowsSecureStore::from_app_data().map_err(map_store_error)?;
-    Ok(AuthorizationClient::new(
+    Ok(AuthorizationClient::new_with_security_policy(
         transport,
         store,
         config.trusted_keys,
         env!("CARGO_PKG_VERSION"),
         "windows-x64",
         "redroid-device-center",
+        configured_security_policy(),
     ))
 }
 
+fn configured_security_policy() -> DeviceSecurityPolicy {
+    let require_hardware_backed = std::env::var("RDC_REQUIRE_HARDWARE_BACKED_KEYS")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    DeviceSecurityPolicy {
+        prefer_cng: true,
+        require_hardware_backed,
+    }
+}
+
 pub fn runtime_authorization_status() -> AuthorizationRuntimeStatus {
+    let hardware_required = configured_security_policy().require_hardware_backed;
+    let configured_client = configured_runtime_client();
+    let security_result = configured_client
+        .as_ref()
+        .ok()
+        .map(|client| client.security_snapshot());
+    let security_level = security_result
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|(level, _)| *level);
+    let key_algorithm = security_result
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|(_, algorithm)| *algorithm);
+    let security_error = security_result
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .map(ToString::to_string);
     let active = ACTIVE_SESSION.lock().unwrap().clone();
     if let Some(session) = active {
         match session.lease_clock.now() {
@@ -931,7 +1002,10 @@ pub fn runtime_authorization_status() -> AuthorizationRuntimeStatus {
                     device_id: Some(session.lease.claims.device_id),
                     session_id: Some(session.lease.claims.session_id),
                     expires_at: Some(session.lease.claims.exp),
-                    detail: None,
+                    detail: security_error.clone(),
+                    security_level,
+                    key_algorithm,
+                    hardware_required,
                 };
             }
             Ok(_) => {
@@ -941,6 +1015,9 @@ pub fn runtime_authorization_status() -> AuthorizationRuntimeStatus {
                     session_id: None,
                     expires_at: Some(session.lease.claims.exp),
                     detail: Some("authorization lease has expired".into()),
+                    security_level,
+                    key_algorithm,
+                    hardware_required,
                 };
             }
             Err(error) => {
@@ -950,6 +1027,9 @@ pub fn runtime_authorization_status() -> AuthorizationRuntimeStatus {
                     session_id: None,
                     expires_at: None,
                     detail: Some(error.to_string()),
+                    security_level,
+                    key_algorithm,
+                    hardware_required,
                 };
             }
         }
@@ -959,9 +1039,12 @@ pub fn runtime_authorization_status() -> AuthorizationRuntimeStatus {
         device_id: None,
         session_id: None,
         expires_at: None,
-        detail: None,
+        detail: security_error,
+        security_level,
+        key_algorithm,
+        hardware_required,
     };
-    let Ok(client) = configured_runtime_client() else {
+    let Ok(client) = configured_client else {
         status.detail = Some("authorization service is not configured in this build".into());
         return status;
     };
@@ -1363,7 +1446,9 @@ fn map_http_error(status: reqwest::StatusCode) -> AuthorizationError {
 mod tests {
     use super::*;
     use crate::services::authorization::ExecutionGrantClaims;
-    use crate::services::secure_store::{ensure_device_identity_with, MemorySecureStore};
+    use crate::services::secure_store::{
+        ensure_device_identity_with, load_device_signer_with, MemorySecureStore,
+    };
     use async_trait::async_trait;
     use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Mutex;
@@ -1384,6 +1469,25 @@ mod tests {
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["client_key_algorithm"], "ed25519-dpapi-v1");
+    }
+
+    #[test]
+    fn runtime_security_status_serializes_only_public_security_metadata() {
+        let status = AuthorizationRuntimeStatus {
+            status: AuthorizationStatus::NotRegistered,
+            device_id: Some("device-a".into()),
+            session_id: None,
+            expires_at: None,
+            detail: None,
+            security_level: Some(DeviceSecurityLevel::DpapiSoftwareFallback),
+            key_algorithm: Some(ClientKeyAlgorithm::Ed25519DpapiV1),
+            hardware_required: false,
+        };
+        let value = serde_json::to_value(status).unwrap();
+        assert_eq!(value["securityLevel"], "dpapi_software_fallback");
+        assert_eq!(value["keyAlgorithm"], "ed25519-dpapi-v1");
+        assert!(!serde_json::to_string(&value).unwrap().contains("private"));
+        assert!(!serde_json::to_string(&value).unwrap().contains("DPAPI"));
     }
 
     #[test]

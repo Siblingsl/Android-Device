@@ -271,6 +271,12 @@ fn unprotect(_value: &[u8]) -> Result<Vec<u8>, SecureStoreError> {
 struct IdentityMetadata {
     install_id: String,
     device_id: String,
+    #[serde(default)]
+    client_key_algorithm: Option<ClientKeyAlgorithm>,
+    #[serde(default)]
+    public_key: Option<String>,
+    #[serde(default)]
+    cng_key_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -279,6 +285,36 @@ pub struct DeviceIdentity {
     pub install_id: String,
     pub device_id: String,
     pub public_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceSecurityLevel {
+    HardwareBacked,
+    CngSoftwareProvider,
+    DpapiSoftwareFallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceSecurityPolicy {
+    pub prefer_cng: bool,
+    pub require_hardware_backed: bool,
+}
+
+impl Default for DeviceSecurityPolicy {
+    fn default() -> Self {
+        Self {
+            prefer_cng: false,
+            require_hardware_backed: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DeviceAuthMaterial {
+    pub identity: DeviceIdentity,
+    pub signer: DeviceSigner,
+    pub security_level: DeviceSecurityLevel,
 }
 
 #[derive(Debug)]
@@ -316,6 +352,16 @@ impl DeviceSigner {
     }
 }
 
+impl DeviceSigner {
+    pub fn security_level(&self) -> DeviceSecurityLevel {
+        match self {
+            Self::Ed25519(_) => DeviceSecurityLevel::DpapiSoftwareFallback,
+            #[cfg(windows)]
+            Self::Cng(signer) => signer.security_level(),
+        }
+    }
+}
+
 #[cfg(windows)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -340,7 +386,19 @@ impl CngDeviceSigner {
         key_name: &str,
         require_hardware: bool,
     ) -> Result<Self, SecureStoreError> {
-        use windows_sys::Win32::Foundation::NTE_BAD_KEYSET;
+        Self::open_internal(key_name, require_hardware, true)
+    }
+
+    pub fn open_existing(key_name: &str, require_hardware: bool) -> Result<Self, SecureStoreError> {
+        Self::open_internal(key_name, require_hardware, false)
+    }
+
+    fn open_internal(
+        key_name: &str,
+        require_hardware: bool,
+        create_if_missing: bool,
+    ) -> Result<Self, SecureStoreError> {
+        use windows_sys::Win32::Foundation::{NTE_BAD_KEYSET, NTE_NOT_SUPPORTED};
         use windows_sys::Win32::Security::Cryptography::{
             NCryptCreatePersistedKey, NCryptExportKey, NCryptFinalizeKey, NCryptGetProperty,
             NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, BCRYPT_ECCPUBLIC_BLOB,
@@ -356,14 +414,14 @@ impl CngDeviceSigner {
         let status =
             unsafe { NCryptOpenStorageProvider(&mut provider, MS_PLATFORM_CRYPTO_PROVIDER, 0) };
         if status != 0 {
-            return Err(cng_error("open Platform Crypto Provider", status));
+            return Err(SecureStoreError::Unsupported);
         }
         let mut key = 0;
         let opened =
             unsafe { NCryptOpenKey(provider, &mut key, name.as_ptr(), 0, NCRYPT_SILENT_FLAG) };
         let key = if opened == 0 {
             key
-        } else if opened == NTE_BAD_KEYSET {
+        } else if opened == NTE_BAD_KEYSET && create_if_missing {
             let created = unsafe {
                 NCryptCreatePersistedKey(
                     provider,
@@ -422,15 +480,17 @@ impl CngDeviceSigner {
                 0,
             )
         };
-        if property_status != 0 || implementation_size != 4 {
+        if property_status != 0 && property_status != NTE_NOT_SUPPORTED {
             unsafe {
                 windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
                 windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
             }
             return Err(cng_error("read CNG implementation type", property_status));
         }
-        let hardware_backed =
-            implementation & (NCRYPT_IMPL_HARDWARE_FLAG | NCRYPT_IMPL_VIRTUAL_ISOLATION_FLAG) != 0;
+        let hardware_backed = property_status == 0
+            && implementation_size == 4
+            && implementation & (NCRYPT_IMPL_HARDWARE_FLAG | NCRYPT_IMPL_VIRTUAL_ISOLATION_FLAG)
+                != 0;
         if require_hardware && !hardware_backed {
             unsafe {
                 windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
@@ -513,6 +573,14 @@ impl CngDeviceSigner {
         &self.metadata
     }
 
+    pub fn security_level(&self) -> DeviceSecurityLevel {
+        if self.metadata.hardware_backed {
+            DeviceSecurityLevel::HardwareBacked
+        } else {
+            DeviceSecurityLevel::CngSoftwareProvider
+        }
+    }
+
     pub fn public_key_from_blob(blob: &[u8]) -> Result<Vec<u8>, SecureStoreError> {
         use windows_sys::Win32::Security::Cryptography::BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
         if blob.len() < 8 {
@@ -547,6 +615,18 @@ impl CngDeviceSigner {
                 "CNG ECDSA signature must contain raw r and s values".into(),
             ))
         }
+    }
+
+    fn delete_persisted_key(mut self) -> Result<(), SecureStoreError> {
+        use windows_sys::Win32::Security::Cryptography::NCryptDeleteKey;
+        let key = self.key;
+        self.key = 0;
+        let status = unsafe { NCryptDeleteKey(key, 0) };
+        if status != 0 {
+            self.key = key;
+            return Err(cng_error("delete CNG key", status));
+        }
+        Ok(())
     }
 
     fn sign_canonical(&self, payload: &[u8]) -> Result<Vec<u8>, SecureStoreError> {
@@ -586,6 +666,11 @@ impl CngDeviceSigner {
                 hardware_backed,
             },
         }
+    }
+
+    #[cfg(test)]
+    fn delete_persisted_key_for_tests(self) -> Result<(), SecureStoreError> {
+        self.delete_persisted_key()
     }
 }
 
@@ -649,6 +734,9 @@ pub fn ensure_device_identity_with<S: SecureStore>(
             let metadata = IdentityMetadata {
                 install_id: Uuid::new_v4().to_string(),
                 device_id: Uuid::new_v4().to_string(),
+                client_key_algorithm: None,
+                public_key: None,
+                cng_key_name: None,
             };
             let metadata_bytes = serde_json::to_vec(&metadata)
                 .map_err(|error| SecureStoreError::Corrupt(error.to_string()))?;
@@ -662,6 +750,11 @@ pub fn ensure_device_identity_with<S: SecureStore>(
         (Some(private), Some(metadata)) => {
             let metadata: IdentityMetadata = serde_json::from_slice(&metadata)
                 .map_err(|error| SecureStoreError::Corrupt(error.to_string()))?;
+            if metadata.client_key_algorithm == Some(ClientKeyAlgorithm::EcdsaP256CngV1) {
+                return Err(SecureStoreError::Corrupt(
+                    "CNG identity cannot be loaded through the DPAPI compatibility path".into(),
+                ));
+            }
             build_identity(metadata, &private)
         }
         (Some(_), None) | (None, Some(_)) => Err(SecureStoreError::Corrupt(
@@ -673,7 +766,181 @@ pub fn ensure_device_identity_with<S: SecureStore>(
 /// Production entry point. The private key is never returned by this API.
 pub fn ensure_device_identity() -> Result<DeviceIdentity, SecureStoreError> {
     let store = WindowsSecureStore::from_app_data()?;
-    ensure_device_identity_with(&store)
+    Ok(load_or_create_device_material_with(
+        &store,
+        DeviceSecurityPolicy {
+            prefer_cng: true,
+            require_hardware_backed: false,
+        },
+    )?
+    .identity)
+}
+
+fn enforce_security_policy(
+    policy: DeviceSecurityPolicy,
+    security_level: DeviceSecurityLevel,
+) -> Result<(), SecureStoreError> {
+    if policy.require_hardware_backed && security_level != DeviceSecurityLevel::HardwareBacked {
+        return Err(SecureStoreError::Unsupported);
+    }
+    Ok(())
+}
+
+fn legacy_device_material<S: SecureStore>(
+    store: &S,
+    policy: DeviceSecurityPolicy,
+) -> Result<DeviceAuthMaterial, SecureStoreError> {
+    let identity = ensure_device_identity_with(store)?;
+    let signer = DeviceSigner::Ed25519(load_signing_key_with(store)?);
+    let security_level = signer.security_level();
+    enforce_security_policy(policy, security_level)?;
+    if signer.public_key_base64url() != identity.public_key {
+        return Err(SecureStoreError::Corrupt(
+            "device signer does not match the stored identity".into(),
+        ));
+    }
+    Ok(DeviceAuthMaterial {
+        identity,
+        signer,
+        security_level,
+    })
+}
+
+#[cfg(windows)]
+fn create_cng_device_material<S: SecureStore>(
+    store: &S,
+    policy: DeviceSecurityPolicy,
+) -> Result<DeviceAuthMaterial, SecureStoreError> {
+    let install_id = Uuid::new_v4().to_string();
+    let device_id = Uuid::new_v4().to_string();
+    let key_name = format!("RedroidDeviceCenter-{install_id}");
+    let signer = CngDeviceSigner::open_or_create(&key_name, policy.require_hardware_backed)?;
+    let security_level = signer.security_level();
+    if let Err(error) = enforce_security_policy(policy, security_level) {
+        let cleanup = signer.delete_persisted_key();
+        return Err(cleanup.err().unwrap_or(error));
+    }
+    let public_key = signer.metadata.public_key.clone();
+    let metadata = IdentityMetadata {
+        install_id: install_id.clone(),
+        device_id: device_id.clone(),
+        client_key_algorithm: Some(ClientKeyAlgorithm::EcdsaP256CngV1),
+        public_key: Some(public_key.clone()),
+        cng_key_name: Some(key_name),
+    };
+    let metadata_bytes = serde_json::to_vec(&metadata)
+        .map_err(|error| SecureStoreError::Corrupt(error.to_string()))?;
+    if let Err(error) = store.save(IDENTITY_METADATA_KEY, &metadata_bytes) {
+        let cleanup = signer.delete_persisted_key();
+        return Err(cleanup.err().unwrap_or(error));
+    }
+    Ok(DeviceAuthMaterial {
+        identity: DeviceIdentity {
+            install_id,
+            device_id,
+            public_key,
+        },
+        signer: DeviceSigner::Cng(signer),
+        security_level,
+    })
+}
+
+#[cfg(windows)]
+fn existing_cng_device_material<S: SecureStore>(
+    store: &S,
+    metadata: IdentityMetadata,
+    policy: DeviceSecurityPolicy,
+) -> Result<DeviceAuthMaterial, SecureStoreError> {
+    let key_name = metadata
+        .cng_key_name
+        .ok_or_else(|| SecureStoreError::Corrupt("CNG identity is missing its key name".into()))?;
+    let stored_public_key = metadata.public_key.ok_or_else(|| {
+        SecureStoreError::Corrupt("CNG identity is missing its public key".into())
+    })?;
+    let signer = match CngDeviceSigner::open_existing(&key_name, policy.require_hardware_backed) {
+        Ok(signer) => signer,
+        Err(SecureStoreError::Unsupported) => return Err(SecureStoreError::Unsupported),
+        Err(error) => {
+            return Err(SecureStoreError::Corrupt(format!(
+                "CNG device key is unavailable: {error}"
+            )))
+        }
+    };
+    let security_level = signer.security_level();
+    enforce_security_policy(policy, security_level)?;
+    let public_key = signer.metadata.public_key.clone();
+    if public_key != stored_public_key {
+        return Err(SecureStoreError::Corrupt(
+            "CNG public key does not match the stored device identity".into(),
+        ));
+    }
+    if store.load(PRIVATE_KEY_KEY)?.is_some() {
+        return Err(SecureStoreError::Corrupt(
+            "CNG identity unexpectedly contains a DPAPI private key".into(),
+        ));
+    }
+    Ok(DeviceAuthMaterial {
+        identity: DeviceIdentity {
+            install_id: metadata.install_id,
+            device_id: metadata.device_id,
+            public_key,
+        },
+        signer: DeviceSigner::Cng(signer),
+        security_level,
+    })
+}
+
+pub fn load_or_create_device_material_with<S: SecureStore>(
+    store: &S,
+    policy: DeviceSecurityPolicy,
+) -> Result<DeviceAuthMaterial, SecureStoreError> {
+    let private = store.load(PRIVATE_KEY_KEY)?;
+    let metadata = store
+        .load(IDENTITY_METADATA_KEY)?
+        .map(|bytes| {
+            serde_json::from_slice::<IdentityMetadata>(&bytes)
+                .map_err(|error| SecureStoreError::Corrupt(error.to_string()))
+        })
+        .transpose()?;
+
+    if metadata
+        .as_ref()
+        .and_then(|value| value.client_key_algorithm)
+        == Some(ClientKeyAlgorithm::EcdsaP256CngV1)
+    {
+        if private.is_some() {
+            return Err(SecureStoreError::Corrupt(
+                "CNG identity unexpectedly contains a DPAPI private key".into(),
+            ));
+        }
+        let metadata = metadata.expect("CNG metadata was checked above");
+        #[cfg(windows)]
+        {
+            return existing_cng_device_material(store, metadata, policy);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = metadata;
+            return Err(SecureStoreError::Unsupported);
+        }
+    }
+
+    if private.is_none() && metadata.is_none() && policy.prefer_cng {
+        #[cfg(windows)]
+        {
+            match create_cng_device_material(store, policy) {
+                Ok(material) => return Ok(material),
+                Err(SecureStoreError::Unsupported) if !policy.require_hardware_backed => {}
+                Err(error) => return Err(error),
+            }
+        }
+        #[cfg(not(windows))]
+        if policy.require_hardware_backed {
+            return Err(SecureStoreError::Unsupported);
+        }
+    }
+
+    legacy_device_material(store, policy)
 }
 
 pub fn load_signing_key_with<S: SecureStore>(store: &S) -> Result<SigningKey, SecureStoreError> {
@@ -736,6 +1003,50 @@ mod tests {
     }
 
     #[test]
+    fn security_level_serializes_stably() {
+        assert_eq!(
+            serde_json::to_string(&DeviceSecurityLevel::HardwareBacked).unwrap(),
+            "\"hardware_backed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DeviceSecurityLevel::CngSoftwareProvider).unwrap(),
+            "\"cng_software_provider\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DeviceSecurityLevel::DpapiSoftwareFallback).unwrap(),
+            "\"dpapi_software_fallback\""
+        );
+    }
+
+    #[test]
+    fn permissive_policy_keeps_memory_store_on_dpapi_compatibility_path() {
+        let store = MemorySecureStore::default();
+        let material =
+            load_or_create_device_material_with(&store, DeviceSecurityPolicy::default()).unwrap();
+        assert_eq!(
+            material.security_level,
+            DeviceSecurityLevel::DpapiSoftwareFallback
+        );
+        assert_eq!(
+            material.signer.algorithm(),
+            ClientKeyAlgorithm::Ed25519DpapiV1
+        );
+    }
+
+    #[test]
+    fn strict_hardware_policy_rejects_software_fallback() {
+        let store = MemorySecureStore::default();
+        let policy = DeviceSecurityPolicy {
+            prefer_cng: false,
+            require_hardware_backed: true,
+        };
+        assert_eq!(
+            load_or_create_device_material_with(&store, policy).unwrap_err(),
+            SecureStoreError::Unsupported
+        );
+    }
+
+    #[test]
     fn device_signer_fails_closed_when_private_key_is_missing() {
         let store = MemorySecureStore::default();
         store
@@ -744,6 +1055,9 @@ mod tests {
                 &serde_json::to_vec(&IdentityMetadata {
                     install_id: "install-a".into(),
                     device_id: "device-a".into(),
+                    client_key_algorithm: None,
+                    public_key: None,
+                    cng_key_name: None,
                 })
                 .unwrap(),
             )
@@ -798,6 +1112,20 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[test]
+    #[ignore = "requires RDC_RUN_CNG_PROVIDER_TESTS=1 and creates an ephemeral user key"]
+    fn cng_provider_can_sign_with_an_ephemeral_named_key() {
+        if std::env::var("RDC_RUN_CNG_PROVIDER_TESTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let key_name = format!("RedroidDeviceCenter-test-{}", Uuid::new_v4());
+        let signer = CngDeviceSigner::open_or_create(&key_name, false).unwrap();
+        let signature = signer.sign_canonical(b"cng-provider-test").unwrap();
+        assert_eq!(signature.len(), 64);
+        signer.delete_persisted_key_for_tests().unwrap();
+    }
+
+    #[cfg(windows)]
     fn test_cng_public_blob(magic: u32, field_length: u32, fill: u8) -> Vec<u8> {
         let mut blob = Vec::with_capacity(8 + field_length as usize * 2);
         blob.extend_from_slice(&magic.to_le_bytes());
@@ -822,6 +1150,9 @@ mod tests {
         let metadata = serde_json::to_vec(&IdentityMetadata {
             install_id: "install-a".into(),
             device_id: "device-a".into(),
+            client_key_algorithm: None,
+            public_key: None,
+            cng_key_name: None,
         })
         .unwrap();
         store.save(PRIVATE_KEY_KEY, &[1; 31]).unwrap();

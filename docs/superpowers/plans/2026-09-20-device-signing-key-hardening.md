@@ -175,12 +175,14 @@
 
   ```powershell
   cargo test --manifest-path src-tauri/Cargo.toml services::secure_store
+  $env:RDC_RUN_CNG_PROVIDER_TESTS = "1"
+  cargo test --manifest-path src-tauri/Cargo.toml services::secure_store -- --ignored
   ```
 
   Expected: the shape tests pass on Windows and the CNG code remains excluded
-  from non-Windows builds. Provider-backed key creation is reserved for the
-  explicit manual acceptance check in Task 5 so tests do not leave persistent
-  user key material behind.
+  from non-Windows builds. The explicitly enabled provider probe creates and
+  deletes an ephemeral named user key; hardware/TPM backing remains a manual
+  acceptance check in Task 5.
 
 - [x] **Step 5: Commit the CNG backend**
 
@@ -205,13 +207,13 @@
 - Produces a policy error when high-value authorization requires hardware-backed
   keys and the current device cannot provide one.
 
-- [ ] **Step 1: Write failing policy/UI tests**
+- [x] **Step 1: Write failing policy/UI tests**
 
   Add tests for default permissive fallback, strict hardware-required mode,
   stable serialization of the security level, and a user-visible message that
   distinguishes TPM-backed protection from DPAPI fallback.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
   ```powershell
   npx vitest run src/pages/Settings.test.tsx
@@ -220,19 +222,19 @@
 
   Expected: missing security-level state or strict-policy assertions.
 
-- [ ] **Step 3: Implement policy and user-visible status**
+- [x] **Step 3: Implement policy and user-visible status**
 
   Keep permissive fallback for existing deployments, add a strict mode for
   production accounts, and ensure every protected operation records the active
   key algorithm/security level in audit metadata without recording private
   material.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
   Re-run the focused commands and inspect that no private key, DPAPI plaintext,
   CNG key handle, or artifact plaintext appears in the status payload.
 
-- [ ] **Step 5: Update evidence and handoff**
+- [x] **Step 5: Update evidence and handoff**
 
   Record the exact provider/policy tests, add a new evidence file, and leave
   real TPM/VBS, cross-machine copy, and key-rotation checks in P7/production
