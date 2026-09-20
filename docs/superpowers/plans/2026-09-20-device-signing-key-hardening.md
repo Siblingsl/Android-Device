@@ -258,7 +258,12 @@
   git diff --check
   ```
 
-- [ ] **Step 2: Build release binaries and scan them**
+  Result: TypeScript, Vitest, qemu-center, authorization-service, guest Python,
+  and diff checks pass. The Tauri suite is 293 passed / 1 failed / 2 ignored;
+  the only failure is the pre-existing Windows PowerShell/ConPTY PTY round-trip
+  test, so this step remains open.
+
+- [x] **Step 2: Build release binaries and scan them**
 
   ```powershell
   cargo build --release --manifest-path src-tauri/Cargo.toml
@@ -266,7 +271,7 @@
   powershell -NoProfile -Command "& '.\\scripts\\verify-release-core.ps1' -BinaryPath '.\\src-tauri\\target\\release\\redroid-device-center.exe', '.\\qemu-center\\target\\release\\qemu-center.exe'"
   ```
 
-- [ ] **Step 3: Record evidence and review boundaries**
+- [x] **Step 3: Record evidence and review boundaries**
 
   Document that the CNG private key is non-exportable by design, hardware
   backing is still an environment fact requiring manual confirmation, and a
