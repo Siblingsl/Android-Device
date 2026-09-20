@@ -11,6 +11,7 @@ use base64::Engine;
 use ed25519_dalek::SigningKey;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -283,18 +284,24 @@ pub struct DeviceIdentity {
 #[derive(Debug)]
 pub enum DeviceSigner {
     Ed25519(SigningKey),
+    #[cfg(windows)]
+    Cng(CngDeviceSigner),
 }
 
 impl DeviceSigner {
     pub fn algorithm(&self) -> ClientKeyAlgorithm {
         match self {
             Self::Ed25519(_) => ClientKeyAlgorithm::Ed25519DpapiV1,
+            #[cfg(windows)]
+            Self::Cng(_) => ClientKeyAlgorithm::EcdsaP256CngV1,
         }
     }
 
     pub fn public_key_base64url(&self) -> String {
         match self {
             Self::Ed25519(key) => URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
+            #[cfg(windows)]
+            Self::Cng(signer) => signer.metadata.public_key.clone(),
         }
     }
 
@@ -303,8 +310,310 @@ impl DeviceSigner {
             Self::Ed25519(key) => Ok(ed25519_dalek::Signer::sign(key, payload)
                 .to_bytes()
                 .to_vec()),
+            #[cfg(windows)]
+            Self::Cng(signer) => signer.sign_canonical(payload),
         }
     }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CngDeviceMetadata {
+    pub algorithm: ClientKeyAlgorithm,
+    pub key_name: String,
+    pub public_key: String,
+    pub hardware_backed: bool,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct CngDeviceSigner {
+    provider: windows_sys::Win32::Security::Cryptography::NCRYPT_PROV_HANDLE,
+    key: windows_sys::Win32::Security::Cryptography::NCRYPT_KEY_HANDLE,
+    metadata: CngDeviceMetadata,
+}
+
+#[cfg(windows)]
+impl CngDeviceSigner {
+    pub fn open_or_create(
+        key_name: &str,
+        require_hardware: bool,
+    ) -> Result<Self, SecureStoreError> {
+        use windows_sys::Win32::Foundation::NTE_BAD_KEYSET;
+        use windows_sys::Win32::Security::Cryptography::{
+            NCryptCreatePersistedKey, NCryptExportKey, NCryptFinalizeKey, NCryptGetProperty,
+            NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, BCRYPT_ECCPUBLIC_BLOB,
+            BCRYPT_ECDSA_P256_ALGORITHM, MS_PLATFORM_CRYPTO_PROVIDER, NCRYPT_ALLOW_SIGNING_FLAG,
+            NCRYPT_IMPL_HARDWARE_FLAG, NCRYPT_IMPL_TYPE_PROPERTY,
+            NCRYPT_IMPL_VIRTUAL_ISOLATION_FLAG, NCRYPT_KEY_USAGE_PROPERTY, NCRYPT_SILENT_FLAG,
+        };
+        if key_name.trim().is_empty() || key_name.encode_utf16().any(|unit| unit == 0) {
+            return Err(SecureStoreError::InvalidKey);
+        }
+        let name = to_wide(key_name);
+        let mut provider = 0;
+        let status =
+            unsafe { NCryptOpenStorageProvider(&mut provider, MS_PLATFORM_CRYPTO_PROVIDER, 0) };
+        if status != 0 {
+            return Err(cng_error("open Platform Crypto Provider", status));
+        }
+        let mut key = 0;
+        let opened =
+            unsafe { NCryptOpenKey(provider, &mut key, name.as_ptr(), 0, NCRYPT_SILENT_FLAG) };
+        let key = if opened == 0 {
+            key
+        } else if opened == NTE_BAD_KEYSET {
+            let created = unsafe {
+                NCryptCreatePersistedKey(
+                    provider,
+                    &mut key,
+                    BCRYPT_ECDSA_P256_ALGORITHM,
+                    name.as_ptr(),
+                    0,
+                    0,
+                )
+            };
+            if created != 0 {
+                unsafe { windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider) };
+                return Err(cng_error("create CNG key", created));
+            }
+            let usage = NCRYPT_ALLOW_SIGNING_FLAG.to_le_bytes();
+            let property = unsafe {
+                NCryptSetProperty(
+                    key,
+                    NCRYPT_KEY_USAGE_PROPERTY,
+                    usage.as_ptr(),
+                    usage.len() as u32,
+                    0,
+                )
+            };
+            if property != 0 {
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                    windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+                }
+                return Err(cng_error("set CNG key usage", property));
+            }
+            let finalized = unsafe { NCryptFinalizeKey(key, 0) };
+            if finalized != 0 {
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                    windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+                }
+                return Err(cng_error("finalize CNG key", finalized));
+            }
+            key
+        } else {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+            }
+            return Err(cng_error("open CNG key", opened));
+        };
+        let mut implementation = 0_u32;
+        let mut implementation_size = 0_u32;
+        let property_status = unsafe {
+            NCryptGetProperty(
+                key,
+                NCRYPT_IMPL_TYPE_PROPERTY,
+                (&mut implementation as *mut u32).cast(),
+                std::mem::size_of::<u32>() as u32,
+                &mut implementation_size,
+                0,
+            )
+        };
+        if property_status != 0 || implementation_size != 4 {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+            }
+            return Err(cng_error("read CNG implementation type", property_status));
+        }
+        let hardware_backed =
+            implementation & (NCRYPT_IMPL_HARDWARE_FLAG | NCRYPT_IMPL_VIRTUAL_ISOLATION_FLAG) != 0;
+        if require_hardware && !hardware_backed {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+            }
+            return Err(SecureStoreError::Unsupported);
+        }
+        let mut required = 0_u32;
+        let exported = unsafe {
+            NCryptExportKey(
+                key,
+                0,
+                BCRYPT_ECCPUBLIC_BLOB,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                0,
+            )
+        };
+        if exported != 0 || required < 8 {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+            }
+            return Err(cng_error("size CNG public key blob", exported));
+        }
+        let mut blob = vec![0_u8; required as usize];
+        let exported = unsafe {
+            NCryptExportKey(
+                key,
+                0,
+                BCRYPT_ECCPUBLIC_BLOB,
+                std::ptr::null(),
+                blob.as_mut_ptr(),
+                blob.len() as u32,
+                &mut required,
+                0,
+            )
+        };
+        if exported != 0 {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+            }
+            return Err(cng_error("export CNG public key", exported));
+        }
+        if required as usize != blob.len() {
+            unsafe {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+            }
+            return Err(SecureStoreError::Corrupt(
+                "CNG public key export length changed unexpectedly".into(),
+            ));
+        }
+        let public_key = match Self::public_key_from_blob(&blob) {
+            Ok(public_key) => public_key,
+            Err(error) => {
+                unsafe {
+                    windows_sys::Win32::Security::Cryptography::NCryptFreeObject(key);
+                    windows_sys::Win32::Security::Cryptography::NCryptFreeObject(provider);
+                }
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            provider,
+            key,
+            metadata: CngDeviceMetadata {
+                algorithm: ClientKeyAlgorithm::EcdsaP256CngV1,
+                key_name: key_name.into(),
+                public_key: URL_SAFE_NO_PAD.encode(public_key),
+                hardware_backed,
+            },
+        })
+    }
+
+    pub fn metadata(&self) -> &CngDeviceMetadata {
+        &self.metadata
+    }
+
+    pub fn public_key_from_blob(blob: &[u8]) -> Result<Vec<u8>, SecureStoreError> {
+        use windows_sys::Win32::Security::Cryptography::BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
+        if blob.len() < 8 {
+            return Err(SecureStoreError::Corrupt(
+                "CNG public key blob header is truncated".into(),
+            ));
+        }
+        let magic = u32::from_le_bytes(blob[0..4].try_into().unwrap());
+        let field_length = u32::from_le_bytes(blob[4..8].try_into().unwrap());
+        if magic != BCRYPT_ECDSA_PUBLIC_P256_MAGIC || field_length != 32 {
+            return Err(SecureStoreError::Corrupt(
+                "CNG public key blob is not an ECDSA P-256 public key".into(),
+            ));
+        }
+        let expected = 8 + field_length as usize * 2;
+        if blob.len() != expected {
+            return Err(SecureStoreError::Corrupt(
+                "CNG public key blob has an invalid coordinate length".into(),
+            ));
+        }
+        let mut public_key = Vec::with_capacity(65);
+        public_key.push(0x04);
+        public_key.extend_from_slice(&blob[8..]);
+        Ok(public_key)
+    }
+
+    pub fn validate_signature(signature: &[u8]) -> Result<(), SecureStoreError> {
+        if signature.len() == 64 {
+            Ok(())
+        } else {
+            Err(SecureStoreError::Corrupt(
+                "CNG ECDSA signature must contain raw r and s values".into(),
+            ))
+        }
+    }
+
+    fn sign_canonical(&self, payload: &[u8]) -> Result<Vec<u8>, SecureStoreError> {
+        use windows_sys::Win32::Security::Cryptography::NCryptSignHash;
+        let digest = Sha256::digest(payload);
+        let mut signature = vec![0_u8; 64];
+        let mut written = 0_u32;
+        let status = unsafe {
+            NCryptSignHash(
+                self.key,
+                std::ptr::null(),
+                digest.as_ptr(),
+                digest.len() as u32,
+                signature.as_mut_ptr(),
+                signature.len() as u32,
+                &mut written,
+                0,
+            )
+        };
+        if status != 0 {
+            return Err(cng_error("sign with CNG key", status));
+        }
+        signature.truncate(written as usize);
+        Self::validate_signature(&signature)?;
+        Ok(signature)
+    }
+
+    #[cfg(test)]
+    fn metadata_only_for_tests(key_name: &str, public_key: String, hardware_backed: bool) -> Self {
+        Self {
+            provider: 0,
+            key: 0,
+            metadata: CngDeviceMetadata {
+                algorithm: ClientKeyAlgorithm::EcdsaP256CngV1,
+                key_name: key_name.into(),
+                public_key,
+                hardware_backed,
+            },
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for CngDeviceSigner {
+    fn drop(&mut self) {
+        unsafe {
+            if self.key != 0 {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(self.key);
+            }
+            if self.provider != 0 {
+                windows_sys::Win32::Security::Cryptography::NCryptFreeObject(self.provider);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn to_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn cng_error(operation: &str, status: i32) -> SecureStoreError {
+    SecureStoreError::Protection(format!(
+        "{operation} failed with status 0x{:08x}",
+        status as u32
+    ))
 }
 
 fn build_identity(
@@ -443,6 +752,58 @@ mod tests {
             load_device_signer_with(&store),
             Err(SecureStoreError::Corrupt(_))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cng_public_blob_metadata_is_public_only_and_uses_sec1_shape() {
+        use windows_sys::Win32::Security::Cryptography::BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
+
+        let blob = test_cng_public_blob(BCRYPT_ECDSA_PUBLIC_P256_MAGIC, 32, 7);
+        let public_key = CngDeviceSigner::public_key_from_blob(&blob).unwrap();
+        assert_eq!(public_key.len(), 65);
+        assert_eq!(public_key[0], 0x04);
+        let signer = CngDeviceSigner::metadata_only_for_tests(
+            "rdc-device-proof-test",
+            URL_SAFE_NO_PAD.encode(&public_key),
+            false,
+        );
+        let json = serde_json::to_string(&signer.metadata()).unwrap();
+        assert!(json.contains("ecdsa-p256-cng-v1"));
+        assert!(json.contains("rdc-device-proof-test"));
+        assert!(!json.contains("private"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cng_public_blob_and_signature_shapes_fail_closed() {
+        use windows_sys::Win32::Security::Cryptography::BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
+
+        let valid = test_cng_public_blob(BCRYPT_ECDSA_PUBLIC_P256_MAGIC, 32, 3);
+        assert!(CngDeviceSigner::public_key_from_blob(&valid).is_ok());
+        let wrong_magic = test_cng_public_blob(0, 32, 3);
+        assert!(matches!(
+            CngDeviceSigner::public_key_from_blob(&wrong_magic),
+            Err(SecureStoreError::Corrupt(_))
+        ));
+        let wrong_length = test_cng_public_blob(BCRYPT_ECDSA_PUBLIC_P256_MAGIC, 31, 3);
+        assert!(matches!(
+            CngDeviceSigner::public_key_from_blob(&wrong_length),
+            Err(SecureStoreError::Corrupt(_))
+        ));
+        assert!(matches!(
+            CngDeviceSigner::validate_signature(&[0_u8; 63]),
+            Err(SecureStoreError::Corrupt(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    fn test_cng_public_blob(magic: u32, field_length: u32, fill: u8) -> Vec<u8> {
+        let mut blob = Vec::with_capacity(8 + field_length as usize * 2);
+        blob.extend_from_slice(&magic.to_le_bytes());
+        blob.extend_from_slice(&field_length.to_le_bytes());
+        blob.extend(std::iter::repeat(fill).take(field_length as usize * 2));
+        blob
     }
 
     #[test]

@@ -144,14 +144,14 @@
 - Exports only an uncompressed SEC1 public key; signing hashes canonical JSON
   with SHA-256 and calls `NCryptSignHash`.
 
-- [ ] **Step 1: Write failing policy and shape tests**
+- [x] **Step 1: Write failing policy and shape tests**
 
   Add tests that assert the CNG metadata contains an algorithm, key name, and
   public key but no private-key field, and that malformed CNG public blobs,
   wrong magic values, wrong coordinate lengths, and non-64-byte signatures are
   rejected.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
   ```powershell
   cargo test --manifest-path src-tauri/Cargo.toml services::secure_store
@@ -159,27 +159,30 @@
 
   Expected: missing CNG parser/signer types or failing shape assertions.
 
-- [ ] **Step 3: Implement minimal Windows CNG backend**
+- [x] **Step 3: Implement minimal Windows CNG backend**
 
   Under `cfg(windows)`, open `MS_PLATFORM_CRYPTO_PROVIDER`, create or open a
-  user-scoped named P-256 key, request VBS protection when policy requires it,
+  user-scoped named P-256 key, inspect hardware/VBS implementation flags,
   export `BCRYPT_ECCPUBLIC_BLOB`, validate its magic and coordinate sizes, and
   convert it to `04 || X || Y`. Wrap NCrypt handles in an RAII type and map
   provider failures to a typed error. Never call an export API for private key
-  material. Under non-Windows or unsupported-provider conditions, return a
-  typed unavailable result so policy can select DPAPI fallback.
+  material. Strict hardware/VBS selection is applied by the policy layer in
+  Task 4; the current `windows-sys` bindings do not expose a dedicated VBS
+  creation flag. Under non-Windows or unsupported-provider conditions, policy
+  keeps the existing DPAPI fallback.
 
-- [ ] **Step 4: Run cross-platform tests and Windows-gated tests**
+- [x] **Step 4: Run cross-platform tests and Windows-gated tests**
 
   ```powershell
   cargo test --manifest-path src-tauri/Cargo.toml services::secure_store
-  cargo test --manifest-path src-tauri/Cargo.toml services::secure_store -- --ignored
   ```
 
-  Expected: shape/policy tests pass everywhere; ignored tests pass only on a
-  Windows machine with the explicitly enabled CNG test policy.
+  Expected: the shape tests pass on Windows and the CNG code remains excluded
+  from non-Windows builds. Provider-backed key creation is reserved for the
+  explicit manual acceptance check in Task 5 so tests do not leave persistent
+  user key material behind.
 
-- [ ] **Step 5: Commit the CNG backend**
+- [x] **Step 5: Commit the CNG backend**
 
   ```powershell
   git add src-tauri/src/services/secure_store.rs src-tauri/Cargo.toml src-tauri/Cargo.lock
