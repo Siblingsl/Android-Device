@@ -25,6 +25,9 @@ jobs:
     timeout-minutes: 60
     env:
       RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+      RDC_AUTH_BASE_URL: ${{ vars.RDC_AUTH_BASE_URL }}
+      RDC_AUTH_EXECUTION_RELEASE_URL: ${{ vars.RDC_AUTH_EXECUTION_RELEASE_URL || format('{0}/v1/execution-grants/release', vars.RDC_AUTH_BASE_URL) }}
+      RDC_AUTH_PUBLIC_KEYS: ${{ vars.RDC_AUTH_PUBLIC_KEYS }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,6 +50,33 @@ jobs:
         shell: pwsh
         run: node scripts/check-release-version.mjs "$env:RELEASE_VERSION"
 
+      - name: Validate release authorization configuration
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RDC_AUTH_BASE_URL)) {
+            throw "RDC_AUTH_BASE_URL repository variable is required for a usable release build."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:RDC_AUTH_EXECUTION_RELEASE_URL)) {
+            throw "RDC_AUTH_EXECUTION_RELEASE_URL repository variable is required for a usable release build."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:RDC_AUTH_PUBLIC_KEYS)) {
+            throw "RDC_AUTH_PUBLIC_KEYS repository variable is required for a usable release build."
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:RDC_AUTH_SIGNING_KEY)) {
+            throw "The server signing key must never be present in the desktop release job."
+          }
+
+      - name: Run authorization-service tests
+        run: cargo test --locked --manifest-path authorization-service/Cargo.toml
+
+      - name: Run secret-free rotation contract check
+        shell: pwsh
+        run: ./scripts/test-verify-auth-rotation.ps1
+
+      - name: Build protected qemu-center resource
+        shell: pwsh
+        run: cargo build --locked --release --manifest-path qemu-center/Cargo.toml
+
       - name: Run TypeScript checks
         run: npx tsc --noEmit
 
@@ -64,6 +94,16 @@ jobs:
 
       - name: Build NSIS installer
         run: npx tauri build --bundles nsis
+
+      - name: Run secret-free rotation rehearsal and verify release core
+        shell: pwsh
+        run: |
+          $paths = @(
+            "src-tauri/target/release/redroid-device-center.exe",
+            "src-tauri/target/release/redroid_device_center_lib.dll",
+            "qemu-center/target/release/qemu-center.exe"
+          )
+          ./scripts/verify-auth-rotation.ps1 -BinaryPath $paths
 
       - name: Stage and checksum installer
         shell: pwsh

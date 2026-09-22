@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { QemuCenterPage } from "./QemuCenter";
@@ -8,8 +8,10 @@ import type {
   QemuCliOutput,
   QemuDoctorReport,
   QemuRedroidInstance,
+  QemuRedroidRuntimeStats,
   QemuVerifyReport,
   QemuVmEntry,
+  RuntimeResourceSnapshot,
 } from "../types";
 
 vi.mock("../services/deviceService", () => ({
@@ -19,6 +21,8 @@ vi.mock("../services/deviceService", () => ({
     vmList: vi.fn(),
     vmCreate: vi.fn(),
     vmStart: vi.fn(),
+    vmSetMemory: vi.fn(),
+    vmMemoryReclaim: vi.fn(),
     vmStop: vi.fn(),
     vmDelete: vi.fn(),
     vmSnapshot: vi.fn(),
@@ -28,6 +32,9 @@ vi.mock("../services/deviceService", () => ({
     redroidUpgrade: vi.fn(),
     redroidRestore: vi.fn(),
     redroidList: vi.fn(),
+    redroidStats: vi.fn(),
+    runtimeReleaseIdle: vi.fn(),
+    runtimeHibernateApp: vi.fn(),
     adbList: vi.fn(),
     verify: vi.fn(),
   },
@@ -40,12 +47,15 @@ vi.mock("../services/deviceService", () => ({
     getLocalGappsPath: vi.fn(async () => "C:/assets/gapps.zip"),
     getMagiskAssets: vi.fn(async () => ({ magiskOk: true, lsposedOk: true, shamikoOk: true })),
     listSpoofProfiles: vi.fn(async () => [{ id: "captured-phone", model: "My phone" }]),
+    readRuntimeResourceSnapshot: vi.fn(),
+    authorizationStatus: vi.fn(),
+    authorizationRegister: vi.fn(),
   },
 }));
 vi.mock("../lib/dialogs", () => ({ askConfirm: vi.fn(async () => true) }));
 vi.mock("../lib/clipboard", () => ({ copyText: vi.fn() }));
 
-const { QemuService } = await import("../services/deviceService");
+const { DeviceService, QemuService } = await import("../services/deviceService");
 
 const cliOk = (stdout = "ok"): QemuCliOutput => ({ success: true, exitCode: 0, stdout, stderr: "" });
 
@@ -109,6 +119,36 @@ const verifyFixture: QemuVerifyReport = {
   ],
 };
 
+const resourceSnapshotFixture: RuntimeResourceSnapshot = {
+  capturedAt: "2026-09-17T12:00:00.000Z",
+  hostTotalBytes: 16 * 1024 ** 3,
+  hostAvailableBytes: 4 * 1024 ** 3,
+  qemuPrivateBytes: 4 * 1024 ** 3,
+  qemuWorkingSetBytes: 700 * 1024 ** 2,
+  wslPrivateBytes: 2 * 1024 ** 3,
+  vmMemoryMiB: 4096,
+  vmVcpus: 4,
+  instanceMemoryLimitBytes: null,
+  instanceMemoryCurrentBytes: null,
+  instanceMemoryPeakBytes: null,
+  instanceOomKills: null,
+  bootCompleted: true,
+  appReadyMs: 900,
+  source: "host",
+};
+
+const resourceInstanceStatsFixture: QemuRedroidRuntimeStats = {
+  instance: "r1",
+  container: "qc-r1",
+  status: "Up 2 minutes",
+  memoryLimitBytes: 1024 * 1024 ** 2,
+  memoryCurrentBytes: 960 * 1024 ** 2,
+  memoryPeakBytes: 1024 * 1024 ** 2,
+  oomKills: 0,
+  cpuUsagePercent: 12,
+  bootCompleted: true,
+};
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -131,9 +171,15 @@ describe("QemuCenterPage", () => {
     vi.mocked(QemuService.doctor).mockResolvedValue(doctorFixture);
     vi.mocked(QemuService.vmList).mockResolvedValue(vmsFixture);
     vi.mocked(QemuService.redroidList).mockResolvedValue(instancesFixture);
+    vi.mocked(QemuService.redroidStats).mockResolvedValue([]);
+    vi.mocked(DeviceService.readRuntimeResourceSnapshot).mockRejectedValue(new Error("not configured"));
     vi.mocked(QemuService.setup).mockResolvedValue(cliOk());
     vi.mocked(QemuService.vmCreate).mockResolvedValue(cliOk("VM node1 created."));
     vi.mocked(QemuService.vmStart).mockResolvedValue(cliOk("QEMU started."));
+    vi.mocked(QemuService.vmSetMemory).mockResolvedValue(cliOk("memory changed"));
+    vi.mocked(QemuService.vmMemoryReclaim).mockResolvedValue(
+      cliOk("memory reclaim verified: target=1536 MiB actual=1536 MiB reclaimed=2560 MiB"),
+    );
     vi.mocked(QemuService.vmStop).mockResolvedValue(cliOk());
     vi.mocked(QemuService.vmDelete).mockResolvedValue(cliOk());
     vi.mocked(QemuService.vmSnapshot).mockResolvedValue(cliOk("snapshot created"));
@@ -142,6 +188,19 @@ describe("QemuCenterPage", () => {
     vi.mocked(QemuService.redroidCreate).mockResolvedValue(
       cliOk("instance r1 created on VM node1.\n  adb serial: 127.0.0.1:24501"),
     );
+    vi.mocked(QemuService.runtimeHibernateApp).mockResolvedValue({
+      scope: "app",
+      instance: "r1",
+      serial: "127.0.0.1:24500",
+      package: "com.xingin.xhs",
+      released: true,
+      reason: "idle_app",
+    });
+    vi.mocked(QemuService.runtimeReleaseIdle).mockResolvedValue({
+      instance: "r1",
+      released: true,
+      reason: "idle",
+    });
     vi.mocked(QemuService.verify).mockResolvedValue(verifyFixture);
   });
 
@@ -154,6 +213,7 @@ describe("QemuCenterPage", () => {
   it("marks the state dir as project-internal and hints the portable QEMU install", async () => {
     renderPage();
     await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "展开详情" }));
     // Portable badge + note: everything lives in qemu-center/state.
     expect(screen.getByText("项目内")).toBeTruthy();
     expect(screen.getByText(/全部数据位于项目内/)).toBeTruthy();
@@ -168,6 +228,7 @@ describe("QemuCenterPage", () => {
   it("renders doctor checks with ok/fail/unknown badges and the fix hint", async () => {
     renderPage();
     await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "展开详情" }));
     expect(screen.getByText("WHPX feature")).toBeTruthy();
     expect(screen.getByText("缺失")).toBeTruthy(); // fail badge (zh)
     expect(screen.getByText("就绪")).toBeTruthy(); // ok badge (zh)
@@ -175,9 +236,54 @@ describe("QemuCenterPage", () => {
     expect(screen.getByText(/qemu-center setup whpx/)).toBeTruthy(); // fix line
   });
 
+  it("keeps the QEMU environment card collapsed until its details are requested", async () => {
+    renderPage();
+    await flushLoads();
+
+    const environmentCard = screen.getByText("环境就绪").closest(".module") as HTMLElement;
+    const toggle = within(environmentCard).getByRole("button", { name: "展开详情" });
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(within(environmentCard).queryByText("WHPX feature")).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(within(environmentCard).getByRole("button", { name: "收起详情" }).getAttribute("aria-expanded")).toBe("true");
+    expect(within(environmentCard).getByText("WHPX feature")).toBeTruthy();
+
+    fireEvent.click(within(environmentCard).getByRole("button", { name: "收起详情" }));
+    expect(within(environmentCard).getByRole("button", { name: "展开详情" }).getAttribute("aria-expanded")).toBe("false");
+    expect(within(environmentCard).queryByText("WHPX feature")).toBeNull();
+  });
+
+  it("keeps runtime resources and authorization as compact contextual summaries", async () => {
+    vi.mocked(DeviceService.readRuntimeResourceSnapshot).mockResolvedValue(resourceSnapshotFixture);
+    vi.mocked(DeviceService.authorizationStatus).mockResolvedValue({
+      status: "not_configured",
+      detail: "authorization service is not configured in this build",
+    });
+    renderPage();
+
+    const resourceSummary = await screen.findByRole("button", { name: /主机可用 4096 MiB/ });
+    const nodesCard = screen.getByText("节点（VM）").closest(".module") as HTMLElement;
+    const environmentCard = screen.getByText("环境就绪").closest(".module") as HTMLElement;
+
+    expect(nodesCard.contains(resourceSummary)).toBe(true);
+    expect(screen.queryByText("QEMU 私有提交 4096 MiB")).toBeNull();
+    expect(within(environmentCard).getByText("未配置授权服务")).toBeTruthy();
+    expect(within(environmentCard).queryByText(/GApps、模块、伪装/)).toBeNull();
+    expect(screen.queryByText(/实验性轨道：使用前请运行节点验收/)).toBeNull();
+
+    fireEvent.click(resourceSummary);
+    expect(within(nodesCard).getByText("QEMU 私有提交 4096 MiB")).toBeTruthy();
+
+    fireEvent.click(within(environmentCard).getByRole("button", { name: "展开详情" }));
+    expect(within(environmentCard).getByText(/GApps、模块、伪装/)).toBeTruthy();
+  });
+
   it("keeps the verify picker in the card body and shows an empty guide before the first run", async () => {
     renderPage();
     await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "展开详情" }));
     // The node picker lives in the card body with its own label, not squeezed
     // into the header row next to the run button.
     expect(screen.getByLabelText("验收节点")).toBeTruthy();
@@ -197,6 +303,42 @@ describe("QemuCenterPage", () => {
     expect(screen.getByText("22300")).toBeTruthy(); // ssh port
     expect(screen.getByText("r1")).toBeTruthy(); // instance row from redroid list
     expect(screen.getByText("127.0.0.1:24500")).toBeTruthy();
+  });
+
+  it("uses compact spacing for the node and instance tables", async () => {
+    renderPage();
+    await flushLoads();
+
+    const nodesCard = screen.getByText("节点（VM）").closest(".module") as HTMLElement;
+    const instancesCard = screen.getByText("实例（redroid 容器）").closest(".module") as HTMLElement;
+
+    expect(nodesCard.classList.contains("qemu-table-card")).toBe(true);
+    expect(instancesCard.classList.contains("qemu-table-card")).toBe(true);
+  });
+
+  it("keeps instance actions in one aligned action group", async () => {
+    vi.mocked(QemuService.redroidList).mockResolvedValue([
+      { ...instancesFixture[0], status: "Exited" },
+    ]);
+    renderPage();
+    await flushLoads();
+
+    const instanceCard = screen.getByText("实例（redroid 容器）").closest(".module") as HTMLElement;
+    const instanceRow = within(instanceCard).getByText("r1").closest("tr") as HTMLElement;
+    const actionGroup = instanceRow.querySelector(".qemu-row-actions");
+
+    expect(actionGroup).toBeTruthy();
+    expect(actionGroup?.querySelectorAll(":scope > .btn")).toHaveLength(7);
+  });
+
+  it("labels an instance near its cgroup limit and shows the safer action hint", async () => {
+    vi.mocked(DeviceService.readRuntimeResourceSnapshot).mockResolvedValue(resourceSnapshotFixture);
+    vi.mocked(QemuService.redroidStats).mockResolvedValue([resourceInstanceStatsFixture]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /主机可用 4096 MiB/ }));
+    expect(await screen.findAllByText("实例接近上限")).not.toHaveLength(0);
+    expect(screen.getByText(/实例接近自身 cgroup 上限/)).toBeTruthy();
   });
 
   it("one-click setup calls setup(all) and re-runs doctor", async () => {
@@ -341,7 +483,7 @@ describe("QemuCenterPage", () => {
         name: "node9",
         imagePath: "",
         cpus: 4,
-        memMib: 4096,
+        memMib: 3072,
         diskGib: 40,
         adbPortCount: 32,
         autoSetup: true,
@@ -532,6 +674,24 @@ describe("QemuCenterPage", () => {
     await waitFor(() => expect(QemuService.vmDelete).toHaveBeenCalledWith("node1", true));
   });
 
+  it("adjusts a stopped node's memory for the next start", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("3072");
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "调整内存" }));
+    await waitFor(() => expect(QemuService.vmSetMemory).toHaveBeenCalledWith("node1", 3072));
+    expect(await screen.findByText("节点 node1 已调整为 3072 MiB，下次启动生效")).toBeTruthy();
+    promptSpy.mockRestore();
+  });
+
+  it("offers explicit guest memory reclaim and reports the CLI result", async () => {
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "回收 guest 内存" }));
+    await waitFor(() => expect(QemuService.vmMemoryReclaim).toHaveBeenCalledWith("node1"));
+    expect(await screen.findByText(/guest 内存回收完成/)).toBeTruthy();
+  });
+
   it("shows a failed VM launch in the status line", async () => {
     vi.mocked(QemuService.vmStart).mockResolvedValue({
       success: false, exitCode: 1, stdout: "", stderr: "QEMU failed to start: Image is corrupt",
@@ -561,6 +721,33 @@ describe("QemuCenterPage", () => {
     await flushLoads();
     expect(screen.getByText("该节点还没有可恢复的快照，先点「快照」创建")).toBeTruthy();
     expect(QemuService.vmRestore).not.toHaveBeenCalled();
+  });
+
+  it("hibernates only the target app while keeping the instance running", async () => {
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("com.xingin.xhs");
+    renderPage();
+    await flushLoads();
+    fireEvent.click(screen.getByRole("button", { name: "暂停应用" }));
+    await waitFor(() =>
+      expect(QemuService.runtimeHibernateApp).toHaveBeenCalledWith(
+        "node1",
+        "r1",
+        "127.0.0.1:24500",
+        "com.xingin.xhs",
+      ),
+    );
+    expect(await screen.findByText(/已暂停应用 com\.xingin\.xhs/)).toBeTruthy();
+    promptSpy.mockRestore();
+  });
+
+  it("offers one confirmed batch release while leaving idle policy decisions to the backend", async () => {
+    renderPage();
+    await flushLoads();
+    const button = screen.getByRole("button", { name: "释放全部闲置" });
+    expect(button).not.toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    await waitFor(() => expect(QemuService.runtimeReleaseIdle).toHaveBeenCalledWith("node1", "r1"));
+    expect(screen.getByText(/批量释放完成/)).toBeTruthy();
   });
 
   it("restores an existing snapshot after confirmation and tag prompt", async () => {

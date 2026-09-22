@@ -1,0 +1,10 @@
+F:\code\project\Android-Device\authorization-service\target\debug\deps\primeorder-97734f96270fe0a3.d: C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\lib.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\point_arithmetic.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\affine.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\field.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\projective.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\../README.md
+
+F:\code\project\Android-Device\authorization-service\target\debug\deps\libprimeorder-97734f96270fe0a3.rmeta: C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\lib.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\point_arithmetic.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\affine.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\field.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\projective.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\../README.md
+
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\lib.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\point_arithmetic.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\affine.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\field.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\projective.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\primeorder-0.13.6\src\../README.md:

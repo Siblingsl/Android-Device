@@ -9,7 +9,7 @@ import { DeviceService } from "../services/deviceService";
 import { useToolProbe } from "../hooks/useToolProbe";
 import { useAppStore, themePrefOf } from "../stores/appStore";
 import { useI18n } from "../i18n";
-import type { AppSettings } from "../types";
+import type { AppSettings, AuthorizationRuntimeStatus } from "../types";
 import { ShortcutEditor } from "../components/settings/ShortcutEditor";
 import { ConfigTransfer } from "../components/settings/ConfigTransfer";
 import { UpdatePanel } from "../components/settings/UpdatePanel";
@@ -65,6 +65,7 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState<AppSettings | null>(null);
   const [appVersion, setAppVersion] = useState("0.1.0");
+  const [authorizationStatus, setAuthorizationStatus] = useState<AuthorizationRuntimeStatus | null>(null);
   const [metadataRevision, setMetadataRevision] = useState(0);
   const [activeTab, setActiveTab] = useState<SettingsTabId>(readInitialSettingsTab);
   const dirty = Boolean(form && settings && JSON.stringify(form) !== JSON.stringify(settings));
@@ -88,6 +89,20 @@ export function SettingsPage() {
         /* web preview */
       });
   }, [loadSettings]);
+
+  useEffect(() => {
+    let mounted = true;
+    void DeviceService.authorizationStatus()
+      .then((status) => {
+        if (mounted) setAuthorizationStatus(status);
+      })
+      .catch(() => {
+        if (mounted) setAuthorizationStatus(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!dirty) return;
@@ -556,6 +571,23 @@ export function SettingsPage() {
               </div>
             </Card>
 
+            <Card className="track-card" title={t("settings.card.authorizationSecurity")}>
+              <div className="field">
+                <label>{t("settings.authorizationSecurity.level")}</label>
+                <div className="row" role="status">
+                  <span className="badge">
+                    {t(`settings.authorizationSecurity.level.${authorizationStatus?.securityLevel || "unknown"}`)}
+                  </span>
+                  {authorizationStatus?.hardwareRequired ? (
+                    <span className="muted">{t("settings.authorizationSecurity.hardwareRequired")}</span>
+                  ) : null}
+                </div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  {t(`settings.authorizationSecurity.detail.${authorizationStatus?.securityLevel || "unknown"}`)}
+                </div>
+              </div>
+            </Card>
+
             <Card className="track-card" title={t("settings.card.runtimePolicy")}>
               <div className="form-grid">
                 <div className="field">
@@ -580,7 +612,7 @@ export function SettingsPage() {
                   <label className="row">
                     <input
                       type="checkbox"
-                      checked={form.runtimeKeepVmWarm !== false}
+                      checked={form.runtimeKeepVmWarm === true}
                       onChange={(e) => set("runtimeKeepVmWarm", e.target.checked)}
                     />
                     {t("settings.enabled")}
@@ -601,6 +633,21 @@ export function SettingsPage() {
                   />
                   <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
                     {t("settings.runtimeMaxParallelStartsHint")}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="settings-runtime-auto-release-idle">{t("settings.runtimeAutoReleaseIdle")}</label>
+                  <div className="row">
+                    <input
+                      id="settings-runtime-auto-release-idle"
+                      type="checkbox"
+                      checked={form.runtimeAutoReleaseIdleOnCritical !== false}
+                      onChange={(e) => set("runtimeAutoReleaseIdleOnCritical", e.target.checked)}
+                    />
+                    <span>{t("settings.enabled")}</span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    {t("settings.runtimeAutoReleaseIdleHint")}
                   </div>
                 </div>
                 <div className="field">

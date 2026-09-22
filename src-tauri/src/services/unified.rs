@@ -33,6 +33,8 @@ use crate::services::{device, qemu};
 pub const SOURCE_DOCKER: &str = "docker";
 pub const SOURCE_ADB: &str = "adb";
 pub const SOURCE_QEMU: &str = "qemu";
+pub const SOURCE_EMULATOR: &str = "emulator";
+pub const SOURCE_REDROID: &str = "redroid";
 
 /// One row of the unified device list: exactly the `DeviceInfo` wire shape
 /// (flattened, so the frontend keeps using its existing DeviceInfo type) plus
@@ -42,8 +44,10 @@ pub const SOURCE_QEMU: &str = "qemu";
 pub struct UnifiedDevice {
     #[serde(flatten)]
     pub device: DeviceInfo,
-    /// "docker" (redroid container of the Docker track) | "adb" (physical /
-    /// LAN device) | "qemu" (redroid instance inside a qemu-center VM node).
+    /// "docker" (Docker-track redroid container) | "qemu" (redroid instance
+    /// inside a qemu-center VM node) | "emulator" (Android Emulator) |
+    /// "redroid" (Redroid discovered over ADB) | "adb" (unclassified ADB
+    /// device; never treated as proof of physical hardware).
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qemu_vm: Option<String>,
@@ -62,13 +66,19 @@ impl UnifiedDevice {
     }
 }
 
-/// Pure: a Docker-track device is "docker" when it carries a container id,
-/// otherwise it is a physical / LAN device reached over plain adb.
+/// Pure: classify a row from the Docker/ADB probe without claiming that an
+/// unclassified ADB row is physical hardware. The device list currently keeps
+/// the ADB model in `name` when no Docker container matched it, and the serial
+/// is authoritative for Android Emulator rows.
 pub fn classify_docker_source(d: &DeviceInfo) -> String {
-    if d.container_id.is_empty() {
-        SOURCE_ADB.to_string()
-    } else {
+    if !d.container_id.is_empty() {
         SOURCE_DOCKER.to_string()
+    } else if d.serial.to_ascii_lowercase().starts_with("emulator-") {
+        SOURCE_EMULATOR.to_string()
+    } else if d.name.to_ascii_lowercase().contains("redroid") {
+        SOURCE_REDROID.to_string()
+    } else {
+        SOURCE_ADB.to_string()
     }
 }
 
@@ -89,7 +99,11 @@ pub fn qemu_device_info(entry: &qemu::QemuAdbDeviceStatus) -> DeviceInfo {
         cpu: String::new(),
         ram: String::new(),
         fps: 0.0,
-        adb_status: if entry.online { "device".into() } else { "offline".into() },
+        adb_status: if entry.online {
+            "device".into()
+        } else {
+            "offline".into()
+        },
         scrcpy_status: "stopped".into(),
         // No Docker container backs a QEMU instance on this host.
         docker_status: "n/a".into(),
@@ -113,20 +127,25 @@ pub fn qemu_device_info(entry: &qemu::QemuAdbDeviceStatus) -> DeviceInfo {
     }
 }
 
-/// Pure merge: Docker-track rows keep their order and win dedupe conflicts;
-/// QEMU rows whose serial is already present (the same adb device seen by both
-/// tracks — theoretically impossible but defended against) are dropped, as are
-/// QEMU rows without a usable serial. QEMU rows are appended after the
-/// Docker-track rows.
-pub fn merge_device_lists(
-    docker: Vec<DeviceInfo>,
-    qemu: Vec<UnifiedDevice>,
-) -> Vec<UnifiedDevice> {
+/// Pure merge: Docker container rows keep their order and win dedupe conflicts.
+/// Plain ADB rows whose serial is also reported by QEMU are dropped so the
+/// explicit QEMU origin cannot be replaced by the generic ADB fallback. QEMU
+/// rows without a usable serial are dropped, and remaining QEMU rows append
+/// after the Docker-track rows.
+pub fn merge_device_lists(docker: Vec<DeviceInfo>, qemu: Vec<UnifiedDevice>) -> Vec<UnifiedDevice> {
+    let qemu_serials: BTreeSet<String> = qemu
+        .iter()
+        .filter(|u| u.source == SOURCE_QEMU && !u.device.serial.is_empty())
+        .map(|u| u.device.serial.clone())
+        .collect();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<UnifiedDevice> = Vec::with_capacity(docker.len() + qemu.len());
     for d in docker {
-        seen.insert(d.serial.clone());
         let source = classify_docker_source(&d);
+        if source != SOURCE_DOCKER && qemu_serials.contains(&d.serial) {
+            continue;
+        }
+        seen.insert(d.serial.clone());
         out.push(UnifiedDevice::plain(d, &source));
     }
     for q in qemu {
@@ -161,7 +180,10 @@ pub fn from_qemu_status(entry: &qemu::QemuAdbDeviceStatus) -> UnifiedDevice {
 pub fn list_devices_unified() -> Vec<UnifiedDevice> {
     let docker = device::list_devices();
     let qemu = qemu::list_qemu_adb_devices().unwrap_or_default();
-    merge_device_lists(docker, qemu.into_iter().map(|e| from_qemu_status(&e)).collect())
+    merge_device_lists(
+        docker,
+        qemu.into_iter().map(|e| from_qemu_status(&e)).collect(),
+    )
 }
 
 /// Runtime: resolve one device for the detail page. Docker track first; when
@@ -215,7 +237,12 @@ mod tests {
         }
     }
 
-    fn qemu_status(serial: &str, vm: &str, instance: &str, online: bool) -> qemu::QemuAdbDeviceStatus {
+    fn qemu_status(
+        serial: &str,
+        vm: &str,
+        instance: &str,
+        online: bool,
+    ) -> qemu::QemuAdbDeviceStatus {
         qemu::QemuAdbDeviceStatus {
             serial: serial.to_string(),
             vm: vm.to_string(),
@@ -226,10 +253,24 @@ mod tests {
 
     #[test]
     fn docker_rows_classify_by_container_presence() {
-        assert_eq!(classify_docker_source(&docker_device("127.0.0.1:5555", "rdc-a")), "docker");
+        assert_eq!(
+            classify_docker_source(&docker_device("127.0.0.1:5555", "rdc-a")),
+            "docker"
+        );
         let mut lan = docker_device("192.168.1.8:5555", "");
         lan.container_id = String::new();
         assert_eq!(classify_docker_source(&lan), "adb");
+    }
+
+    #[test]
+    fn adb_rows_classify_known_virtual_devices_without_calling_them_physical() {
+        let mut emulator = docker_device("emulator-5554", "");
+        emulator.name = "2210132C".into();
+        assert_eq!(classify_docker_source(&emulator), "emulator");
+
+        let mut redroid = docker_device("127.0.0.1:24500", "");
+        redroid.name = "redroid14_x86_64".into();
+        assert_eq!(classify_docker_source(&redroid), "redroid");
     }
 
     #[test]
@@ -252,9 +293,12 @@ mod tests {
     #[test]
     fn merge_keeps_docker_rows_first_and_tags_sources() {
         let docker = vec![docker_device("127.0.0.1:5555", "rdc-a")];
-        let qemu = vec![
-            from_qemu_status(&qemu_status("127.0.0.1:24500", "node1", "r1", true)),
-        ];
+        let qemu = vec![from_qemu_status(&qemu_status(
+            "127.0.0.1:24500",
+            "node1",
+            "r1",
+            true,
+        ))];
         let merged = merge_device_lists(docker, qemu);
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].source, "docker");
@@ -278,6 +322,23 @@ mod tests {
             .iter()
             .all(|u| u.device.serial != "127.0.0.1:24500" || u.source == "docker"));
         assert_eq!(merged[1].device.serial, "127.0.0.1:24501");
+    }
+
+    #[test]
+    fn merge_prefers_qemu_over_a_plain_adb_duplicate() {
+        let mut adb = docker_device("127.0.0.1:24500", "");
+        adb.name = "redroid14_x86_64".into();
+        let qemu = vec![from_qemu_status(&qemu_status(
+            "127.0.0.1:24500",
+            "node1",
+            "r1",
+            true,
+        ))];
+
+        let merged = merge_device_lists(vec![adb], qemu);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, "qemu");
+        assert_eq!(merged[0].qemu_instance.as_deref(), Some("r1"));
     }
 
     #[test]

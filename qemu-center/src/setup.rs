@@ -1,12 +1,12 @@
-﻿//! `setup` subcommand family: one-shot host preparation so end users never
+//! `setup` subcommand family: one-shot host preparation so end users never
 //! have to hand-run DISM/winget/download commands.
 //!
 //! Automation boundary (honest): the *only* steps Windows itself forces are
 //! one UAC confirmation per elevated command and one reboot after enabling
 //! WHPX — everything else is fully automated here. Every argv builder and
 //! output parser is a pure, unit-tested function; the actual DISM/winget/
-//! Invoke-WebRequest execution is runtime-unverified by construction (see
-//! README "诚实边界").
+//! Direct downloads are fail-closed where a trusted digest is required;
+//! package-manager channels remain delegated to the platform trust store.
 
 use serde::Serialize;
 
@@ -16,12 +16,19 @@ use crate::exec;
 /// State-dir subdirectory that holds downloaded cloud images.
 pub const IMAGES_DIR_NAME: &str = "images";
 
+/// Direct NSIS downloads require an operator-pinned digest before execution.
+pub const QEMU_INSTALLER_SHA256_ENV: &str = "RDC_QEMU_INSTALLER_SHA256";
+
 /// Canonical Ubuntu cloud image URLs (README documents these as placeholders
 /// that follow the upstream cloud-images.ubuntu.com current pages).
 pub fn image_url(distro: &str) -> Option<&'static str> {
     match distro {
-        "jammy" => Some("https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"),
-        "noble" => Some("https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"),
+        "jammy" => {
+            Some("https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img")
+        }
+        "noble" => {
+            Some("https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img")
+        }
         _ => None,
     }
 }
@@ -61,7 +68,7 @@ pub fn dism_enable_command() -> Vec<String> {
 pub fn elevate_command(self_exe: &str, args: &[&str]) -> Vec<String> {
     let quoted_args = std::iter::once(self_exe.to_string())
         .chain(args.iter().map(|a| a.to_string()))
-        .map(|a| format!("'{a}'"))
+        .map(|a| format!("'{}'", powershell_literal(&a)))
         .collect::<Vec<_>>()
         .join(",");
     vec![
@@ -69,7 +76,8 @@ pub fn elevate_command(self_exe: &str, args: &[&str]) -> Vec<String> {
         "-NoProfile".into(),
         "-Command".into(),
         format!(
-            "Start-Process -FilePath '{self_exe}' -ArgumentList {quoted_args} -Verb RunAs -Wait"
+            "Start-Process -FilePath '{}' -ArgumentList {quoted_args} -Verb RunAs -Wait",
+            powershell_literal(self_exe)
         ),
     ]
 }
@@ -109,14 +117,10 @@ pub fn classify_dism_output(exit_code: i32, stdout: &str) -> DismOutcome {
         // 1168: ERROR_NOT_FOUND — "the feature is not applicable"/already on.
         1168 => DismOutcome::AlreadyEnabled,
         _ => {
-            if hay.contains("already enabled")
-                || hay.contains("已经启用")
-                || hay.contains("已启用")
+            if hay.contains("already enabled") || hay.contains("已经启用") || hay.contains("已启用")
             {
                 DismOutcome::AlreadyEnabled
-            } else if hay.contains("completed successfully")
-                || hay.contains("操作成功完成")
-            {
+            } else if hay.contains("completed successfully") || hay.contains("操作成功完成") {
                 DismOutcome::Completed
             } else if mentions_restart {
                 DismOutcome::NeedsRestart
@@ -140,22 +144,19 @@ pub fn run_elevated_capture(
 ) -> Result<String, String> {
     let marker = state_dir.join(marker_name);
     let _ = std::fs::remove_file(&marker);
-    let inner = format!(
-        "& '{}' {} ; $LASTEXITCODE | Set-Content -Path '{}' -Encoding ascii",
-        self_exe,
-        args.join(" "),
-        marker.display()
-    );
     let argv = vec![
         "powershell".to_string(),
         "-NoProfile".to_string(),
         "-Command".to_string(),
         format!(
-            "Start-Process -FilePath '{self_exe}' -ArgumentList '{}' -Verb RunAs -Wait",
-            args.join("' '")
+            "Start-Process -FilePath '{}' -ArgumentList {} -Verb RunAs -Wait",
+            powershell_literal(self_exe),
+            args.iter()
+                .map(|arg| format!("'{}'", powershell_literal(arg)))
+                .collect::<Vec<_>>()
+                .join(",")
         ),
     ];
-    let _ = inner; // kept for clarity: marker is written by the elevated child
     let out = exec::run_command(&argv, std::time::Duration::from_secs(3600));
     if out.timed_out {
         return Err("elevated run timed out (UAC dialog unanswered?)".into());
@@ -214,10 +215,7 @@ pub fn choco_install_command() -> Vec<String> {
 /// URL tracks the well-known `weilnetz` build site; it may drift — the
 /// command builder takes the URL so callers can pin a version.
 pub fn nsis_install_command(installer_path: &std::path::Path) -> Vec<String> {
-    vec![
-        installer_path.display().to_string(),
-        "/S".into(),
-    ]
+    vec![installer_path.display().to_string(), "/S".into()]
 }
 
 // -------------------------------------------------------- portable QEMU -----
@@ -321,7 +319,10 @@ pub enum PortableQemuPlan {
 
 /// Decide the portable flow from the target dir + whether the QEMU binary is
 /// already present. Pure.
-pub fn portable_qemu_plan(target_dir: &std::path::Path, qemu_exe_present: bool) -> PortableQemuPlan {
+pub fn portable_qemu_plan(
+    target_dir: &std::path::Path,
+    qemu_exe_present: bool,
+) -> PortableQemuPlan {
     if qemu_exe_present {
         PortableQemuPlan::AlreadyInstalled
     } else if validate_portable_target(target_dir).is_err() {
@@ -339,8 +340,9 @@ pub fn download_command(url: &str, dest: &std::path::Path) -> Vec<String> {
         "-NoProfile".into(),
         "-Command".into(),
         format!(
-            "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '{url}' -OutFile '{}' -UseBasicParsing",
-            dest.display()
+            "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
+            powershell_literal(url),
+            powershell_literal(&dest.display().to_string())
         ),
     ]
 }
@@ -351,10 +353,18 @@ pub fn get_file_hash_command(path: &std::path::Path) -> Vec<String> {
         "-NoProfile".into(),
         "-Command".into(),
         format!(
-            "(Get-FileHash -Algorithm SHA256 -Path '{}').Hash.ToLowerInvariant()",
-            path.display()
+            "(Get-FileHash -Algorithm SHA256 -LiteralPath '{}').Hash.ToLowerInvariant()",
+            powershell_literal(&path.display().to_string())
         ),
     ]
+}
+
+pub fn powershell_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+pub fn validate_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Extract the expected digest for `file_name` from an upstream SHA256SUMS
@@ -505,7 +515,7 @@ impl QemuChannel {
             QemuChannel::Winget => "winget",
             QemuChannel::Scoop => "scoop",
             QemuChannel::Choco => "choco",
-            QemuChannel::NsisDownload => "direct NSIS download (best-effort)",
+            QemuChannel::NsisDownload => "direct NSIS download (digest-pinned)",
         }
     }
 }
@@ -520,7 +530,6 @@ pub fn image_download_plan(
         (Some(p), Some(actual), Some(expected)) if sha_matches(actual, expected) => {
             ImagePlan::SkipVerified(p.to_path_buf())
         }
-        (Some(p), Some(_), None) => ImagePlan::SkipUnverifiable(p.to_path_buf()),
         _ => ImagePlan::Download,
     }
 }
@@ -530,8 +539,6 @@ pub fn image_download_plan(
 pub enum ImagePlan {
     /// File exists and its digest matched SHA256SUMS.
     SkipVerified(std::path::PathBuf),
-    /// File exists but no upstream digest was available — kept, warning shown.
-    SkipUnverifiable(std::path::PathBuf),
     Download,
 }
 
@@ -581,10 +588,7 @@ mod tests {
 
     #[test]
     fn dism_already_enabled_via_exit_code_1168() {
-        assert_eq!(
-            classify_dism_output(1168, ""),
-            DismOutcome::AlreadyEnabled
-        );
+        assert_eq!(classify_dism_output(1168, ""), DismOutcome::AlreadyEnabled);
     }
 
     #[test]
@@ -661,7 +665,10 @@ mod tests {
         let err = validate_portable_target(spaced).unwrap_err();
         assert!(err.contains("whitespace"));
         assert!(err.contains("/D="), "explains the NSIS /D= reason");
-        assert!(err.contains("--machine"), "offers the machine-wide escape hatch");
+        assert!(
+            err.contains("--machine"),
+            "offers the machine-wide escape hatch"
+        );
         assert!(validate_portable_target(std::path::Path::new(
             "F:/code/project/Android-Device/qemu-center/state/qemu"
         ))
@@ -784,6 +791,20 @@ mod tests {
     }
 
     #[test]
+    fn powershell_literals_escape_single_quotes() {
+        assert_eq!(powershell_literal("C:\\state\\operator's"), "C:\\state\\operator''s");
+    }
+
+    #[test]
+    fn installer_digest_must_be_a_sha256_hex_string() {
+        let digest = "a".repeat(64);
+        assert!(validate_sha256_hex(&digest));
+        assert!(validate_sha256_hex(&digest.to_uppercase()));
+        assert!(!validate_sha256_hex("short"));
+        assert!(!validate_sha256_hex(&"g".repeat(64)));
+    }
+
+    #[test]
     fn hash_command_targets_sha256() {
         let argv = get_file_hash_command(std::path::Path::new("C:\\x.img"));
         let joined = argv.join(" ");
@@ -824,9 +845,15 @@ mod tests {
     fn image_urls_cover_both_distros_and_reject_others() {
         assert!(image_url("jammy").is_some());
         assert!(image_url("noble").is_some());
-        assert_eq!(image_file_name("noble"), Some("noble-server-cloudimg-amd64.img"));
+        assert_eq!(
+            image_file_name("noble"),
+            Some("noble-server-cloudimg-amd64.img")
+        );
         assert_eq!(image_url("focal"), None);
-        assert_eq!(sha256sums_url("noble").map(|u| u.ends_with("SHA256SUMS")), Some(true));
+        assert_eq!(
+            sha256sums_url("noble").map(|u| u.ends_with("SHA256SUMS")),
+            Some(true)
+        );
     }
 
     // --- image idempotency ---
@@ -843,10 +870,13 @@ mod tests {
             image_download_plan(Some(p), Some("deadbeef"), Some(expected)),
             ImagePlan::Download
         );
-        assert_eq!(image_download_plan(None, None, Some(expected)), ImagePlan::Download);
+        assert_eq!(
+            image_download_plan(None, None, Some(expected)),
+            ImagePlan::Download
+        );
         assert_eq!(
             image_download_plan(Some(p), Some(expected), None),
-            ImagePlan::SkipUnverifiable(p.to_path_buf())
+            ImagePlan::Download
         );
     }
 
@@ -884,8 +914,14 @@ mod tests {
     #[test]
     fn whpx_plan_skips_only_when_enabled() {
         use doctor::FeatureState;
-        assert_eq!(whpx_plan(FeatureState::Enabled), WhpxAction::SkipAlreadyEnabled);
-        assert_eq!(whpx_plan(FeatureState::Disabled), WhpxAction::EnableElevated);
+        assert_eq!(
+            whpx_plan(FeatureState::Enabled),
+            WhpxAction::SkipAlreadyEnabled
+        );
+        assert_eq!(
+            whpx_plan(FeatureState::Disabled),
+            WhpxAction::EnableElevated
+        );
         assert_eq!(whpx_plan(FeatureState::Absent), WhpxAction::EnableElevated);
         assert_eq!(whpx_plan(FeatureState::Unknown), WhpxAction::EnableElevated);
     }

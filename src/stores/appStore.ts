@@ -76,7 +76,6 @@ import {
 interface AppState {
   theme: "light" | "dark";
   themePref: ThemePref;
-  detailOpen: boolean;
   selectedDeviceId: string | null;
   status: SystemStatus | null;
   devices: DeviceInfo[];
@@ -102,8 +101,8 @@ interface AppState {
   runtimeSources: { docker: DockerSourceReading | null; qemu: QemuSourceReading | null };
   /** pref: "light" | "dark" | "system" (system tracks prefers-color-scheme). */
   setTheme: (pref: ThemePref) => void;
-  setDetailOpen: (open: boolean) => void;
   setSelectedDeviceId: (id: string | null) => void;
+  setDevices: (devices: DeviceInfo[]) => void;
   setStatusText: (text: string) => void;
   setQemuSetup: (state: QemuSetupState | null) => void;
   setQemuWaitVm: (vm: string | null) => void;
@@ -171,13 +170,6 @@ function noteRefreshFail(kind: string) {
 export const useAppStore = create<AppState>((set, get) => ({
   theme: "light",
   themePref: "light",
-  detailOpen: (() => {
-    try {
-      return localStorage.getItem("rdc.detailOpen") !== "0";
-    } catch {
-      return true;
-    }
-  })(),
   selectedDeviceId: (() => {
     try {
       return localStorage.getItem("rdc.selectedDeviceId");
@@ -213,14 +205,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     syncSystemThemeListener(pref);
   },
 
-  setDetailOpen: (detailOpen) => {
-    set({ detailOpen });
-    try {
-      localStorage.setItem("rdc.detailOpen", detailOpen ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  },
   setSelectedDeviceId: (selectedDeviceId) => {
     set({ selectedDeviceId });
     try {
@@ -229,6 +213,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       /* ignore */
     }
   },
+  setDevices: (devices) => set({ devices, loading: false }),
   setStatusText: (statusText) => set({ statusText }),
   addMonitorAlert: (alert) =>
     set((state) => {
@@ -427,6 +412,11 @@ export const useAppStore = create<AppState>((set, get) => ({
             resourceAlertThreshold: 80,
             deviceRefreshIntervalSecs: 10,
             deviceMonitorRules: {},
+            runtimeIdleTimeoutMinutes: 30,
+            runtimeKeepVmWarm: false,
+            runtimeMaxParallelStarts: 1,
+            runtimeProtectedInstanceIds: [],
+            runtimeAutoReleaseIdleOnCritical: true,
           },
         });
       }

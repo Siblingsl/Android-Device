@@ -10,10 +10,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
+base64 = "0.22"
+ed25519-dalek = "2"
 
 [dev-dependencies]
-# Intentionally empty: zero-external-dep red line. All tests are std-only
-# pure-function tests (serde/serde_json/clap/dirs are runtime deps, not dev).
+# Intentionally empty: tests use the same runtime dependencies as the CLI.
 
 [lib]
 name = "qemu_center"

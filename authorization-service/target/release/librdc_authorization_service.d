@@ -1,0 +1,1 @@
+F:\code\project\Android-Device\authorization-service\target\release\librdc_authorization_service.rlib: F:\code\project\Android-Device\authorization-service\src\crypto.rs F:\code\project\Android-Device\authorization-service\src\lib.rs F:\code\project\Android-Device\authorization-service\src\routes.rs F:\code\project\Android-Device\authorization-service\src\store.rs

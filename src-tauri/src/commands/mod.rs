@@ -1,17 +1,22 @@
 use crate::models::*;
 use crate::services::{
-    adb, art, audit, battery, cloak, config, device, docker, geo, gnirehtet, log, proxy, recording,
-    resource_monitor, root, runtime_scheduler, scrcpy, settings, spoof, terminal, terminal_session,
-    transfer, usage, wireless, wsl_kernel,
+    adb, art, audit, authorization, authorization_client, battery, cloak, config, device, docker,
+    geo, gnirehtet, log, proxy, recording, resource_monitor, root, runtime_scheduler, scrcpy,
+    settings, spoof, terminal, terminal_session, transfer, usage, wireless, wsl_kernel,
 };
-use base64::Engine;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::time::SystemTime;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::time::{Duration, Instant, SystemTime};
+use tauri::{AppHandle, Emitter};
 
 static RUNTIME_SCHEDULER: Lazy<parking_lot::Mutex<runtime_scheduler::SchedulerState>> =
     Lazy::new(|| parking_lot::Mutex::new(runtime_scheduler::SchedulerState::default()));
+static RUNTIME_START_CONDVAR: Lazy<parking_lot::Condvar> = Lazy::new(parking_lot::Condvar::new);
+static QEMU_VM_START_LOCK: Lazy<parking_lot::Mutex<()>> = Lazy::new(|| parking_lot::Mutex::new(()));
+
+const RUNTIME_START_QUEUE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const QEMU_VM_START_HEADROOM_MIB: u64 = 1024;
+const BYTES_PER_MIB: u64 = 1024 * 1024;
 
 async fn blocking<T: Send + 'static + Default>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tauri::async_runtime::spawn_blocking(f)
@@ -64,6 +69,44 @@ pub async fn optimize_app_art(
     blocking_res(move || art::optimize_app(&serial, &package, mode)).await
 }
 
+#[tauri::command]
+pub fn authorization_status() -> authorization_client::AuthorizationRuntimeStatus {
+    authorization_client::runtime_authorization_status()
+}
+
+#[tauri::command]
+pub async fn authorization_register(
+) -> Result<authorization_client::CompleteRegistrationResponse, String> {
+    authorization_client::runtime_register()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn authorization_acquire_session(
+    capability: authorization::ProtectedCapability,
+) -> Result<authorization_client::AuthorizationRuntimeStatus, String> {
+    authorization_client::runtime_acquire(capability)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(authorization_client::runtime_authorization_status())
+}
+
+#[tauri::command]
+pub async fn authorization_heartbeat(
+) -> Result<authorization_client::AuthorizationRuntimeStatus, String> {
+    authorization_client::runtime_heartbeat()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(authorization_client::runtime_authorization_status())
+}
+
+#[tauri::command]
+pub fn authorization_revoke_local() -> authorization_client::AuthorizationRuntimeStatus {
+    authorization_client::runtime_revoke_local();
+    authorization_client::runtime_authorization_status()
+}
+
 /// Read-only host/QEMU resource snapshot. Guest/container fields are filled by
 /// the QEMU-specific stats command when the caller requests that track.
 #[tauri::command]
@@ -84,7 +127,151 @@ fn runtime_policy() -> runtime_scheduler::LifecyclePolicy {
         keep_vm_warm: settings.runtime_keep_vm_warm,
         max_parallel_starts: settings.runtime_max_parallel_starts.max(1),
         protected_instance_ids: settings.runtime_protected_instance_ids,
+        auto_release_idle_on_critical: settings.runtime_auto_release_idle_on_critical,
     }
+}
+
+fn should_block_runtime_start(
+    pressure: resource_monitor::MemoryPressure,
+    other_start_in_flight: bool,
+) -> bool {
+    matches!(pressure, resource_monitor::MemoryPressure::Critical)
+        || (matches!(pressure, resource_monitor::MemoryPressure::Unknown) && other_start_in_flight)
+}
+
+fn should_attempt_critical_guest_reclaim(
+    pressure: resource_monitor::MemoryPressure,
+    other_start_in_flight: bool,
+    auto_release_idle_on_critical: bool,
+) -> bool {
+    auto_release_idle_on_critical
+        && matches!(pressure, resource_monitor::MemoryPressure::Critical)
+        && !other_start_in_flight
+}
+
+/// A VM's `-m` allocation is committed before any guest/container can report
+/// its own usage. Account for it plus one GiB of host headroom before asking
+/// QEMU to spawn a new process. Unknown probes preserve the explicit single
+/// start compatibility path; they are never converted into a safe zero.
+fn should_block_qemu_vm_start(
+    host_available_bytes: Option<u64>,
+    vm_memory_mib: Option<u32>,
+) -> bool {
+    let (Some(host_available_bytes), Some(vm_memory_mib)) = (host_available_bytes, vm_memory_mib)
+    else {
+        return false;
+    };
+    if vm_memory_mib == 0 {
+        return true;
+    }
+    let required_bytes = u64::from(vm_memory_mib)
+        .saturating_add(QEMU_VM_START_HEADROOM_MIB)
+        .saturating_mul(BYTES_PER_MIB);
+    host_available_bytes < required_bytes
+}
+
+fn qemu_vm_start_memory_error(name: &str, host_available_bytes: u64, vm_memory_mib: u32) -> String {
+    let required_mib = u64::from(vm_memory_mib).saturating_add(QEMU_VM_START_HEADROOM_MIB);
+    let available_mib = host_available_bytes / BYTES_PER_MIB;
+    format!(
+        "主机可用内存不足，已阻止启动 QEMU 节点 {name}：节点配置 {vm_memory_mib} MiB，启动至少需要 {required_mib} MiB 余量，当前约 {available_mib} MiB。请先释放闲置实例或选择 lean/standard。"
+    )
+}
+
+fn select_idle_reclaim_candidate(
+    rows: &[crate::services::qemu::QemuRedroidInstance],
+    reclaimable: &[String],
+    target_instance: &str,
+) -> Option<String> {
+    reclaimable.iter().find_map(|candidate| {
+        if candidate == target_instance {
+            return None;
+        }
+        let row = rows.iter().find(|row| row.instance == *candidate)?;
+        crate::services::qemu::is_running_status(&row.status).then(|| row.instance.clone())
+    })
+}
+
+/// A memory-first idle release may stop the QEMU node only after a fresh
+/// listing proves that no other instance is running. Unknown or unavailable
+/// status data fails closed and keeps the node warm.
+fn should_stop_vm_after_idle_release(
+    keep_vm_warm: bool,
+    rows: Option<&[crate::services::qemu::QemuRedroidInstance]>,
+    released_instance: &str,
+) -> bool {
+    if keep_vm_warm {
+        return false;
+    }
+    let Some(rows) = rows else {
+        return false;
+    };
+    rows.iter()
+        .filter(|row| row.instance != released_instance)
+        .all(|row| {
+            let status = row.status.trim();
+            !status.is_empty()
+                && !status.eq_ignore_ascii_case("unknown")
+                && !crate::services::qemu::is_running_status(status)
+        })
+}
+
+/// A warm-node preference is honored until the host reaches the critical
+/// threshold. An unavailable probe remains conservative and keeps an explicit
+/// warm preference; callers that already chose memory-first still return false.
+fn keep_vm_warm_for_pressure(
+    keep_vm_warm: bool,
+    pressure: resource_monitor::MemoryPressure,
+) -> bool {
+    keep_vm_warm && pressure != resource_monitor::MemoryPressure::Critical
+}
+
+/// Stop at most one safe idle container before a critical-pressure start.
+/// The node is intentionally kept running because the caller is about to
+/// start another container on that same node. All decisions are made from a
+/// scheduler snapshot plus a fresh read-only Docker status listing.
+fn try_auto_release_idle_instance(vm: &str, target_instance: &str, now: SystemTime) -> bool {
+    let candidates = {
+        let mut scheduler = RUNTIME_SCHEDULER.lock();
+        scheduler.update_policy(runtime_policy());
+        if !scheduler.policy().auto_release_idle_on_critical || !scheduler.begin_reclaim() {
+            return false;
+        }
+        scheduler.reclaimable_instances(now)
+    };
+
+    let released = (|| {
+        let rows = crate::services::qemu::redroid_list_basic(vm).ok()?;
+        let candidate = select_idle_reclaim_candidate(&rows, &candidates, target_instance)?;
+        let output = crate::services::qemu::redroid_stop(vm, &candidate).ok()?;
+        output.success.then_some(candidate)
+    })();
+
+    let mut scheduler = RUNTIME_SCHEDULER.lock();
+    scheduler.finish_reclaim();
+    if let Some(instance) = released {
+        scheduler.clear_instance(&instance);
+        true
+    } else {
+        false
+    }
+}
+
+/// Ask qemu-center for one conservative guest balloon reclaim after an
+/// explicitly memory-saving lifecycle action. The CLI owns liveness, metrics,
+/// target calculation, and QMP verification; a failure simply preserves the
+/// successful lifecycle action.
+fn try_auto_reclaim_guest_memory(vm: &str) -> bool {
+    crate::services::qemu::vm_memory_reclaim(vm)
+        .map(|output| output.success)
+        .unwrap_or(false)
+}
+
+fn run_guest_reclaim_after_app_hibernate<F>(app_stopped: bool, reclaim: F) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    app_stopped && reclaim()
 }
 
 #[tauri::command]
@@ -105,25 +292,86 @@ pub async fn runtime_request_start(
     instance: String,
 ) -> Result<runtime_scheduler::StartDecision, String> {
     blocking_res(move || {
-        let snapshot = resource_monitor::read_runtime_resource_snapshot(
-            Some(&vm),
-            Some(&instance),
-        )
-        .unwrap_or_default();
-        let pressure = resource_monitor::classify_memory_pressure(snapshot.host_available_bytes);
-        if pressure == resource_monitor::MemoryPressure::Critical {
-            return Ok(runtime_scheduler::StartDecision::Blocked(pressure));
-        }
-        {
-            let mut scheduler = RUNTIME_SCHEDULER.lock();
-            scheduler.update_policy(runtime_policy());
-            if !matches!(
-                scheduler.request_start(&vm, &instance),
-                runtime_scheduler::StartDecision::Starting
-            ) {
-                return Ok(runtime_scheduler::StartDecision::Queued);
+        let snapshot = resource_monitor::read_runtime_resource_snapshot(Some(&vm), Some(&instance))
+            .unwrap_or_default();
+        let mut pressure =
+            resource_monitor::classify_memory_pressure(snapshot.host_available_bytes);
+        let mut scheduler = RUNTIME_SCHEDULER.lock();
+        scheduler.update_policy(runtime_policy());
+        // Unknown pressure is still an actionable single-instance path, but
+        // it must not become an unbounded concurrent-start escape hatch.
+        let other_start_in_flight = scheduler.has_other_start(&vm, &instance);
+        let auto_release = scheduler.policy().auto_release_idle_on_critical;
+        if should_block_runtime_start(pressure, other_start_in_flight) {
+            drop(scheduler);
+            if should_attempt_critical_guest_reclaim(pressure, other_start_in_flight, auto_release)
+                && try_auto_reclaim_guest_memory(&vm)
+            {
+                let refreshed =
+                    resource_monitor::read_runtime_resource_snapshot(Some(&vm), Some(&instance))
+                        .unwrap_or_default();
+                pressure =
+                    resource_monitor::classify_memory_pressure(refreshed.host_available_bytes);
+            }
+            if pressure == resource_monitor::MemoryPressure::Critical
+                && !other_start_in_flight
+                && auto_release
+                && try_auto_release_idle_instance(&vm, &instance, SystemTime::now())
+            {
+                let refreshed =
+                    resource_monitor::read_runtime_resource_snapshot(Some(&vm), Some(&instance))
+                        .unwrap_or_default();
+                pressure =
+                    resource_monitor::classify_memory_pressure(refreshed.host_available_bytes);
+            }
+            scheduler = RUNTIME_SCHEDULER.lock();
+            if should_block_runtime_start(pressure, scheduler.has_other_start(&vm, &instance)) {
+                return Ok(runtime_scheduler::StartDecision::Blocked(pressure));
             }
         }
+        match scheduler.request_start(&vm, &instance) {
+            runtime_scheduler::StartDecision::Starting => {}
+            runtime_scheduler::StartDecision::Queued => {
+                let deadline = Instant::now() + RUNTIME_START_QUEUE_TIMEOUT;
+                loop {
+                    if scheduler.is_starting(&vm, &instance) {
+                        break;
+                    }
+                    if !scheduler.is_queued(&vm, &instance) {
+                        return Ok(runtime_scheduler::StartDecision::Failed(
+                            "start queue entry was cancelled".into(),
+                        ));
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        scheduler.cancel_queued_start(&vm, &instance);
+                        RUNTIME_START_CONDVAR.notify_all();
+                        return Ok(runtime_scheduler::StartDecision::Failed(
+                            "start queue timed out".into(),
+                        ));
+                    }
+                    RUNTIME_START_CONDVAR
+                        .wait_for(&mut scheduler, remaining.min(Duration::from_secs(1)));
+                }
+            }
+            decision => return Ok(decision),
+        }
+        drop(scheduler);
+
+        // A queued request can become unsafe while it waits. Re-check the
+        // host immediately before invoking QEMU and release the turn without
+        // starting anything if pressure has become critical.
+        let snapshot = resource_monitor::read_runtime_resource_snapshot(Some(&vm), Some(&instance))
+            .unwrap_or_default();
+        let pressure = resource_monitor::classify_memory_pressure(snapshot.host_available_bytes);
+        if pressure == resource_monitor::MemoryPressure::Critical {
+            let mut scheduler = RUNTIME_SCHEDULER.lock();
+            let _ = scheduler.finish_start(&vm, &instance, false);
+            scheduler.promote_next_start();
+            RUNTIME_START_CONDVAR.notify_all();
+            return Ok(runtime_scheduler::StartDecision::Blocked(pressure));
+        }
+
         let result = crate::services::qemu::redroid_start(&vm, &instance);
         let mut scheduler = RUNTIME_SCHEDULER.lock();
         match result {
@@ -133,16 +381,22 @@ pub async fn runtime_request_start(
                     runtime_scheduler::ActivityKind::UserWindow,
                     SystemTime::now(),
                 );
-                Ok(scheduler.finish_start(&vm, true))
+                let decision = scheduler.finish_start(&vm, &instance, true);
+                scheduler.promote_next_start();
+                RUNTIME_START_CONDVAR.notify_all();
+                Ok(decision)
             }
             Ok(output) => {
-                let _ = scheduler.finish_start(&vm, false);
-                Ok(runtime_scheduler::StartDecision::Failed(
-                    output.stderr.trim().to_string(),
-                ))
+                let error = output.stderr.trim().to_string();
+                let _ = scheduler.finish_start(&vm, &instance, false);
+                scheduler.promote_next_start();
+                RUNTIME_START_CONDVAR.notify_all();
+                Ok(runtime_scheduler::StartDecision::Failed(error))
             }
             Err(error) => {
-                let _ = scheduler.finish_start(&vm, false);
+                let _ = scheduler.finish_start(&vm, &instance, false);
+                scheduler.promote_next_start();
+                RUNTIME_START_CONDVAR.notify_all();
                 Ok(runtime_scheduler::StartDecision::Failed(error))
             }
         }
@@ -176,12 +430,28 @@ pub async fn runtime_release_idle(
                 reason: reason.into(),
             });
         }
-        let keep_vm_warm = scheduler.policy().keep_vm_warm;
+        let keep_vm_warm_preference = scheduler.policy().keep_vm_warm;
         drop(scheduler);
+        let keep_vm_warm = if keep_vm_warm_preference {
+            let snapshot =
+                resource_monitor::read_runtime_resource_snapshot(None, None).unwrap_or_default();
+            keep_vm_warm_for_pressure(
+                true,
+                resource_monitor::classify_memory_pressure(snapshot.host_available_bytes),
+            )
+        } else {
+            false
+        };
         let result = crate::services::qemu::redroid_stop(&vm, &instance);
         match result {
             Ok(output) if output.success => {
-                if !keep_vm_warm {
+                let should_stop_vm = if keep_vm_warm {
+                    false
+                } else {
+                    let remaining = crate::services::qemu::redroid_list_basic(&vm).ok();
+                    should_stop_vm_after_idle_release(false, remaining.as_deref(), &instance)
+                };
+                if should_stop_vm {
                     let vm_result = crate::services::qemu::vm_stop(&vm);
                     if let Ok(vm_output) = &vm_result {
                         if !vm_output.success {
@@ -221,6 +491,91 @@ pub async fn runtime_release_idle(
     .await
 }
 
+/// Manually hibernate one validated application while keeping its redroid
+/// container and QEMU VM warm. The mapping and idle checks happen before any
+/// ADB command; failures are returned as a structured non-release result.
+#[tauri::command]
+pub async fn runtime_hibernate_app(
+    vm: String,
+    instance: String,
+    serial: String,
+    package: String,
+) -> Result<runtime_scheduler::AppHibernateResult, String> {
+    blocking_res(move || {
+        let package = package.trim().to_string();
+        let result = |released: bool, reason: String| runtime_scheduler::AppHibernateResult {
+            scope: "app".into(),
+            instance: instance.clone(),
+            serial: serial.clone(),
+            package: package.clone(),
+            released,
+            reason,
+        };
+
+        if !runtime_scheduler::is_valid_android_package(&package) {
+            return Ok(result(false, "invalid_package".into()));
+        }
+
+        {
+            let now = SystemTime::now();
+            let mut scheduler = RUNTIME_SCHEDULER.lock();
+            scheduler.update_policy(runtime_policy());
+            if !scheduler.is_reclaimable(&instance, now) {
+                let protected = scheduler
+                    .policy()
+                    .protected_instance_ids
+                    .iter()
+                    .any(|id| id == &instance);
+                return Ok(result(
+                    false,
+                    if protected {
+                        "protected".into()
+                    } else {
+                        "active_or_unknown".into()
+                    },
+                ));
+            }
+        }
+
+        let mappings = match crate::services::qemu::adb_list() {
+            Ok(rows) => rows,
+            Err(error) => return Ok(result(false, format!("mapping_unavailable: {error}"))),
+        };
+        if !crate::services::qemu::qemu_mapping_matches(&mappings, &vm, &instance, &serial) {
+            return Ok(result(false, "qemu_mapping_mismatch".into()));
+        }
+
+        let stopped = device::stop_app(&serial, &package);
+        if stopped.success {
+            let reclaimed =
+                run_guest_reclaim_after_app_hibernate(true, || try_auto_reclaim_guest_memory(&vm));
+            Ok(result(
+                true,
+                if reclaimed {
+                    "idle_app_reclaimed"
+                } else {
+                    "idle_app"
+                }
+                .into(),
+            ))
+        } else {
+            Ok(result(
+                false,
+                format!(
+                    "stop_failed: {}",
+                    stopped
+                        .stderr
+                        .trim()
+                        .is_empty()
+                        .then_some(stopped.stdout.trim())
+                        .unwrap_or(stopped.stderr.trim())
+                ),
+            ))
+        }
+    })
+    .await
+}
+
 // ---- Devices ----
 
 #[tauri::command]
@@ -241,76 +596,6 @@ pub async fn list_devices_unified() -> Vec<crate::services::unified::UnifiedDevi
 #[tauri::command]
 pub async fn get_device(id: String) -> Option<crate::services::unified::UnifiedDevice> {
     blocking_opt(move || crate::services::unified::get_device_unified(&id)).await
-}
-
-fn encode_url_component(value: &str) -> String {
-    value
-        .as_bytes()
-        .iter()
-        .map(|byte| match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (*byte as char).to_string()
-            }
-            other => format!("%{other:02X}"),
-        })
-        .collect()
-}
-
-#[tauri::command]
-pub fn open_device_window(
-    app: AppHandle,
-    id: String,
-    title: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    if id.trim().is_empty() || id.chars().any(|character| character.is_control()) {
-        return Err("设备标识不能为空或包含控制字符".into());
-    }
-    if title.chars().any(|character| character.is_control()) {
-        return Err("窗口标题包含控制字符".into());
-    }
-    let safe_width = width.clamp(320.0, 2400.0);
-    let safe_height = height.clamp(240.0, 1400.0);
-    let safe_x = if x.is_finite() {
-        x.clamp(-10_000.0, 10_000.0)
-    } else {
-        40.0
-    };
-    let safe_y = if y.is_finite() {
-        y.clamp(-10_000.0, 10_000.0)
-    } else {
-        40.0
-    };
-    let label = format!(
-        "device-window-{}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
-    );
-    if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.set_position(LogicalPosition::new(safe_x, safe_y));
-        let _ = window.set_size(LogicalSize::new(safe_width, safe_height));
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
-    }
-    let url = format!(
-        "index.html?window=device&device={}",
-        encode_url_component(&id)
-    );
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title(if title.trim().is_empty() {
-            "Redroid Device"
-        } else {
-            title.trim()
-        })
-        .inner_size(safe_width, safe_height)
-        .position(safe_x, safe_y)
-        .resizable(true)
-        .build()
-        .map(|_| ())
-        .map_err(|error| format!("打开设备独立窗口失败: {error}"))
 }
 
 #[tauri::command]
@@ -546,11 +831,7 @@ pub async fn start_app(serial: String, package: String) -> ShellResult {
 }
 
 #[tauri::command]
-pub async fn start_app_on_display(
-    serial: String,
-    package: String,
-    display_id: i32,
-) -> ShellResult {
+pub async fn start_app_on_display(serial: String, package: String, display_id: i32) -> ShellResult {
     blocking(move || device::start_app_on_display(&serial, &package, display_id)).await
 }
 
@@ -648,15 +929,9 @@ pub async fn upload_file_tracked(
     operation_id: String,
 ) -> ShellResult {
     blocking(move || {
-        transfer::upload_tracked(
-            &serial,
-            &local,
-            &remote,
-            &operation_id,
-            move |progress| {
-                let _ = app.emit("file-transfer-progress", progress);
-            },
-        )
+        transfer::upload_tracked(&serial, &local, &remote, &operation_id, move |progress| {
+            let _ = app.emit("file-transfer-progress", progress);
+        })
     })
     .await
 }
@@ -675,15 +950,9 @@ pub async fn download_file_tracked(
     operation_id: String,
 ) -> ShellResult {
     blocking(move || {
-        transfer::download_tracked(
-            &serial,
-            &remote,
-            &local,
-            &operation_id,
-            move |progress| {
-                let _ = app.emit("file-transfer-progress", progress);
-            },
-        )
+        transfer::download_tracked(&serial, &remote, &local, &operation_id, move |progress| {
+            let _ = app.emit("file-transfer-progress", progress);
+        })
     })
     .await
 }
@@ -925,10 +1194,7 @@ pub async fn seed_usage_baseline(serial: String, profile_id: String) -> ShellRes
 // ---- Geographic consistency ----
 
 #[tauri::command]
-pub async fn geo_consistency_check(
-    serial: String,
-    profile_id: String,
-) -> crate::models::GeoCheck {
+pub async fn geo_consistency_check(serial: String, profile_id: String) -> crate::models::GeoCheck {
     blocking(move || geo::geo_consistency_check(&serial, &profile_id)).await
 }
 
@@ -1324,10 +1590,7 @@ fn recording_shell_result(session: RecordingSession) -> ShellResult {
 }
 
 #[tauri::command]
-pub async fn scrcpy_start_recording(
-    serial: String,
-    options: serde_json::Value,
-) -> ShellResult {
+pub async fn scrcpy_start_recording(serial: String, options: serde_json::Value) -> ShellResult {
     blocking(move || {
         let Ok(options) = serde_json::from_value::<ScrcpyRecordingOptions>(options) else {
             return ShellResult {
@@ -1340,7 +1603,11 @@ pub async fn scrcpy_start_recording(
         let mode = if options.audio_only {
             "audio"
         } else if options.video_source == "camera" {
-            if options.audio { "camera-record-av" } else { "camera-record" }
+            if options.audio {
+                "camera-record-av"
+            } else {
+                "camera-record"
+            }
         } else if options.audio {
             "av"
         } else {
@@ -1379,10 +1646,7 @@ pub async fn scrcpy_recording_status(serial: String) -> String {
 }
 
 #[tauri::command]
-pub async fn scrcpy_start_camera(
-    serial: String,
-    options: serde_json::Value,
-) -> ShellResult {
+pub async fn scrcpy_start_camera(serial: String, options: serde_json::Value) -> ShellResult {
     blocking(move || {
         let Ok(options) = serde_json::from_value::<ScrcpyCameraOptions>(options) else {
             return ShellResult {
@@ -1742,7 +2006,10 @@ pub async fn qemu_doctor() -> Result<crate::services::qemu::QemuDoctorReport, St
 }
 
 #[tauri::command]
-pub async fn qemu_setup(step: String, distro: String) -> Result<crate::services::qemu::QemuCliOutput, String> {
+pub async fn qemu_setup(
+    step: String,
+    distro: String,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
     blocking_res(move || crate::services::qemu::setup(&step, &distro)).await
 }
 
@@ -1760,7 +2027,37 @@ pub async fn qemu_vm_create(
 
 #[tauri::command]
 pub async fn qemu_vm_start(name: String) -> Result<crate::services::qemu::QemuCliOutput, String> {
-    blocking_res(move || crate::services::qemu::vm_start(&name)).await
+    blocking_res(move || {
+        let _start_guard = QEMU_VM_START_LOCK.lock();
+        let vm_memory_mib = crate::services::qemu::vm_list()?
+            .into_iter()
+            .find(|vm| vm.name == name)
+            .map(|vm| vm.mem_mib)
+            .ok_or_else(|| format!("节点不存在: {name}"))?;
+        let snapshot =
+            resource_monitor::read_runtime_resource_snapshot(None, None).unwrap_or_default();
+        if should_block_qemu_vm_start(snapshot.host_available_bytes, Some(vm_memory_mib)) {
+            let available = snapshot.host_available_bytes.unwrap_or_default();
+            return Err(qemu_vm_start_memory_error(&name, available, vm_memory_mib));
+        }
+        crate::services::qemu::vm_start(&name)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_set_memory(
+    name: String,
+    memory_mib: u32,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_set_memory(&name, memory_mib)).await
+}
+
+#[tauri::command]
+pub async fn qemu_vm_memory_reclaim(
+    name: String,
+) -> Result<crate::services::qemu::QemuCliOutput, String> {
+    blocking_res(move || crate::services::qemu::vm_memory_reclaim(&name)).await
 }
 
 #[tauri::command]
@@ -1807,28 +2104,94 @@ pub async fn qemu_guest_wait(
 pub async fn qemu_redroid_create(
     req: crate::services::qemu::QemuRedroidCreateRequest,
 ) -> Result<crate::services::qemu::QemuCliOutput, String> {
-    blocking_res(move || crate::services::qemu::redroid_create(req)).await
+    let version = req
+        .android_version
+        .as_deref()
+        .filter(|version| !version.is_empty())
+        .unwrap_or("14");
+    // The preset runner is the protected core surface even for a basic
+    // Redroid instance. Release builds never carry a local script fallback.
+    let core = authorization_client::runtime_download_core_with_execution_grants(
+        &format!("android-{version}"),
+        &req.vm,
+        &req.name,
+        crate::services::qemu_presets::QEMU_CREATE_EXECUTION_GRANT_COUNT,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let execution_grants = core
+        .execution_grants
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("执行票据无法编码: {error}"))?;
+    blocking_res(move || crate::services::qemu::redroid_create_with_grants(req, execution_grants))
+        .await
 }
 
 #[tauri::command]
 pub async fn qemu_redroid_upgrade(
     req: crate::services::qemu::QemuRedroidCreateRequest,
 ) -> Result<crate::services::qemu::QemuCliOutput, String> {
-    blocking_res(move || crate::services::qemu_presets::apply(req, true)).await
+    let version = req
+        .android_version
+        .as_deref()
+        .filter(|version| !version.is_empty())
+        .unwrap_or("14");
+    let core = authorization_client::runtime_download_core_with_execution_grants(
+        &format!("android-{version}"),
+        &req.vm,
+        &req.name,
+        crate::services::qemu_presets::QEMU_UPGRADE_EXECUTION_GRANT_COUNT,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let execution_grants = core
+        .execution_grants
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("执行票据无法编码: {error}"))?;
+    blocking_res(move || crate::services::qemu::redroid_upgrade_with_grants(req, execution_grants))
+        .await
 }
 
 #[tauri::command]
 pub async fn qemu_redroid_restore(
-    vm: String, name: String,
+    vm: String,
+    name: String,
 ) -> Result<crate::services::qemu::QemuCliOutput, String> {
-    blocking_res(move || crate::services::qemu_presets::restore(&vm, &name)).await
+    let core = authorization_client::runtime_download_restore_core_with_execution_grant(&vm, &name)
+        .await
+        .map_err(|error| error.to_string())?;
+    let execution_grant = serde_json::to_value(&core.execution_grant)
+        .map_err(|error| format!("执行票据无法编码: {error}"))?;
+    blocking_res(move || {
+        crate::services::qemu::redroid_restore_with_grant(&vm, &name, execution_grant)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn qemu_redroid_list(
     vm: String,
 ) -> Result<Vec<crate::services::qemu::QemuRedroidInstance>, String> {
-    blocking_res(move || crate::services::qemu::redroid_list(&vm)).await
+    // Enhanced metadata uses the same version-independent server-delivered
+    // runner as restore. If authorization is unavailable, keep ordinary
+    // diagnostics usable and return the CLI's basic list without enrichment.
+    let core = authorization_client::runtime_download_metadata_core_with_execution_grant(&vm)
+        .await
+        .ok();
+    blocking_res(move || match core {
+        Some(core) => {
+            let Ok(execution_grant) = serde_json::to_value(&core.execution_grant) else {
+                return crate::services::qemu::redroid_list(&vm);
+            };
+            crate::services::qemu::redroid_list_with_grant(&vm, execution_grant)
+        }
+        None => crate::services::qemu::redroid_list(&vm),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1847,4 +2210,189 @@ pub async fn qemu_adb_list() -> Result<Vec<crate::services::qemu::QemuAdbMapping
 #[tauri::command]
 pub async fn qemu_verify(vm: String) -> Result<crate::services::qemu::QemuVerifyReport, String> {
     blocking_res(move || crate::services::qemu::verify(&vm)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn qemu_row(instance: &str, status: &str) -> crate::services::qemu::QemuRedroidInstance {
+        crate::services::qemu::QemuRedroidInstance {
+            instance: instance.into(),
+            container: format!("qc-{instance}"),
+            port: 24500,
+            serial: "127.0.0.1:24500".into(),
+            status: status.into(),
+            profile: "lean".into(),
+            android_version: "13".into(),
+            image: "redroid/redroid:13.0.0-latest".into(),
+            rollback_available: false,
+            metrics: None,
+        }
+    }
+
+    #[test]
+    fn unknown_pressure_blocks_only_batch_runtime_starts() {
+        assert!(!should_block_runtime_start(
+            resource_monitor::MemoryPressure::Unknown,
+            false
+        ));
+        assert!(should_block_runtime_start(
+            resource_monitor::MemoryPressure::Unknown,
+            true
+        ));
+        assert!(should_block_runtime_start(
+            resource_monitor::MemoryPressure::Critical,
+            false
+        ));
+        assert!(!should_block_runtime_start(
+            resource_monitor::MemoryPressure::Caution,
+            true
+        ));
+    }
+
+    #[test]
+    fn critical_pressure_guest_reclaim_respects_existing_auto_release_policy() {
+        assert!(should_attempt_critical_guest_reclaim(
+            resource_monitor::MemoryPressure::Critical,
+            false,
+            true
+        ));
+        assert!(!should_attempt_critical_guest_reclaim(
+            resource_monitor::MemoryPressure::Critical,
+            true,
+            true
+        ));
+        assert!(!should_attempt_critical_guest_reclaim(
+            resource_monitor::MemoryPressure::Critical,
+            false,
+            false
+        ));
+        assert!(!should_attempt_critical_guest_reclaim(
+            resource_monitor::MemoryPressure::Unknown,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn app_hibernate_reclaims_only_after_force_stop_succeeds() {
+        let mut calls = 0;
+        assert!(run_guest_reclaim_after_app_hibernate(true, || {
+            calls += 1;
+            true
+        }));
+        assert_eq!(calls, 1);
+
+        assert!(!run_guest_reclaim_after_app_hibernate(false, || {
+            calls += 1;
+            true
+        }));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn protected_create_requests_all_three_server_grants() {
+        assert_eq!(
+            crate::services::qemu_presets::QEMU_CREATE_EXECUTION_GRANT_COUNT,
+            3
+        );
+        assert_eq!(
+            crate::services::qemu_presets::QEMU_UPGRADE_EXECUTION_GRANT_COUNT,
+            2
+        );
+    }
+
+    #[test]
+    fn qemu_vm_start_requires_requested_memory_headroom() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert!(should_block_qemu_vm_start(Some(3 * GIB), Some(3072)));
+        assert!(!should_block_qemu_vm_start(Some(5 * GIB), Some(3072)));
+        assert!(!should_block_qemu_vm_start(None, Some(3072)));
+    }
+
+    #[test]
+    fn auto_reclaim_candidate_skips_target_and_unconfirmed_statuses() {
+        let rows = vec![
+            qemu_row("r13", "Up 4 minutes"),
+            qemu_row("r1", "Exited (137) 2 hours ago"),
+            qemu_row("r2", "unknown"),
+            qemu_row("r3", "Up 2 hours"),
+        ];
+        let reclaimable = vec!["r13".into(), "r1".into(), "r2".into(), "r3".into()];
+        assert_eq!(
+            select_idle_reclaim_candidate(&rows, &reclaimable, "r13"),
+            Some("r3".into())
+        );
+    }
+
+    #[test]
+    fn idle_release_only_stops_an_empty_node() {
+        let stopped_target = vec![qemu_row("r13", "Exited (0) 1 minute ago")];
+        assert!(should_stop_vm_after_idle_release(
+            false,
+            Some(&stopped_target),
+            "r13"
+        ));
+
+        let other_running = vec![
+            qemu_row("r13", "Exited (0) 1 minute ago"),
+            qemu_row("r1", "Up 4 hours"),
+        ];
+        assert!(!should_stop_vm_after_idle_release(
+            false,
+            Some(&other_running),
+            "r13"
+        ));
+
+        let other_unknown = vec![
+            qemu_row("r13", "Exited (0) 1 minute ago"),
+            qemu_row("r1", "unknown"),
+        ];
+        assert!(!should_stop_vm_after_idle_release(
+            false,
+            Some(&other_unknown),
+            "r13"
+        ));
+        assert!(!should_stop_vm_after_idle_release(false, None, "r13"));
+        assert!(!should_stop_vm_after_idle_release(
+            true,
+            Some(&stopped_target),
+            "r13"
+        ));
+    }
+
+    #[test]
+    fn critical_pressure_overrides_warm_node_preference_but_unknown_does_not() {
+        assert!(!keep_vm_warm_for_pressure(
+            true,
+            resource_monitor::MemoryPressure::Critical
+        ));
+        assert!(keep_vm_warm_for_pressure(
+            true,
+            resource_monitor::MemoryPressure::Caution
+        ));
+        assert!(keep_vm_warm_for_pressure(
+            true,
+            resource_monitor::MemoryPressure::Normal
+        ));
+        assert!(keep_vm_warm_for_pressure(
+            true,
+            resource_monitor::MemoryPressure::Unknown
+        ));
+        assert!(!keep_vm_warm_for_pressure(
+            false,
+            resource_monitor::MemoryPressure::Critical
+        ));
+    }
+
+    #[test]
+    fn older_lifecycle_policy_defaults_auto_reclaim_to_enabled() {
+        let policy: runtime_scheduler::LifecyclePolicy =
+            serde_json::from_str(
+                r#"{"idleTimeoutMinutes":30,"keepVmWarm":true,"maxParallelStarts":1,"protectedInstanceIds":[]}"#,
+            )
+            .unwrap();
+        assert!(policy.auto_release_idle_on_critical);
+    }
 }

@@ -49,13 +49,14 @@ pub struct CloudInitConfig {
     pub hostname: String,
     /// OpenSSH public key (single line, `ssh-ed25519 AAAA... comment`).
     pub ssh_pubkey: String,
-    /// Docker install channel: `"get-docker"` (get.docker.com) or `"apt"`.
+    /// Docker install channel retained for state compatibility; installation
+    /// always uses the distro's signed apt package.
     #[serde(default = "default_docker_install")]
     pub docker_install: String,
 }
 
 fn default_docker_install() -> String {
-    "get-docker".to_string()
+    "apt".to_string()
 }
 
 impl Default for CloudInitConfig {
@@ -121,20 +122,14 @@ fn runcmd_lines(cfg: &CloudInitConfig) -> Vec<String> {
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
         .collect();
-    // Docker engine.
-    match cfg.docker_install.as_str() {
-        "apt" => {
-            lines.push("DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io".to_string());
-        }
-        // Default (and any unexpected value): the get.docker.com convenience
-        // script, tolerant of a missing network mirror via `|| true`.
-        _ => {
-            lines.push("curl -fsSL https://get.docker.com | sh || true".to_string());
-        }
-    }
+    // Docker engine. Keep accepting the old serialized channel value, but do
+    // not execute an unpinned remote shell script.
+    let _ = &cfg.docker_install;
+    lines.push("DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io".to_string());
     lines.push("systemctl enable --now docker || true".to_string());
     lines.extend(docker_proxy_dropin_lines());
     lines.push("usermod -aG docker rdc || true".to_string());
+    lines.push("install -d -o rdc -g rdc -m 700 /run/rdc-presets".to_string());
     lines.push("getent group binder >/dev/null || groupadd binder || true".to_string());
     lines
 }
@@ -211,9 +206,7 @@ ethernets:
 /// the renderer-equivalence baseline in tests): `build_iso` uppercases these
 /// names per ISO9660, which a real guest's cloud-init never saw through — see
 /// the module docs.
-pub fn seed_files(
-    cfg: &CloudInitConfig,
-) -> Result<Vec<(String, Vec<u8>)>, crate::iso::IsoError> {
+pub fn seed_files(cfg: &CloudInitConfig) -> Result<Vec<(String, Vec<u8>)>, crate::iso::IsoError> {
     Ok(vec![
         ("user-data".to_string(), render_user_data(cfg).into_bytes()),
         ("meta-data".to_string(), render_meta_data(cfg).into_bytes()),
@@ -272,6 +265,7 @@ mod tests {
         assert!(u.contains("- name: rdc\n"));
         assert!(u.contains("ssh_pwauth: false"));
         assert!(u.contains("lock_passwd: true"));
+        assert!(u.contains("install -d -o rdc -g rdc -m 700 /run/rdc-presets"));
     }
 
     #[test]
@@ -331,7 +325,8 @@ mod tests {
     #[test]
     fn docker_install_channels_switch() {
         let u = render_user_data(&cfg());
-        assert!(u.contains("get.docker.com"));
+        assert!(u.contains("apt-get install -y docker.io"));
+        assert!(!u.contains("get.docker.com"));
         assert!(u.contains("systemctl enable --now docker"));
 
         let mut c = cfg();
@@ -360,10 +355,7 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(render_user_data(&cfg()), render_user_data(&cfg()));
             assert_eq!(render_meta_data(&cfg()), render_meta_data(&cfg()));
-            assert_eq!(
-                render_network_config(&cfg()),
-                render_network_config(&cfg())
-            );
+            assert_eq!(render_network_config(&cfg()), render_network_config(&cfg()));
         }
         let mut other = cfg();
         other.hostname = "qc-node-2".to_string();
@@ -406,8 +398,10 @@ mod tests {
     #[test]
     fn seed_files_feed_the_iso_roundtrip() {
         let files = seed_files(&cfg()).unwrap();
-        let refs: Vec<(&str, &[u8])> =
-            files.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        let refs: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_slice()))
+            .collect();
         let img = crate::iso::build_iso(&refs).unwrap();
         let parsed = crate::iso::parse_iso(&img).unwrap();
         assert_eq!(parsed.volume_id, crate::iso::CIDATA_VOLUME_ID);
@@ -482,6 +476,6 @@ mod tests {
         // docker_install defaults when absent (state files from older builds).
         let v: CloudInitConfig =
             serde_json::from_str(r#"{"hostname":"h","ssh_pubkey":""}"#).unwrap();
-        assert_eq!(v.docker_install, "get-docker");
+        assert_eq!(v.docker_install, "apt");
     }
 }

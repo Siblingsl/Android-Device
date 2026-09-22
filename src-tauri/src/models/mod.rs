@@ -108,6 +108,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 fn default_runtime_idle_timeout_minutes() -> u32 {
     30
 }
@@ -435,7 +439,7 @@ pub struct AppSettings {
     #[serde(default = "default_runtime_idle_timeout_minutes")]
     pub runtime_idle_timeout_minutes: u32,
     /// Keep the QEMU VM alive while releasing individual idle containers.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub runtime_keep_vm_warm: bool,
     /// Maximum number of serialized QEMU/container starts.
     #[serde(default = "default_runtime_max_parallel_starts")]
@@ -443,6 +447,10 @@ pub struct AppSettings {
     /// Instance ids that must never be automatically reclaimed.
     #[serde(default)]
     pub runtime_protected_instance_ids: Vec<String>,
+    /// Automatically reclaim one safe idle instance before a critical-pressure
+    /// start. Older settings files default to enabled.
+    #[serde(default = "default_true")]
+    pub runtime_auto_release_idle_on_critical: bool,
 }
 
 impl Default for AppSettings {
@@ -485,9 +493,10 @@ impl Default for AppSettings {
             default_track: None,
             device_tags: None,
             runtime_idle_timeout_minutes: 30,
-            runtime_keep_vm_warm: true,
+            runtime_keep_vm_warm: false,
             runtime_max_parallel_starts: 1,
             runtime_protected_instance_ids: Vec::new(),
+            runtime_auto_release_idle_on_critical: true,
         }
     }
 }
@@ -849,4 +858,30 @@ pub struct WslKernelStatus {
     /// GitHub Release asset filename for this arch (if any)
     pub release_asset_bz_image: String,
     pub release_asset_config: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn runtime_keep_vm_warm_defaults_to_memory_first() {
+        assert!(!AppSettings::default().runtime_keep_vm_warm);
+    }
+
+    #[test]
+    fn missing_runtime_keep_vm_warm_is_memory_first_but_explicit_value_is_preserved() {
+        let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("runtimeKeepVmWarm");
+        let missing: AppSettings = serde_json::from_value(legacy).unwrap();
+        assert!(!missing.runtime_keep_vm_warm);
+
+        let mut explicit = serde_json::to_value(AppSettings::default()).unwrap();
+        explicit
+            .as_object_mut()
+            .unwrap()
+            .insert("runtimeKeepVmWarm".into(), serde_json::Value::Bool(true));
+        let explicit: AppSettings = serde_json::from_value(explicit).unwrap();
+        assert!(explicit.runtime_keep_vm_warm);
+    }
 }

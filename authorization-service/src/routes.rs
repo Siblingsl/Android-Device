@@ -1,9 +1,11 @@
 use crate::crypto::{
     canonical_json, derive_x25519_shared_secret, encrypt_artifact_chunk, random_nonce_prefix,
-    random_x25519_keypair, sha256_file, validate_public_key_base64url, ArtifactManifest,
-    ClientKeyAlgorithm, ExecutionGrantClaims, HeartbeatProof, LeaseClaims, ProtectedCapability,
-    RegistrationProof, SessionProof, SignedArtifactManifest, SignedExecutionGrant, SignedLease,
-    SigningAuthority, ARTIFACT_CHUNK_SIZE, LEASE_MAX_SECS,
+    random_x25519_keypair, sha256_file, validate_nonce, validate_public_key_base64url,
+    validate_request_time, ArtifactManifest, ClientKeyAlgorithm,
+    ExecutionAuthorizationReceiptClaims, ExecutionGrantClaims, ExecutionGrantProof, HeartbeatProof,
+    LeaseClaims, ProtectedCapability, RegistrationProof, SessionProof, SignedArtifactManifest,
+    SignedExecutionAuthorizationReceipt, SignedExecutionGrant, SignedLease, SigningAuthority,
+    ARTIFACT_CHUNK_SIZE, LEASE_MAX_SECS, MAX_NONCE_BYTES,
 };
 use crate::store::{ArtifactRecord, AuthStore, ClientRecord, SessionRecord, StoreError};
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
@@ -14,6 +16,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -96,6 +99,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sessions/{session_id}/heartbeat", post(heartbeat))
         .route("/v1/sessions/{session_id}/close", post(close_session))
         .route("/v1/execution-grants", post(issue_execution_grant))
+        .route(
+            "/v1/execution-grants/release",
+            post(release_execution_grant),
+        )
         .route(
             "/v1/execution-grants/consume",
             post(consume_execution_grant),
@@ -361,6 +368,7 @@ pub struct SessionRequest {
     pub device_id: String,
     pub client_version: String,
     pub nonce: String,
+    pub iat: i64,
     pub capabilities: Vec<ProtectedCapability>,
     pub signature: String,
 }
@@ -380,7 +388,8 @@ async fn create_session(
     if request.client_id.trim().is_empty()
         || request.device_id.trim().is_empty()
         || request.client_version.trim().is_empty()
-        || request.nonce.trim().is_empty()
+        || validate_nonce(&request.nonce).is_err()
+        || validate_request_time(request.iat, now).is_err()
         || request.capabilities.is_empty()
     {
         return Err(ApiError::bad_request("session fields are required"));
@@ -401,6 +410,7 @@ async fn create_session(
         device_id: &request.device_id,
         client_version: &request.client_version,
         nonce: &request.nonce,
+        iat: request.iat,
         capabilities: &request.capabilities,
     };
     let payload = canonical_json(&proof).map_err(|_| ApiError::internal())?;
@@ -569,6 +579,7 @@ pub struct HeartbeatRequest {
     pub client_id: String,
     pub device_id: String,
     pub nonce: String,
+    pub iat: i64,
     pub signature: String,
 }
 
@@ -598,6 +609,11 @@ async fn heartbeat(
             "heartbeat binding does not match",
         ));
     }
+    if validate_nonce(&request.nonce).is_err()
+        || validate_request_time(request.iat, now).is_err()
+    {
+        return Err(ApiError::bad_request("heartbeat nonce or timestamp is invalid"));
+    }
     let client = state
         .store
         .client(&session.client_id)?
@@ -608,6 +624,7 @@ async fn heartbeat(
         client_id: &request.client_id,
         device_id: &request.device_id,
         nonce: &request.nonce,
+        iat: request.iat,
     };
     let payload = canonical_json(&proof).map_err(|_| ApiError::internal())?;
     state
@@ -683,12 +700,29 @@ pub struct ExecutionGrantRequest {
     pub vm: String,
     pub instance: String,
     pub nonce: String,
+    pub iat: i64,
+    pub signature: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ConsumeExecutionGrantRequest {
     pub grant: SignedExecutionGrant,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ReleaseExecutionGrantRequest {
+    pub grant: SignedExecutionGrant,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ArtifactReleaseResponse {
+    pub artifact_id: String,
+    pub artifact_sha256: String,
+    pub artifact_size_bytes: u64,
+    pub content_base64: String,
 }
 
 fn valid_execution_action(action: &str) -> bool {
@@ -706,104 +740,14 @@ fn artifact_allows_execution_action(artifact_id: &str, action: &str) -> bool {
     )
 }
 
-async fn issue_execution_grant(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<ExecutionGrantRequest>,
-) -> Result<Json<SignedExecutionGrant>, ApiError> {
-    let now = now()?;
-    let session = session_from_headers(&state, &headers, now)?;
-    if !session
-        .capabilities
-        .contains(&ProtectedCapability::ProtectedPreset)
-        || !session
-            .capabilities
-            .contains(&ProtectedCapability::ProtectedArtifact)
-    {
-        return Err(ApiError::forbidden(
-            "missing_capability",
-            "preset capability is not present",
-        ));
-    }
-    if request.artifact_id.trim().is_empty()
-        || request.artifact_sha256.len() != 64
-        || !request
-            .artifact_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        || request.action.trim().is_empty()
-        || !valid_execution_action(&request.action)
-        || request.vm.trim().is_empty()
-        || request.instance.trim().is_empty()
-        || request.nonce.trim().is_empty()
-    {
-        return Err(ApiError::bad_request("execution grant fields are invalid"));
-    }
-    let artifact = state
-        .store
-        .artifact(&request.artifact_id)?
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "artifact is unknown"))?;
-    if !artifact_allows_execution_action(&artifact.artifact_id, &request.action) {
-        return Err(ApiError::forbidden(
-            "artifact_workflow_mismatch",
-            "execution artifact is not approved for this workflow",
-        ));
-    }
-    let path = safe_artifact_path(&state.artifact_root, &artifact)?;
-    let (_, actual_sha256) = sha256_file(&path).map_err(|_| ApiError::internal())?;
-    if actual_sha256 != request.artifact_sha256 {
-        return Err(ApiError::forbidden(
-            "artifact_integrity",
-            "execution artifact hash does not match the published artifact",
-        ));
-    }
-    if !state.store.consume_nonce(&request.nonce, now)? {
-        return Err(ApiError::conflict(
-            "execution grant nonce has already been used",
-        ));
-    }
-    let client = state
-        .store
-        .client(&session.client_id)?
-        .ok_or_else(|| ApiError::unauthorized("client is unknown"))?;
-    let exp = session
-        .exp
-        .min(now.saturating_add(EXECUTION_GRANT_TTL_SECS));
-    if exp <= now {
-        return Err(ApiError::unauthorized("session lease has expired"));
-    }
-    Ok(Json(state.authority.sign_execution_grant(
-        ExecutionGrantClaims {
-            iss: "rdc-auth".into(),
-            aud: "rdc-guest-runner".into(),
-            client_id: client.client_id,
-            device_id: session.device_id,
-            session_id: session.session_id,
-            client_version: client.client_version,
-            artifact_id: request.artifact_id,
-            artifact_sha256: request.artifact_sha256,
-            action: request.action,
-            vm: request.vm,
-            instance: request.instance,
-            iat: now,
-            exp,
-            jti: Uuid::new_v4().to_string(),
-            nonce: request.nonce,
-        },
-    )))
-}
-
-async fn consume_execution_grant(
-    State(state): State<AppState>,
-    Json(request): Json<ConsumeExecutionGrantRequest>,
-) -> Result<StatusCode, ApiError> {
-    let now = now()?;
-    let claims = state
-        .authority
-        .verify_execution_grant(&request.grant)
-        .map_err(|_| {
-            ApiError::forbidden("invalid_grant", "execution grant signature is invalid")
-        })?;
+fn validate_execution_grant_for_artifact(
+    state: &AppState,
+    grant: &SignedExecutionGrant,
+    now: i64,
+) -> Result<(ExecutionGrantClaims, ArtifactRecord, PathBuf), ApiError> {
+    let claims = state.authority.verify_execution_grant(grant).map_err(|_| {
+        ApiError::forbidden("invalid_grant", "execution grant signature is invalid")
+    })?;
     if claims.iss != "rdc-auth"
         || claims.aud != "rdc-guest-runner"
         || claims.client_id.trim().is_empty()
@@ -820,8 +764,10 @@ async fn consume_execution_grant(
         || claims.vm.trim().is_empty()
         || claims.instance.trim().is_empty()
         || claims.jti.trim().is_empty()
-        || claims.nonce.trim().is_empty()
+        || claims.jti.len() > MAX_NONCE_BYTES
+        || validate_nonce(&claims.nonce).is_err()
         || claims.exp <= now
+        || claims.iat < now.saturating_sub(crate::crypto::REQUEST_MAX_AGE_SECS)
         || claims.iat > now.saturating_add(300)
         || claims.exp <= claims.iat
     {
@@ -861,8 +807,7 @@ async fn consume_execution_grant(
         .client(&session.client_id)?
         .ok_or_else(|| ApiError::forbidden("revoked", "execution grant client is unknown"))?;
     ensure_client_usable(&client, &session.device_id)?;
-    let device_proof = request
-        .grant
+    let device_proof = grant
         .device_proof
         .as_deref()
         .filter(|proof| !proof.trim().is_empty())
@@ -877,7 +822,7 @@ async fn consume_execution_grant(
         .verify_client_signature(
             client.client_key_algorithm,
             &client.device_public_key,
-            request.grant.payload.as_bytes(),
+            grant.payload.as_bytes(),
             device_proof,
         )
         .map_err(|_| {
@@ -915,13 +860,184 @@ async fn consume_execution_grant(
             "execution artifact hash no longer matches",
         ));
     }
+    Ok((claims, artifact, path))
+}
+
+const MAX_EXECUTION_RELEASE_BYTES: u64 = 512 * 1024;
+
+async fn release_execution_grant(
+    State(state): State<AppState>,
+    Json(request): Json<ReleaseExecutionGrantRequest>,
+) -> Result<Json<ArtifactReleaseResponse>, ApiError> {
+    let now = now()?;
+    let (claims, artifact, path) =
+        validate_execution_grant_for_artifact(&state, &request.grant, now)?;
+    let metadata = std::fs::metadata(&path).map_err(|_| ApiError::internal())?;
+    if metadata.len() > MAX_EXECUTION_RELEASE_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "artifact_too_large",
+            "execution artifact exceeds the guest release size limit",
+        ));
+    }
+    let content = std::fs::read(&path).map_err(|_| ApiError::internal())?;
+    if content.len() as u64 != metadata.len()
+        || content.len() as u64 > MAX_EXECUTION_RELEASE_BYTES
+        || format!("{:x}", Sha256::digest(&content)) != claims.artifact_sha256
+    {
+        return Err(ApiError::forbidden(
+            "artifact_integrity",
+            "execution artifact changed during release",
+        ));
+    }
+    Ok(Json(ArtifactReleaseResponse {
+        artifact_id: artifact.artifact_id,
+        artifact_sha256: claims.artifact_sha256,
+        artifact_size_bytes: content.len() as u64,
+        content_base64: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(content),
+    }))
+}
+
+async fn issue_execution_grant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ExecutionGrantRequest>,
+) -> Result<Json<SignedExecutionGrant>, ApiError> {
+    let now = now()?;
+    let session = session_from_headers(&state, &headers, now)?;
+    if !session
+        .capabilities
+        .contains(&ProtectedCapability::ProtectedPreset)
+        || !session
+            .capabilities
+            .contains(&ProtectedCapability::ProtectedArtifact)
+    {
+        return Err(ApiError::forbidden(
+            "missing_capability",
+            "preset capability is not present",
+        ));
+    }
+    let client = state
+        .store
+        .client(&session.client_id)?
+        .ok_or_else(|| ApiError::unauthorized("client is unknown"))?;
+    if request.artifact_id.trim().is_empty()
+        || (!request.artifact_sha256.is_empty()
+            && (request.artifact_sha256.len() != 64
+                || !request
+                    .artifact_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())))
+        || request.action.trim().is_empty()
+        || !valid_execution_action(&request.action)
+        || request.vm.trim().is_empty()
+        || request.instance.trim().is_empty()
+        || validate_nonce(&request.nonce).is_err()
+        || validate_request_time(request.iat, now).is_err()
+        || request.signature.trim().is_empty()
+    {
+        return Err(ApiError::bad_request("execution grant fields are invalid"));
+    }
+    let proof = ExecutionGrantProof {
+        artifact_id: &request.artifact_id,
+        artifact_sha256: &request.artifact_sha256,
+        action: &request.action,
+        vm: &request.vm,
+        instance: &request.instance,
+        nonce: &request.nonce,
+        iat: request.iat,
+    };
+    let payload = canonical_json(&proof).map_err(|_| ApiError::internal())?;
+    state
+        .authority
+        .verify_client_signature(
+            client.client_key_algorithm,
+            &client.device_public_key,
+            &payload,
+            &request.signature,
+        )
+        .map_err(|_| ApiError::unauthorized("execution grant signature is invalid"))?;
+    let artifact = state
+        .store
+        .artifact(&request.artifact_id)?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "artifact is unknown"))?;
+    if !artifact_allows_execution_action(&artifact.artifact_id, &request.action) {
+        return Err(ApiError::forbidden(
+            "artifact_workflow_mismatch",
+            "execution artifact is not approved for this workflow",
+        ));
+    }
+    let path = safe_artifact_path(&state.artifact_root, &artifact)?;
+    let (_, actual_sha256) = sha256_file(&path).map_err(|_| ApiError::internal())?;
+    if !request.artifact_sha256.is_empty() && actual_sha256 != request.artifact_sha256 {
+        return Err(ApiError::forbidden(
+            "artifact_integrity",
+            "execution artifact hash does not match the published artifact",
+        ));
+    }
+    if !state.store.consume_nonce(&request.nonce, now)? {
+        return Err(ApiError::conflict(
+            "execution grant nonce has already been used",
+        ));
+    }
+    let exp = session
+        .exp
+        .min(now.saturating_add(EXECUTION_GRANT_TTL_SECS));
+    if exp <= now {
+        return Err(ApiError::unauthorized("session lease has expired"));
+    }
+    Ok(Json(state.authority.sign_execution_grant(
+        ExecutionGrantClaims {
+            iss: "rdc-auth".into(),
+            aud: "rdc-guest-runner".into(),
+            client_id: client.client_id,
+            device_id: session.device_id,
+            session_id: session.session_id,
+            client_version: client.client_version,
+            artifact_id: request.artifact_id,
+            artifact_sha256: actual_sha256,
+            action: request.action,
+            vm: request.vm,
+            instance: request.instance,
+            iat: now,
+            exp,
+            jti: Uuid::new_v4().to_string(),
+            nonce: request.nonce,
+        },
+    )))
+}
+
+async fn consume_execution_grant(
+    State(state): State<AppState>,
+    Json(request): Json<ConsumeExecutionGrantRequest>,
+) -> Result<Json<SignedExecutionAuthorizationReceipt>, ApiError> {
+    let now = now()?;
+    let (claims, _artifact, _path) =
+        validate_execution_grant_for_artifact(&state, &request.grant, now)?;
     let reservation = format!("execution-grant-jti:{}", claims.jti);
     if !state.store.consume_nonce(&reservation, now)? {
         return Err(ApiError::conflict(
             "execution grant has already been consumed",
         ));
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(state.authority.sign_execution_authorization_receipt(
+        ExecutionAuthorizationReceiptClaims {
+            iss: "rdc-auth".into(),
+            aud: "rdc-qemu-center".into(),
+            client_id: claims.client_id,
+            device_id: claims.device_id,
+            session_id: claims.session_id,
+            client_version: claims.client_version,
+            artifact_id: claims.artifact_id,
+            artifact_sha256: claims.artifact_sha256,
+            action: claims.action,
+            vm: claims.vm,
+            instance: claims.instance,
+            grant_jti: claims.jti,
+            iat: now,
+            exp: claims.exp.min(now.saturating_add(EXECUTION_GRANT_TTL_SECS)),
+        },
+    )))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -959,14 +1075,6 @@ async fn prepare_artifact(
         return Err(ApiError::bad_request("ephemeral artifact key is required"));
     }
     let now = now()?;
-    let mut transfers = state.transfers.lock().unwrap();
-    transfers.retain(|_, transfer| transfer.manifest.expires_at > now);
-    if transfers.len() >= state.max_active_transfers {
-        return Err(ApiError::service_unavailable(
-            "transfer_capacity_exhausted",
-            "artifact transfer capacity is exhausted",
-        ));
-    }
     let artifact = state
         .store
         .artifact(&artifact_id)?
@@ -1005,6 +1113,17 @@ async fn prepare_artifact(
         chunk_count,
         nonce_prefix: random_nonce_prefix(),
     };
+    // Hashing the artifact is deliberately outside the transfer mutex. The
+    // final capacity check is repeated while holding the lock immediately
+    // before insertion, so concurrent hashing cannot overbook the registry.
+    let mut transfers = state.transfers.lock().unwrap();
+    transfers.retain(|_, transfer| transfer.manifest.expires_at > now);
+    if transfers.len() >= state.max_active_transfers {
+        return Err(ApiError::service_unavailable(
+            "transfer_capacity_exhausted",
+            "artifact transfer capacity is exhausted",
+        ));
+    }
     transfers.insert(
         transfer_id,
         ArtifactTransfer {
@@ -1105,6 +1224,7 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
     use std::fs;
     use tempfile::tempdir;
     use tower::ServiceExt;
@@ -1146,6 +1266,7 @@ mod tests {
     }
 
     fn session_request(key: &SigningKey, nonce: &str) -> SessionRequest {
+        let iat = now().unwrap();
         let capabilities = vec![
             ProtectedCapability::ProtectedPreset,
             ProtectedCapability::ProtectedArtifact,
@@ -1155,6 +1276,7 @@ mod tests {
             device_id: "device-a",
             client_version: "1.0.0",
             nonce,
+            iat,
             capabilities: &capabilities,
         };
         let payload = canonical_json(&proof).unwrap();
@@ -1164,8 +1286,40 @@ mod tests {
             device_id: "device-a".into(),
             client_version: "1.0.0".into(),
             nonce: nonce.into(),
+            iat,
             capabilities,
             signature,
+        }
+    }
+
+    fn execution_request(
+        key: &SigningKey,
+        artifact_id: &str,
+        artifact_sha256: &str,
+        action: &str,
+        vm: &str,
+        instance: &str,
+        nonce: &str,
+    ) -> ExecutionGrantRequest {
+        let iat = now().unwrap();
+        let proof = ExecutionGrantProof {
+            artifact_id,
+            artifact_sha256,
+            action,
+            vm,
+            instance,
+            nonce,
+            iat,
+        };
+        ExecutionGrantRequest {
+            artifact_id: artifact_id.into(),
+            artifact_sha256: artifact_sha256.into(),
+            action: action.into(),
+            vm: vm.into(),
+            instance: instance.into(),
+            nonce: nonce.into(),
+            iat,
+            signature: URL_SAFE_NO_PAD.encode(key.sign(&canonical_json(&proof).unwrap()).to_bytes()),
         }
     }
 
@@ -1197,6 +1351,20 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
         assert_eq!(response.headers().get("pragma").unwrap(), "no-cache");
+    }
+
+    #[tokio::test]
+    async fn sessions_reject_stale_timestamps_and_oversized_nonces() {
+        let (mut app, _, key) = test_app();
+        let mut stale = session_request(&key, "nonce-stale");
+        stale.iat = now().unwrap() - crate::crypto::REQUEST_MAX_AGE_SECS - 1;
+        let response = post_json(&mut app, "/v1/sessions", &stale).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut oversized = session_request(&key, "nonce-oversized");
+        oversized.nonce = "x".repeat(MAX_NONCE_BYTES + 1);
+        let response = post_json(&mut app, "/v1/sessions", &oversized).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1494,16 +1662,19 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let session: SessionResponse = serde_json::from_slice(&body).unwrap();
         let nonce = "heartbeat-1";
+        let iat = now().unwrap();
         let proof = HeartbeatProof {
             session_id: &session.lease.claims.session_id,
             client_id: "client-a",
             device_id: "device-a",
             nonce,
+            iat,
         };
         let heartbeat = HeartbeatRequest {
             client_id: "client-a".into(),
             device_id: "device-a".into(),
             nonce: nonce.into(),
+            iat,
             signature: URL_SAFE_NO_PAD
                 .encode(key.sign(&canonical_json(&proof).unwrap()).to_bytes()),
         };
@@ -1743,14 +1914,15 @@ mod tests {
                         format!("Bearer {}", session.lease.claims.session_id),
                     )
                     .body(Body::from(
-                        serde_json::to_vec(&ExecutionGrantRequest {
-                            artifact_id: "qemu-guest-script".into(),
-                            artifact_sha256: sha256.clone(),
-                            action: "preset_apply".into(),
-                            vm: "node1".into(),
-                            instance: "r13".into(),
-                            nonce: "nonce-grant-1".into(),
-                        })
+                        serde_json::to_vec(&execution_request(
+                            &key,
+                            "qemu-guest-script",
+                            &sha256,
+                            "preset_apply",
+                            "node1",
+                            "r13",
+                            "nonce-grant-1",
+                        ))
                         .unwrap(),
                     ))
                     .unwrap(),
@@ -1802,7 +1974,20 @@ mod tests {
         };
         let consume_response =
             post_json(&mut app, "/v1/execution-grants/consume", &consume_payload).await;
-        assert_eq!(consume_response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(consume_response.status(), StatusCode::OK);
+        let consume_body = to_bytes(consume_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let receipt: SignedExecutionAuthorizationReceipt =
+            serde_json::from_slice(&consume_body).unwrap();
+        let receipt_claims = SigningAuthority::for_tests()
+            .verify_execution_authorization_receipt(&receipt)
+            .unwrap();
+        assert_eq!(receipt_claims.aud, "rdc-qemu-center");
+        assert_eq!(receipt_claims.grant_jti, claims.jti);
+        assert_eq!(receipt_claims.artifact_sha256, claims.artifact_sha256);
+        assert_eq!(receipt_claims.vm, claims.vm);
+        assert_eq!(receipt_claims.instance, claims.instance);
         let replay_consume_response =
             post_json(&mut app, "/v1/execution-grants/consume", &consume_payload).await;
         assert_eq!(replay_consume_response.status(), StatusCode::CONFLICT);
@@ -1817,14 +2002,15 @@ mod tests {
                         format!("Bearer {}", session.lease.claims.session_id),
                     )
                     .body(Body::from(
-                        serde_json::to_vec(&ExecutionGrantRequest {
-                            artifact_id: "qemu-guest-script".into(),
-                            artifact_sha256: "0".repeat(64),
-                            action: "preset_apply".into(),
-                            vm: "node1".into(),
-                            instance: "r13".into(),
-                            nonce: "nonce-grant-wrong-hash".into(),
-                        })
+                        serde_json::to_vec(&execution_request(
+                            &key,
+                            "qemu-guest-script",
+                            &"0".repeat(64),
+                            "preset_apply",
+                            "node1",
+                            "r13",
+                            "nonce-grant-wrong-hash",
+                        ))
                         .unwrap(),
                     ))
                     .unwrap(),
@@ -1842,14 +2028,15 @@ mod tests {
                         format!("Bearer {}", session.lease.claims.session_id),
                     )
                     .body(Body::from(
-                        serde_json::to_vec(&ExecutionGrantRequest {
-                            artifact_id: "qemu-guest-script".into(),
-                            artifact_sha256: sha256.clone(),
-                            action: "preset_apply".into(),
-                            vm: "node1".into(),
-                            instance: "r13".into(),
-                            nonce: "nonce-grant-1".into(),
-                        })
+                        serde_json::to_vec(&execution_request(
+                            &key,
+                            "qemu-guest-script",
+                            &sha256,
+                            "preset_apply",
+                            "node1",
+                            "r13",
+                            "nonce-grant-1",
+                        ))
                         .unwrap(),
                     ))
                     .unwrap(),
@@ -1907,14 +2094,15 @@ mod tests {
                         format!("Bearer {}", session.lease.claims.session_id),
                     )
                     .body(Body::from(
-                        serde_json::to_vec(&ExecutionGrantRequest {
-                            artifact_id: "qemu-guest-script-universal".into(),
-                            artifact_sha256: sha256.clone(),
-                            action: "preset_apply".into(),
-                            vm: "node1".into(),
-                            instance: "r13".into(),
-                            nonce: "nonce-policy-mismatch".into(),
-                        })
+                        serde_json::to_vec(&execution_request(
+                            &key,
+                            "qemu-guest-script-universal",
+                            &sha256,
+                            "preset_apply",
+                            "node1",
+                            "r13",
+                            "nonce-policy-mismatch",
+                        ))
                         .unwrap(),
                     ))
                     .unwrap(),
@@ -1936,14 +2124,15 @@ mod tests {
                         format!("Bearer {}", session.lease.claims.session_id),
                     )
                     .body(Body::from(
-                        serde_json::to_vec(&ExecutionGrantRequest {
-                            artifact_id: "qemu-guest-script-universal".into(),
-                            artifact_sha256: sha256.clone(),
-                            action: "preset_restore".into(),
-                            vm: "node1".into(),
-                            instance: "r13".into(),
-                            nonce: "nonce-policy-mismatch".into(),
-                        })
+                        serde_json::to_vec(&execution_request(
+                            &key,
+                            "qemu-guest-script-universal",
+                            &sha256,
+                            "preset_restore",
+                            "node1",
+                            "r13",
+                            "nonce-policy-mismatch",
+                        ))
                         .unwrap(),
                     ))
                     .unwrap(),
@@ -2001,5 +2190,115 @@ mod tests {
             "preset_apply"
         ));
         assert!(!artifact_allows_execution_action("unknown", "preset_apply"));
+    }
+
+    #[tokio::test]
+    async fn artifact_release_returns_matching_content_without_consuming_execution_jti() {
+        let root = tempdir().unwrap();
+        let artifact = root.path().join("core.py");
+        let artifact_bytes = b"guest-side protected runner";
+        fs::write(&artifact, artifact_bytes).unwrap();
+        let store = AuthStore::in_memory().unwrap();
+        let (key, client) = test_client();
+        store.seed_approved_client(&client).unwrap();
+        store
+            .grant_entitlement("account-a", ProtectedCapability::ProtectedPreset)
+            .unwrap();
+        store
+            .grant_entitlement("account-a", ProtectedCapability::ProtectedArtifact)
+            .unwrap();
+        store
+            .publish_artifact("qemu-guest-script", "1", "x86_64", "android-13", &artifact)
+            .unwrap();
+        let state = AppState::new(
+            store,
+            SigningAuthority::for_tests(),
+            root.path().to_path_buf(),
+        );
+        let mut app = router(state);
+
+        let session_response = post_json(
+            &mut app,
+            "/v1/sessions",
+            &session_request(&key, "nonce-release-session"),
+        )
+        .await;
+        let session: SessionResponse = {
+            let body = to_bytes(session_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice(&body).unwrap()
+        };
+        let (_, artifact_sha256) = sha256_file(&artifact).unwrap();
+        let grant_response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/execution-grants")
+                    .header("content-type", "application/json")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", session.lease.claims.session_id),
+                    )
+                    .body(Body::from(
+                        serde_json::to_vec(&execution_request(
+                            &key,
+                            "qemu-guest-script",
+                            "",
+                            "preset_apply",
+                            "node1",
+                            "r13",
+                            "nonce-release-grant",
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(grant_response.status(), StatusCode::OK);
+        let grant_body = to_bytes(grant_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let grant: SignedExecutionGrant = serde_json::from_slice(&grant_body).unwrap();
+        let grant_claims = SigningAuthority::for_tests()
+            .verify_execution_grant(&grant)
+            .unwrap();
+        assert_eq!(grant_claims.artifact_sha256, artifact_sha256);
+        let mut grant = grant;
+        grant.device_proof =
+            Some(URL_SAFE_NO_PAD.encode(key.sign(grant.payload.as_bytes()).to_bytes()));
+
+        let release_response = post_json(
+            &mut app,
+            "/v1/execution-grants/release",
+            &ReleaseExecutionGrantRequest {
+                grant: grant.clone(),
+            },
+        )
+        .await;
+        assert_eq!(release_response.status(), StatusCode::OK);
+        let release_body = to_bytes(release_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let release: serde_json::Value = serde_json::from_slice(&release_body).unwrap();
+        assert!(release.get("receipt").is_none());
+        assert_eq!(release["artifact_id"], "qemu-guest-script");
+        assert_eq!(release["artifact_size_bytes"], artifact_bytes.len());
+        let content = URL_SAFE_NO_PAD
+            .decode(release["content_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(content, artifact_bytes);
+        assert_eq!(
+            release["artifact_sha256"],
+            format!("{:x}", Sha256::digest(artifact_bytes))
+        );
+
+        let consume_response = post_json(
+            &mut app,
+            "/v1/execution-grants/consume",
+            &ConsumeExecutionGrantRequest { grant },
+        )
+        .await;
+        assert_eq!(consume_response.status(), StatusCode::OK);
     }
 }

@@ -11,7 +11,6 @@ import { DeviceService } from "../../services/deviceService";
 import { probeTool } from "../../hooks/useToolProbe";
 import { createRequestSequence } from "../../lib/requestSequence";
 import { DPI_PRESETS, RES_PRESETS, validDpi, validResolution } from "../../lib/displaySpec";
-import { ToolStatus } from "../../components/ui/ToolStatus";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
 import type { TrackTaskInfo } from "../../lib/runtimeTrack";
@@ -19,6 +18,15 @@ import type { CreateInstanceRequest, DockerContainer, DockerInfo, MagiskAssets, 
 
 /** Above this many containers sharing one spoof profile, warn on the create form. */
 const SPOOF_USAGE_WARN_THRESHOLD = 5;
+const DOCKER_DESKTOP_DOWNLOAD_URL = "https://www.docker.com/products/docker-desktop/";
+
+function isDockerCliMissing(text: string): boolean {
+  const normalized = text.toLowerCase();
+  if (/error during connect|cannot connect to the docker daemon|dockerdesktoplinuxengine|docker daemon|docker\.sock/.test(normalized)) {
+    return false;
+  }
+  return /not found|not recognized|no such file|cannot find the path|system cannot find|系统找不到|找不到指定|路径为空|failed to spawn|os error 2/.test(normalized);
+}
 
 function adbSerialFromPorts(ports?: string): string | null {
   const m = ports?.match(/:(\d+)->5555/);
@@ -78,9 +86,9 @@ export type DockerTrackPanelProps = {
   /**
    * Merged-page header dedup (P5): `false` drops this panel's own page header —
    * only the title/subtitle block — because the shell already renders the page
-   * title once. The header's actions (刷新 / 创建实例) are *not* part of what is
-   * dropped: they stay as the panel's top action row, so no capability is
-   * hidden. Defaults to `true`; the standalone `/docker` route is unchanged.
+   * title once. The merged page uses the source badge for refresh and the
+   * instance card for creation. Defaults to `true`; the standalone `/docker`
+   * route keeps its page-header refresh action.
    */
   showHeader?: boolean;
   /**
@@ -159,6 +167,7 @@ export default function DockerTrackPanel({
   const [stayToCreate, setStayToCreate] = useState(Boolean(settings?.createStayOnForm));
   const [lastCreatedSerial, setLastCreatedSerial] = useState("");
   const [createdFlash, setCreatedFlash] = useState(false);
+  const createdFlashTimerRef = useRef<number | null>(null);
   const [failedSerial, setFailedSerial] = useState("");
   const [clonedName, setClonedName] = useState("");
   const [createStage, setCreateStage] = useState("");
@@ -169,6 +178,22 @@ export default function DockerTrackPanel({
   const [portTaken, setPortTaken] = useState(false);
   const [portSuggestion, setPortSuggestion] = useState<number | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
+
+  const scheduleCreatedFlashReset = () => {
+    if (createdFlashTimerRef.current !== null) {
+      window.clearTimeout(createdFlashTimerRef.current);
+    }
+    createdFlashTimerRef.current = window.setTimeout(() => {
+      createdFlashTimerRef.current = null;
+      setCreatedFlash(false);
+    }, 1600);
+  };
+
+  useEffect(() => () => {
+    if (createdFlashTimerRef.current !== null) {
+      window.clearTimeout(createdFlashTimerRef.current);
+    }
+  }, []);
 
   const suggestName = async (base: string) => {
     const raw = base.trim() || "redroid";
@@ -558,6 +583,20 @@ export default function DockerTrackPanel({
   const isLinuxHost = kernel?.strategy === "host-binder";
   const isMacDockerHost = kernel?.strategy === "docker-desktop-vm";
 
+  const dockerSetupState = !info || !tools
+    ? "unknown"
+    : info.running
+      ? "running"
+      : isDockerCliMissing(tools.docker.text)
+        ? "missing"
+        : "stopped";
+  const dockerStatusLabel =
+    dockerSetupState === "missing"
+      ? t("docker.notInstalled")
+      : info?.running
+        ? t("common.status.dockerRunning")
+        : t("common.status.dockerOff");
+
   const spoofBrands = [...new Set(spoofProfiles.map((p) => p.brand))];
   const selectedSpoofProfile = spoofProfiles.find((p) => p.id === form.spoofProfileId) ?? null;
   const selectedProfileUsage = selectedSpoofProfile
@@ -601,44 +640,15 @@ export default function DockerTrackPanel({
     }
   };
 
-  /**
-   * Header actions, kept out of the title block so `showHeader={false}` (merged
-   * page) can drop only the title/subtitle and still render every capability:
-   * 刷新 (`load`) and 创建实例 (opens the create form, disabled while Docker is
-   * unavailable). Pure move — same buttons, same handlers, same order; only the
-   * wrapping class gained `runtime-panel-actions` for the collapsed layout.
-   */
-  const headerActions = (
+  /** Standalone `/docker` keeps a page-level refresh; the merged page uses the
+   * Docker source badge so the action does not float between the tabs and data. */
+  const headerActions = showHeader ? (
     <div className="row runtime-panel-actions">
       <Button icon={<RefreshCw size={15} />} onClick={load}>
         {t("common.refresh")}
       </Button>
-      <Button
-        variant="primary"
-        icon={<Plus size={15} />}
-        disabled={Boolean(creatingTask) || (tools !== null && !tools.docker.ok)}
-        title={tools && !tools.docker.ok ? t("docker.dockerUnavailable", { text: tools.docker.text }) : undefined}
-        onClick={async () => {
-          try {
-            const port = await DeviceService.nextFreeAdbPort();
-            const redroids = (info?.containers ?? []).filter((c) => c.isRedroid);
-            let n = redroids.length + 1;
-            let name = `redroid-${n}`;
-            while (await DeviceService.checkInstanceName(name)) {
-              n += 1;
-              name = `redroid-${n}`;
-            }
-            setForm((f) => ({ ...f, name, adbPort: port }));
-          } catch {
-            /* keep defaults */
-          }
-          setShowCreate(true);
-        }}
-      >
-        {t("docker.createInstance")}
-      </Button>
     </div>
-  );
+  ) : null;
 
   return (
     <div
@@ -655,14 +665,7 @@ export default function DockerTrackPanel({
           </div>
           {headerActions}
         </div>
-      ) : (
-        headerActions
-      )}
-
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <ToolStatus kind="docker" hit={tools?.docker} />
-        <ToolStatus kind="adb" hit={tools?.adb} />
-      </div>
+      ) : null}
 
       <Card
         className={`kernel-card ${kernelExpanded ? "is-expanded" : "is-collapsed"}`}
@@ -849,9 +852,47 @@ export default function DockerTrackPanel({
           ))
         ) : (
           <>
-            <Card>
-              <div className="muted">{t("docker.dockerStatus")}</div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>{info?.running ? t("common.status.dockerRunning") : t("common.status.dockerOff")}</div>
+            <Card className={`docker-status-card docker-status-${dockerSetupState}`}>
+              <div className="docker-status-content">
+                <div>
+                  <div className="muted">{t("docker.dockerStatus")}</div>
+                  <div style={{ fontWeight: 700, fontSize: 18 }}>{dockerStatusLabel}</div>
+                  {dockerSetupState === "missing" ? (
+                    <div className="muted docker-status-hint">{t("docker.notInstalledHint")}</div>
+                  ) : dockerSetupState === "stopped" ? (
+                    <div className="muted docker-status-hint">{t("docker.engineStoppedHint")}</div>
+                  ) : null}
+                </div>
+                {dockerSetupState === "missing" ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    title={t("docker.installDockerTitle")}
+                    onClick={() => window.open(DOCKER_DESKTOP_DOWNLOAD_URL, "_blank", "noopener,noreferrer")}
+                  >
+                    {t("docker.installDocker")}
+                  </Button>
+                ) : dockerSetupState === "stopped" ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    loading={busy === "start-docker"}
+                    onClick={() => {
+                      void run(
+                        "start-docker",
+                        async () => {
+                          const started = await DeviceService.startDockerDesktop();
+                          if (!started) throw new Error(t("docker.startDockerFailed"));
+                          return started;
+                        },
+                        t("docker.startDocker"),
+                      );
+                    }}
+                  >
+                    {t("docker.startDocker")}
+                  </Button>
+                ) : null}
+              </div>
             </Card>
             <Card>
               <div className="muted">{t("docker.version")}</div>
@@ -1764,7 +1805,7 @@ export default function DockerTrackPanel({
                       await bumpCreateDefaults();
                       setLastCreatedSerial(serial);
                       setCreatedFlash(true);
-                      window.setTimeout(() => setCreatedFlash(false), 1600);
+                      scheduleCreatedFlashReset();
                       if (!stayToCreate) {
                         setShowCreate(false);
                         openDevice(serial);
@@ -1780,7 +1821,7 @@ export default function DockerTrackPanel({
                   await bumpCreateDefaults();
                   setLastCreatedSerial(serial);
                   setCreatedFlash(true);
-                  window.setTimeout(() => setCreatedFlash(false), 1600);
+                  scheduleCreatedFlashReset();
                   setCreatingTask(null);
                   if (!stayToCreate) {
                     setShowCreate(false);
@@ -1843,6 +1884,31 @@ export default function DockerTrackPanel({
                 <option value="up">{t("docker.filterUp", { n: redroidsAll.filter((c) => isUp(c.status)).length })}</option>
                 <option value="exited">{t("docker.filterExited", { n: redroidsAll.filter((c) => !isUp(c.status)).length })}</option>
               </select>
+              <Button
+                size="sm"
+                variant="primary"
+                icon={<Plus size={13} />}
+                disabled={Boolean(creatingTask) || (tools !== null && !tools.docker.ok)}
+                title={tools && !tools.docker.ok ? t("docker.dockerUnavailable", { text: tools.docker.text }) : undefined}
+                onClick={async () => {
+                  try {
+                    const port = await DeviceService.nextFreeAdbPort();
+                    const redroids = (info?.containers ?? []).filter((c) => c.isRedroid);
+                    let n = redroids.length + 1;
+                    let name = `redroid-${n}`;
+                    while (await DeviceService.checkInstanceName(name)) {
+                      n += 1;
+                      name = `redroid-${n}`;
+                    }
+                    setForm((f) => ({ ...f, name, adbPort: port }));
+                  } catch {
+                    /* keep defaults */
+                  }
+                  setShowCreate(true);
+                }}
+              >
+                {t("docker.createInstance")}
+              </Button>
             </div>
           }
         >

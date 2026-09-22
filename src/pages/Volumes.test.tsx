@@ -90,4 +90,20 @@ describe("VolumesPage refresh ordering", () => {
     expect(screen.queryByText("old-volume")).toBeNull();
     expect(screen.getByText("new-volume")).toBeTruthy();
   });
+
+  it("does not reserve page space for the global Docker status", async () => {
+    vi.mocked(DeviceService.listVolumes).mockResolvedValue([volume("volume")]);
+
+    render(
+      <MemoryRouter>
+        <VolumesPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelectorAll(".tool-status")).toHaveLength(0);
+  });
 });

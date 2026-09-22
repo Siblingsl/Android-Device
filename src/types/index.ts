@@ -40,7 +40,7 @@ export interface DeviceInfo {
   dataVolume?: string;
   /** Effective spoofed model from ro.product.model (may differ from the container name). */
   spoofedModel?: string;
-  /** Origin track of this row (unified list only): "docker" | "adb" | "qemu". */
+  /** Origin/type of this row (unified list): docker | qemu | emulator | redroid | adb. */
   source?: string;
   /** QEMU track only: the owning VM node name. */
   qemuVm?: string;
@@ -594,6 +594,8 @@ export interface AppSettings {
   runtimeKeepVmWarm?: boolean;
   runtimeMaxParallelStarts?: number;
   runtimeProtectedInstanceIds?: string[];
+  /** Reclaim one safe idle QEMU instance before blocking a critical-pressure start. */
+  runtimeAutoReleaseIdleOnCritical?: boolean;
   /** Per-device grouping tags: deviceId|serial → tag names (tags ARE groups). */
   deviceTags?: Record<string, string[]> | null;
 }
@@ -793,6 +795,15 @@ export interface RuntimeIdleReleaseResult {
   reason: string;
 }
 
+export interface RuntimeAppHibernateResult {
+  scope: "app";
+  instance: string;
+  serial: string;
+  package: string;
+  released: boolean;
+  reason: string;
+}
+
 export type ArtMode = "verify-only" | "speed-profile" | "reset";
 
 export interface ArtOptimizationResult {
@@ -804,6 +815,47 @@ export interface ArtOptimizationResult {
   elapsedMs: number;
   output: string;
   warning: string;
+}
+
+export type AuthorizationCapability =
+  | "protected-preset"
+  | "protected-artifact"
+  | "protected-algorithm";
+
+export type AuthorizationStatus =
+  | "not_configured"
+  | "not_registered"
+  | "authentication_required"
+  | "lease_expired"
+  | "server_unreachable"
+  | "client_outdated"
+  | "binding_mismatch"
+  | "artifact_integrity_failed"
+  | "revoked"
+  | "ready";
+
+export type DeviceSecurityLevel =
+  | "hardware_backed"
+  | "cng_software_provider"
+  | "dpapi_software_fallback";
+
+export type ClientKeyAlgorithm = "ed25519-dpapi-v1" | "ecdsa-p256-cng-v1";
+
+export interface AuthorizationRuntimeStatus {
+  status: AuthorizationStatus;
+  deviceId?: string | null;
+  sessionId?: string | null;
+  expiresAt?: number | null;
+  detail?: string | null;
+  securityLevel?: DeviceSecurityLevel | null;
+  keyAlgorithm?: ClientKeyAlgorithm | null;
+  hardwareRequired?: boolean;
+}
+
+export interface AuthorizationRegistration {
+  clientId: string;
+  deviceId: string;
+  status: string;
 }
 
 export interface QemuAdbMapping {

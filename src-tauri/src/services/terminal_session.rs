@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -13,6 +13,10 @@ use uuid::Uuid;
 use crate::services::adb;
 
 pub const TERMINAL_OUTPUT_EVENT: &str = "terminal://output";
+pub const MAX_TERMINAL_SESSIONS: usize = 16;
+pub const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
+pub const MAX_TERMINAL_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_STOPPED_IDS: usize = 256;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +60,37 @@ pub struct CommandSpec {
     pub args: Vec<String>,
 }
 
+fn validate_input(data: &str) -> Result<(), String> {
+    if data.len() > MAX_TERMINAL_INPUT_BYTES {
+        Err(format!(
+            "terminal input exceeds {} bytes",
+            MAX_TERMINAL_INPUT_BYTES
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn try_reserve_session(active: &AtomicUsize) -> bool {
+    active
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            (current < MAX_TERMINAL_SESSIONS).then_some(current + 1)
+        })
+        .is_ok()
+}
+
+fn remember_stopped(stopped: &mut VecDeque<String>, id: &str) {
+    stopped.retain(|value| value != id);
+    stopped.push_back(id.into());
+    while stopped.len() > MAX_STOPPED_IDS {
+        stopped.pop_front();
+    }
+}
+
+fn was_stopped(stopped: &VecDeque<String>, id: &str) -> bool {
+    stopped.iter().any(|value| value == id)
+}
+
 struct TerminalEntry {
     info: TerminalSessionInfo,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -63,10 +98,21 @@ struct TerminalEntry {
     stopped: Arc<AtomicBool>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TerminalRegistry {
     entries: Arc<Mutex<HashMap<String, TerminalEntry>>>,
-    stopped: Arc<Mutex<HashSet<String>>>,
+    stopped: Arc<Mutex<VecDeque<String>>>,
+    active: Arc<AtomicUsize>,
+}
+
+impl Default for TerminalRegistry {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            stopped: Arc::new(Mutex::new(VecDeque::new())),
+            active: Arc::new(AtomicUsize::new(0)),
+        }
+    }
 }
 
 pub fn validate_request(request: &TerminalStartRequest) -> Result<(), String> {
@@ -100,7 +146,10 @@ pub fn local_command(shell: &str) -> Result<CommandSpec, String> {
             let args = vec!["/Q".into()];
             #[cfg(not(windows))]
             let args = Vec::new();
-            Ok(CommandSpec { program: program.into(), args })
+            Ok(CommandSpec {
+                program: program.into(),
+                args,
+            })
         }
         _ => Err("local shell must be powershell or cmd".into()),
     }
@@ -149,18 +198,37 @@ pub fn start(
     request: TerminalStartRequest,
 ) -> Result<TerminalSessionInfo, String> {
     let (spec, kind, title) = command_for_request(&request)?;
+    if !try_reserve_session(&registry.active) {
+        return Err(format!(
+            "terminal session limit reached ({MAX_TERMINAL_SESSIONS})"
+        ));
+    }
     let id = Uuid::new_v4().to_string();
-    let pair = native_pty_system()
-        .openpty(PtySize { rows: 30, cols: 120, pixel_width: 0, pixel_height: 0 })
-        .map_err(|error| format!("failed to create terminal: {error}"))?;
+    let pair = match native_pty_system().openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+    {
+        Ok(pair) => pair,
+        Err(error) => {
+            registry.active.fetch_sub(1, Ordering::SeqCst);
+            return Err(format!("failed to create terminal: {error}"));
+        }
+    };
     let mut child = pair
         .slave
         .spawn_command(command_builder(&spec))
-        .map_err(|error| format!("failed to start terminal: {error}"))?;
+        .map_err(|error| {
+            registry.active.fetch_sub(1, Ordering::SeqCst);
+            format!("failed to start terminal: {error}")
+        })?;
     let reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(error) => {
             let _ = child.kill();
+            registry.active.fetch_sub(1, Ordering::SeqCst);
             return Err(format!("failed to open terminal output: {error}"));
         }
     };
@@ -168,6 +236,7 @@ pub fn start(
         Ok(writer) => writer,
         Err(error) => {
             let _ = child.kill();
+            registry.active.fetch_sub(1, Ordering::SeqCst);
             return Err(format!("failed to open terminal input: {error}"));
         }
     };
@@ -188,7 +257,16 @@ pub fn start(
             stopped: stopped.clone(),
         },
     );
-    spawn_reader(app, registry, id, reader, child, stopped);
+    let active = Arc::clone(&registry.active);
+    spawn_reader(
+        app,
+        registry,
+        id,
+        reader,
+        child,
+        stopped,
+        active,
+    );
     Ok(info)
 }
 
@@ -199,21 +277,34 @@ fn spawn_reader(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     stopped: Arc<AtomicBool>,
+    active: Arc<AtomicUsize>,
 ) {
     thread::spawn(move || {
         let mut buffer = [0u8; 4096];
         let mut read_error = None;
+        let output_bytes = AtomicUsize::new(0);
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
-                Ok(size) => emit_output(
-                    &app,
-                    &id,
-                    "stdout",
-                    String::from_utf8_lossy(&buffer[..size]).into_owned(),
-                    None,
-                    None,
-                ),
+                Ok(size) => {
+                    let used = output_bytes.fetch_add(size, Ordering::SeqCst);
+                    if used > MAX_TERMINAL_OUTPUT_BYTES.saturating_sub(size) {
+                        read_error = Some(format!(
+                            "terminal output exceeded {} bytes",
+                            MAX_TERMINAL_OUTPUT_BYTES
+                        ));
+                        let _ = child.kill();
+                        break;
+                    }
+                    emit_output(
+                        &app,
+                        &id,
+                        "stdout",
+                        String::from_utf8_lossy(&buffer[..size]).into_owned(),
+                        None,
+                        None,
+                    );
+                }
                 Err(error) => {
                     read_error = Some(error.to_string());
                     break;
@@ -232,6 +323,7 @@ fn spawn_reader(
         let exit_code = exit.ok().map(|value| value.exit_code() as i32);
         emit_output(&app, &id, "exit", data, Some(status), exit_code);
         registry.entries.lock().remove(&id);
+        active.fetch_sub(1, Ordering::SeqCst);
     });
 }
 
@@ -256,36 +348,75 @@ fn emit_output(
 }
 
 pub fn write(registry: &TerminalRegistry, id: &str, data: &str) -> TerminalCommandResult {
+    if let Err(error) = validate_input(data) {
+        return TerminalCommandResult {
+            success: false,
+            error,
+        };
+    }
     let writer = match registry.entries.lock().get(id) {
         Some(entry) => entry.writer.clone(),
-        None => return TerminalCommandResult { success: false, error: "terminal session not found".into() },
+        None => {
+            return TerminalCommandResult {
+                success: false,
+                error: "terminal session not found".into(),
+            }
+        }
     };
     let mut writer = writer.lock();
-    match writer.write_all(data.as_bytes()).and_then(|_| writer.flush()) {
-        Ok(()) => TerminalCommandResult { success: true, error: String::new() },
-        Err(error) => TerminalCommandResult { success: false, error: error.to_string() },
+    match writer
+        .write_all(data.as_bytes())
+        .and_then(|_| writer.flush())
+    {
+        Ok(()) => TerminalCommandResult {
+            success: true,
+            error: String::new(),
+        },
+        Err(error) => TerminalCommandResult {
+            success: false,
+            error: error.to_string(),
+        },
     }
 }
 
 pub fn stop(registry: &TerminalRegistry, id: &str) -> TerminalCommandResult {
     let entry = registry.entries.lock().remove(id);
     let Some(entry) = entry else {
-        if registry.stopped.lock().contains(id) {
-            return TerminalCommandResult { success: true, error: String::new() };
+        if was_stopped(&registry.stopped.lock(), id) {
+            return TerminalCommandResult {
+                success: true,
+                error: String::new(),
+            };
         }
-        return TerminalCommandResult { success: false, error: "terminal session not found".into() };
+        return TerminalCommandResult {
+            success: false,
+            error: "terminal session not found".into(),
+        };
     };
     entry.stopped.store(true, Ordering::SeqCst);
-    registry.stopped.lock().insert(id.into());
     let kill_result = entry.killer.lock().kill();
     match kill_result {
-        Ok(()) => TerminalCommandResult { success: true, error: String::new() },
-        Err(error) => TerminalCommandResult { success: false, error: error.to_string() },
+        Ok(()) => {
+            remember_stopped(&mut registry.stopped.lock(), id);
+            TerminalCommandResult {
+                success: true,
+                error: String::new(),
+            }
+        }
+        Err(error) => TerminalCommandResult {
+            success: false,
+            error: error.to_string(),
+        },
     }
 }
 
 pub fn list(registry: &TerminalRegistry) -> Vec<TerminalSessionInfo> {
-    registry.entries.lock().values().map(|entry| entry.info.clone()).collect()
+    registry
+        .entries
+        .lock()
+        .values()
+        .map(|entry| entry.info.clone())
+        .collect()
 }
 
 pub fn stop_all(registry: &TerminalRegistry) {
@@ -301,8 +432,15 @@ mod tests {
 
     #[test]
     fn rejects_empty_device_serial() {
-        let request = TerminalStartRequest { kind: "device".into(), serial: "  ".into(), shell: String::new() };
-        assert_eq!(validate_request(&request), Err("device serial is required".into()));
+        let request = TerminalStartRequest {
+            kind: "device".into(),
+            serial: "  ".into(),
+            shell: String::new(),
+        };
+        assert_eq!(
+            validate_request(&request),
+            Err("device serial is required".into())
+        );
     }
 
     #[test]
@@ -321,5 +459,26 @@ mod tests {
         let result = write(&registry, "missing", "echo\r");
         assert!(!result.success);
         assert!(list(&registry).is_empty());
+    }
+
+    #[test]
+    fn rejects_terminal_input_that_exceeds_the_bound() {
+        assert!(validate_input(&"x".repeat(MAX_TERMINAL_INPUT_BYTES)).is_ok());
+        assert!(validate_input(&"x".repeat(MAX_TERMINAL_INPUT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn stopped_session_tombstones_are_bounded() {
+        let mut stopped = VecDeque::new();
+        for index in 0..(MAX_STOPPED_IDS + 1) {
+            remember_stopped(&mut stopped, &format!("session-{index}"));
+        }
+
+        assert_eq!(stopped.len(), MAX_STOPPED_IDS);
+        assert!(!was_stopped(&stopped, "session-0"));
+        assert!(was_stopped(
+            &stopped,
+            &format!("session-{MAX_STOPPED_IDS}")
+        ));
     }
 }

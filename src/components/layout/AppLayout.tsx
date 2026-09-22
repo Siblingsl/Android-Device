@@ -2,16 +2,13 @@ import { Outlet, useLocation } from "react-router-dom";
 import { useEffect, useRef } from "react";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
-import { DetailPanel } from "./DetailPanel";
 import { useAppStore } from "../../stores/appStore";
 import { DeviceService } from "../../services/deviceService";
 import { RUNTIME_ROUTE, resolveRuntimeTrack } from "../../lib/runtimeTrack";
 import { tStatic } from "../../i18n";
-import clsx from "clsx";
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, cursorPosition, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import { autoConnectDeviceIds, getDeviceMetadata } from "../../lib/deviceMetadata";
-import { arrangementAutoRestoreEnabled, readArrangement } from "../../stores/layoutStore";
 import { dueTasks, markTaskRun, prepareScheduledTask, recordScheduledResult, SCHEDULER_STORAGE_KEY, createScheduledTask, type ScheduledTask } from "../../lib/scheduler";
 import { AUTOMATION_STORAGE_KEY, normalizeAutomationScript, type AutomationScript } from "../../lib/automation";
 import { executeAutomationScript } from "../../lib/automationRuntime";
@@ -114,16 +111,13 @@ async function runAutoStart() {
 
 export function AppLayout() {
   const location = useLocation();
-  const detailOpen = useAppStore((s) => s.detailOpen);
   const loadSettings = useAppStore((s) => s.loadSettings);
   const refreshStatus = useAppStore((s) => s.refreshStatus);
   const refreshDevices = useAppStore((s) => s.refreshDevices);
-  const devices = useAppStore((s) => s.devices);
   const language = useAppStore((s) => s.settings?.language);
   const closeToTray = useAppStore((s) => Boolean(s.settings?.closeToTray));
   const defaultTrack = useAppStore((s) => s.settings?.defaultTrack);
   const booted = useRef(false);
-  const restoredArrangementIds = useRef(new Set<string>());
   // `/containers` is the merged page: `.app-shell` keeps carrying the active
   // track's page scope class (`page-docker` / `page-qemu`) so the per-track
   // layout rules in global.css — grid columns, scroll container, the QEMU card
@@ -149,33 +143,6 @@ export function AppLayout() {
       void runAutoStart();
     })();
   }, [loadSettings, refreshStatus, refreshDevices]);
-
-  useEffect(() => {
-    if (!arrangementAutoRestoreEnabled() || !devices.length || !("__TAURI_INTERNALS__" in window)) return;
-    const layouts = readArrangement(devices);
-    const pending = layouts.filter((item) => {
-      const device = devices.find((candidate) => candidate.id === item.id);
-      return Boolean(device && device.online && device.adbStatus === "device" && !restoredArrangementIds.current.has(item.id));
-    });
-    if (!pending.length) return;
-    pending.forEach((item) => restoredArrangementIds.current.add(item.id));
-    void Promise.allSettled(pending.map(async (item) => {
-      const device = devices.find((candidate) => candidate.id === item.id);
-      if (!device) return;
-      await DeviceService.openDeviceWindow(
-        device.id,
-        device.name || device.serial,
-        item.x,
-        item.y,
-        item.width * (item.span === 2 ? 2 : 1),
-        item.height,
-      );
-    })).then((results) => {
-      const failed = results.filter((result) => result.status === "rejected").length;
-      if (failed) useAppStore.getState().setStatusText(`自动恢复窗口失败 ${failed} 个`);
-      else useAppStore.getState().setStatusText(`已按保存布局恢复 ${pending.length} 个独立窗口`);
-    });
-  }, [devices]);
 
   useEffect(() => {
     let active = true;
@@ -327,7 +294,7 @@ export function AppLayout() {
   }, [refreshStatus, refreshDevices]);
 
   return (
-    <div className={clsx("app-shell", `page-${pageKey}`, detailOpen && "detail-open")}>
+    <div className={`app-shell page-${pageKey}`}>
       <Sidebar />
       <main className="main-area">
         <div className="content">
@@ -336,7 +303,6 @@ export function AppLayout() {
           </div>
         </div>
       </main>
-      <DetailPanel />
       <StatusBar />
     </div>
   );

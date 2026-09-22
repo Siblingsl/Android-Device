@@ -29,6 +29,7 @@ vi.mock("../services/deviceService", () => ({
 }));
 const storeState = vi.hoisted(() => ({
   setSelectedDeviceId: vi.fn(),
+  setDevices: vi.fn(),
   setStatusText: vi.fn(),
   refreshDevices: vi.fn(async () => undefined),
   loadSettings: vi.fn(async () => undefined),
@@ -40,6 +41,7 @@ vi.mock("../stores/appStore", () => ({
       devices: [],
       settings: { screenshotPath: "", deviceTags: storeState.deviceTags },
       setSelectedDeviceId: storeState.setSelectedDeviceId,
+      setDevices: storeState.setDevices,
       setStatusText: storeState.setStatusText,
       refreshDevices: storeState.refreshDevices,
       loadSettings: storeState.loadSettings,
@@ -109,6 +111,7 @@ describe("Devices batch controls", () => {
     vi.mocked(askConfirm).mockReset();
     vi.mocked(copyText).mockReset();
     storeState.setSelectedDeviceId.mockReset();
+    storeState.setDevices.mockReset();
     storeState.setStatusText.mockReset();
     vi.mocked(DeviceService.listDevices).mockResolvedValue([device("one"), device("two")]);
     vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([device("one"), device("two")]);
@@ -134,21 +137,35 @@ describe("Devices batch controls", () => {
     vi.mocked(copyText).mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    cleanup();
-    vi.unstubAllGlobals();
-  });
-
-  it("opens the saved multi-device window arrangement editor", async () => {
+  it("publishes the initial list without issuing a duplicate refresh", async () => {
     render(
       <MemoryRouter>
         <Devices />
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "窗口编排" }));
-    expect(screen.getByRole("dialog", { name: "设备窗口编排" })).toBeTruthy();
-    expect(screen.getByRole("dialog", { name: "设备窗口编排" }).querySelector("strong")?.textContent).toBe("设备 one");
+    await screen.findAllByRole("checkbox");
+
+    expect(DeviceService.listDevicesUnified).toHaveBeenCalledTimes(1);
+    expect(storeState.setDevices).toHaveBeenCalledWith([device("one"), device("two")]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not expose the removed window arrangement feature", async () => {
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByRole("checkbox");
+
+    expect(screen.queryByRole("button", { name: "窗口编排" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "设备窗口编排" })).toBeNull();
   });
 
   it("stops before the next device and reports the skipped item", async () => {
@@ -1176,7 +1193,7 @@ describe("Devices batch controls", () => {
       </MemoryRouter>,
     );
     await screen.findAllByRole("checkbox");
-    const kindFilter = screen.getByRole("combobox", { name: "云机/真机筛选" });
+    const kindFilter = screen.getByRole("combobox", { name: "云机/ADB设备筛选" });
 
     fireEvent.change(kindFilter, { target: { value: "cloud" } });
     expect(screen.getByText("设备 one")).toBeTruthy();
@@ -1220,11 +1237,52 @@ describe("Devices batch controls", () => {
     const badge = screen.getByText("QEMU");
     expect(badge.className).toContain("badge");
     // QEMU instances count as 云机 in the kind filter.
-    const kindFilter = screen.getByRole("combobox", { name: "云机/真机筛选" });
+    const kindFilter = screen.getByRole("combobox", { name: "云机/ADB设备筛选" });
     fireEvent.change(kindFilter, { target: { value: "cloud" } });
     expect(screen.getByText("node1·r1")).toBeTruthy();
     expect(screen.getByText("设备 one")).toBeTruthy();
     expect(screen.queryByText("设备 two")).toBeNull();
+  }, 15_000);
+
+  it("does not label emulator or Redroid rows as physical devices", async () => {
+    vi.mocked(DeviceService.listDevicesUnified).mockResolvedValue([
+      {
+        ...device("emulator"),
+        name: "2210132C",
+        serial: "emulator-5554",
+        id: "emulator-5554",
+        containerId: "",
+        source: "emulator",
+      },
+      {
+        ...device("redroid"),
+        name: "redroid14_x86_64",
+        serial: "127.0.0.1:24500",
+        id: "127.0.0.1:24500",
+        containerId: "",
+        source: "redroid",
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+    await screen.findAllByRole("checkbox");
+
+    expect(screen.getByText("模拟器")).toBeTruthy();
+    expect(screen.getByText("Redroid")).toBeTruthy();
+    expect(screen.queryByText("真机")).toBeNull();
+
+    const kindFilter = screen.getByRole("combobox", { name: "云机/ADB设备筛选" });
+    fireEvent.change(kindFilter, { target: { value: "cloud" } });
+    expect(screen.getByText("2210132C")).toBeTruthy();
+    expect(screen.getByText("redroid14_x86_64")).toBeTruthy();
+
+    fireEvent.change(kindFilter, { target: { value: "real" } });
+    expect(screen.queryByText("2210132C")).toBeNull();
+    expect(screen.queryByText("redroid14_x86_64")).toBeNull();
   }, 15_000);
 
   it("renders grouping tag chips in the device identity area", async () => {

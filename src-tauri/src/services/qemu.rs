@@ -222,7 +222,6 @@ pub struct QemuRedroidCreateRequest {
     pub hide_packages: Vec<String>,
     #[serde(default)]
     pub clean_traces: bool,
-
 }
 
 fn default_resource_profile() -> String {
@@ -338,12 +337,9 @@ struct RawRedroidRuntimeStats {
 /// the `src-tauri` crate root, i.e. `<repo>/qemu-center/target/<profile>/`).
 fn repo_candidate_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    roots.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("qemu-center"),
-    );
-    // Packaged app: look for a sibling `qemu-center` dir a few levels up.
+    // Prefer a writable sibling next to the running app. This keeps packaged
+    // state out of the read-only resources directory and avoids using the CI
+    // machine's compile-time CARGO_MANIFEST_DIR after installation.
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().map(Path::to_path_buf);
         for _ in 0..4 {
@@ -356,12 +352,21 @@ fn repo_candidate_roots() -> Vec<PathBuf> {
             }
         }
     }
+    roots.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("qemu-center"),
+    );
     roots
 }
 
 fn candidate_binaries(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for root in roots {
+        // Tauri resources are copied directly to a resource subdirectory;
+        // development builds keep the historical target/{debug,release}
+        // layout below.
+        out.push(root.join(BIN_FILE_NAME));
         for profile in ["debug", "release"] {
             out.push(root.join("target").join(profile).join(BIN_FILE_NAME));
         }
@@ -390,7 +395,19 @@ fn resolve_bin_in(env_value: Option<&str>, roots: &[PathBuf]) -> Option<PathBuf>
 /// 3. `where qemu-center` (Windows) / `which qemu-center` (POSIX).
 pub fn resolve_qemu_center_bin() -> Option<PathBuf> {
     let env_value = std::env::var("QEMU_CENTER_BIN").ok();
-    if let Some(path) = resolve_bin_in(env_value.as_deref(), &repo_candidate_roots()) {
+    let mut roots = repo_candidate_roots();
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(Path::to_path_buf);
+        for _ in 0..4 {
+            if let Some(current) = dir {
+                roots.push(current.join("resources").join("qemu-center"));
+                dir = current.parent().map(Path::to_path_buf);
+            } else {
+                break;
+            }
+        }
+    }
+    if let Some(path) = resolve_bin_in(env_value.as_deref(), &roots) {
         return Some(path);
     }
     probe_path("qemu-center")
@@ -573,7 +590,11 @@ pub fn run_cli(args: &[String], timeout: Duration) -> Result<QemuCliOutput, Stri
     // JSON contract, and prefixing it there would break doctor / vm list
     // parsing (and the human-readable passthrough commands' UI log panel).
     let stale = cli_is_stale(&bin);
-    let result = run_cli_at(&bin, &args_with_portable_state_dir(args, &state_dir), timeout);
+    let result = run_cli_at(
+        &bin,
+        &args_with_portable_state_dir(args, &state_dir),
+        timeout,
+    );
     if !stale {
         return result;
     }
@@ -612,8 +633,12 @@ pub fn run_cli_at(bin: &Path, args: &[String], timeout: Duration) -> Result<Qemu
         Ok(Ok(output)) => Ok(QemuCliOutput {
             success: output.status.success(),
             exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).trim_end().to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim_end().to_string(),
+            stdout: String::from_utf8_lossy(&output.stdout)
+                .trim_end()
+                .to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr)
+                .trim_end()
+                .to_string(),
         }),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => {
@@ -674,6 +699,22 @@ pub fn args_vm_list() -> Vec<String> {
 
 pub fn args_vm_start(name: &str) -> Vec<String> {
     vec!["vm".into(), "start".into(), name.into()]
+}
+
+pub fn args_vm_set_memory(name: &str, memory_mib: u32) -> Vec<String> {
+    vec![
+        "vm".into(),
+        "set-memory".into(),
+        name.into(),
+        memory_mib.to_string(),
+    ]
+}
+
+/// Request an explicit virtio-balloon reclaim from a running node. The CLI
+/// calculates a conservative target from live guest/container metrics and
+/// fails closed when those metrics are unavailable.
+pub fn args_vm_memory_reclaim(name: &str) -> Vec<String> {
+    vec!["vm".into(), "memory-reclaim".into(), name.into()]
 }
 
 pub fn args_vm_stop(name: &str) -> Vec<String> {
@@ -776,6 +817,24 @@ pub fn args_redroid_create(request: &QemuRedroidCreateRequest) -> Vec<String> {
     if request.profile != "standard" && !request.profile.is_empty() {
         args.extend(["--profile".into(), request.profile.clone()]);
     }
+    args
+}
+
+/// Add the path to the short-lived host-side capability file. The grant
+/// contents stay out of argv and process logs; qemu-center verifies the file
+/// with its build-time public-key ring before it touches Docker.
+pub fn args_redroid_create_with_grant_file(
+    request: &QemuRedroidCreateRequest,
+    grant_file: &Path,
+    authorization_file: &Path,
+) -> Vec<String> {
+    let mut args = args_redroid_create(request);
+    args.extend([
+        "--execution-grant-file".into(),
+        grant_file.to_string_lossy().into_owned(),
+        "--execution-authorization-file".into(),
+        authorization_file.to_string_lossy().into_owned(),
+    ]);
     args
 }
 
@@ -966,7 +1025,11 @@ pub fn setup(step: &str, distro: &str) -> Result<QemuCliOutput, String> {
     output.stdout = if stdout.is_empty() {
         format!("[state-dir] {}", default_portable_state_dir().display())
     } else {
-        format!("{}\n[state-dir] {}", stdout, default_portable_state_dir().display())
+        format!(
+            "{}\n[state-dir] {}",
+            stdout,
+            default_portable_state_dir().display()
+        )
     };
     Ok(output)
 }
@@ -983,6 +1046,17 @@ pub fn vm_create(request: QemuVmCreateRequest) -> Result<QemuCliOutput, String> 
 
 pub fn vm_start(name: &str) -> Result<QemuCliOutput, String> {
     run_cli(&args_vm_start(name), Duration::from_secs(90))
+}
+
+pub fn vm_set_memory(name: &str, memory_mib: u32) -> Result<QemuCliOutput, String> {
+    run_cli(
+        &args_vm_set_memory(name, memory_mib),
+        Duration::from_secs(90),
+    )
+}
+
+pub fn vm_memory_reclaim(name: &str) -> Result<QemuCliOutput, String> {
+    run_cli(&args_vm_memory_reclaim(name), Duration::from_secs(90))
 }
 
 pub fn vm_stop(name: &str) -> Result<QemuCliOutput, String> {
@@ -1006,17 +1080,51 @@ pub fn guest_wait(name: &str, timeout_secs: u64) -> Result<QemuCliOutput, String
     // The CLI polls internally until its own deadline; give the process a
     // little headroom on top so the CLI's own error text wins the race.
     let budget = timeout_secs.saturating_add(60).min(MAX_CLI_TIMEOUT_SECS);
-    run_cli(&args_guest_wait(name, timeout_secs), Duration::from_secs(budget))
+    run_cli(
+        &args_guest_wait(name, timeout_secs),
+        Duration::from_secs(budget),
+    )
 }
 
-pub fn redroid_create(request: QemuRedroidCreateRequest) -> Result<QemuCliOutput, String> {
-    crate::services::qemu_presets::apply(request, false)
+pub fn redroid_create_with_grants(
+    request: QemuRedroidCreateRequest,
+    execution_grants: Vec<serde_json::Value>,
+) -> Result<QemuCliOutput, String> {
+    crate::services::qemu_presets::apply_with_grants(request, false, execution_grants)
+}
+
+pub fn redroid_upgrade_with_grants(
+    request: QemuRedroidCreateRequest,
+    execution_grants: Vec<serde_json::Value>,
+) -> Result<QemuCliOutput, String> {
+    crate::services::qemu_presets::apply_with_grants(request, true, execution_grants)
+}
+
+pub fn redroid_restore_with_grant(
+    vm: &str,
+    name: &str,
+    execution_grant: serde_json::Value,
+) -> Result<QemuCliOutput, String> {
+    crate::services::qemu_presets::restore_with_grant(vm, name, execution_grant)
+}
+
+/// Read only the live/basic instance list. This deliberately skips protected
+/// metadata enrichment and is the status path used by pressure reclamation.
+pub fn redroid_list_basic(vm: &str) -> Result<Vec<QemuRedroidInstance>, String> {
+    let output = run_cli(&args_redroid_list(vm), Duration::from_secs(90))?;
+    parse_redroid_list_json(&output.stdout)
 }
 
 pub fn redroid_list(vm: &str) -> Result<Vec<QemuRedroidInstance>, String> {
-    let output = run_cli(&args_redroid_list(vm), Duration::from_secs(90))?;
-    let mut rows = parse_redroid_list_json(&output.stdout)?;
-    crate::services::qemu_presets::enrich(vm, &mut rows);
+    redroid_list_basic(vm)
+}
+
+pub fn redroid_list_with_grant(
+    vm: &str,
+    execution_grant: serde_json::Value,
+) -> Result<Vec<QemuRedroidInstance>, String> {
+    let mut rows = redroid_list_basic(vm)?;
+    crate::services::qemu_presets::enrich_with_grant(vm, &mut rows, execution_grant)?;
     Ok(rows)
 }
 
@@ -1029,16 +1137,56 @@ pub fn redroid_stats(
 }
 
 pub fn redroid_start(vm: &str, instance: &str) -> Result<QemuCliOutput, String> {
-    run_cli(&args_redroid_lifecycle("start", vm, instance), Duration::from_secs(90))
+    run_cli(
+        &args_redroid_lifecycle("start", vm, instance),
+        Duration::from_secs(90),
+    )
 }
 
 pub fn redroid_stop(vm: &str, instance: &str) -> Result<QemuCliOutput, String> {
-    run_cli(&args_redroid_lifecycle("stop", vm, instance), Duration::from_secs(90))
+    run_cli(
+        &args_redroid_lifecycle("stop", vm, instance),
+        Duration::from_secs(90),
+    )
+}
+
+/// Classify only statuses that prove the Docker container is currently
+/// running. The list command uses Docker's human `Up …` status, while stats
+/// and future bridges may expose the machine `running` value.
+pub fn is_running_status(status: &str) -> bool {
+    let normalized = status.trim().to_ascii_lowercase();
+    normalized == "running" || normalized.starts_with("up ") || normalized == "up"
+}
+
+#[cfg(test)]
+mod runtime_status_tests {
+    use super::is_running_status;
+
+    #[test]
+    fn running_status_accepts_docker_up_and_running_values_only() {
+        assert!(is_running_status("Up 12 minutes"));
+        assert!(is_running_status("running"));
+        assert!(!is_running_status("Exited (137) 2 hours ago"));
+        assert!(!is_running_status("unknown"));
+    }
 }
 
 pub fn adb_list() -> Result<Vec<QemuAdbMapping>, String> {
     let output = run_cli(&args_adb_list(), Duration::from_secs(30))?;
     parse_adb_list_json(&output.stdout)
+}
+
+/// Return true only when all three identifiers point to the same QEMU-track
+/// ADB assignment. This prevents app-scoped actions from reaching a physical
+/// or LAN device that happens to use the same serial string.
+pub fn qemu_mapping_matches(
+    rows: &[QemuAdbMapping],
+    vm: &str,
+    instance: &str,
+    serial: &str,
+) -> bool {
+    rows.iter()
+        .any(|row| row.vm == vm && row.instance == instance && row.serial == serial)
 }
 
 /// One QEMU-track adb serial with its live adb state, as surfaced to the
@@ -1179,6 +1327,17 @@ mod tests {
     }
 
     #[test]
+    fn packaged_resource_candidate_is_found_without_a_target_profile() {
+        let root = temp_dir("packaged-resource");
+        let resource_bin = root.join(BIN_FILE_NAME);
+        std::fs::create_dir_all(resource_bin.parent().unwrap()).unwrap();
+        std::fs::write(&resource_bin, b"stub").unwrap();
+        let resolved = resolve_bin_in(None, &[root.clone()]);
+        assert_eq!(resolved.as_deref(), Some(resource_bin.as_path()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn missing_everywhere_resolves_to_none() {
         let root = temp_dir("missing");
         assert!(resolve_bin_in(None, &[root.clone()]).is_none());
@@ -1220,8 +1379,20 @@ mod tests {
         assert_eq!(
             args_vm_create(&request).unwrap(),
             vec![
-                "vm", "create", "node1", "--image", "C:/img/noble.img", "--cpus", "4", "--mem",
-                "4096", "--disk-gib", "40", "--adb-port-count", "32", "--auto-setup",
+                "vm",
+                "create",
+                "node1",
+                "--image",
+                "C:/img/noble.img",
+                "--cpus",
+                "4",
+                "--mem",
+                "4096",
+                "--disk-gib",
+                "40",
+                "--adb-port-count",
+                "32",
+                "--auto-setup",
             ]
         );
     }
@@ -1283,7 +1454,10 @@ mod tests {
         );
         // A root that already has `state` wins over the first root.
         std::fs::create_dir_all(b.join("state")).unwrap();
-        assert_eq!(portable_state_dir_in(&[a.clone(), b.clone()]), b.join("state"));
+        assert_eq!(
+            portable_state_dir_in(&[a.clone(), b.clone()]),
+            b.join("state")
+        );
         // Empty roots: neutral relative fallback (unreachable in production).
         assert_eq!(
             portable_state_dir_in(&[]),
@@ -1340,6 +1514,22 @@ mod tests {
     }
 
     #[test]
+    fn vm_set_memory_argv_carries_the_next_start_value() {
+        assert_eq!(
+            args_vm_set_memory("node1", 3072),
+            vec!["vm", "set-memory", "node1", "3072"]
+        );
+    }
+
+    #[test]
+    fn vm_memory_reclaim_argv_targets_the_running_node() {
+        assert_eq!(
+            args_vm_memory_reclaim("node1"),
+            vec!["vm", "memory-reclaim", "node1"]
+        );
+    }
+
+    #[test]
     fn redroid_create_argv_matches_cli_flags() {
         let request = QemuRedroidCreateRequest {
             vm: "node1".into(),
@@ -1361,25 +1551,83 @@ mod tests {
     }
 
     #[test]
+    fn redroid_create_argv_carries_only_the_grant_file_path() {
+        let request = QemuRedroidCreateRequest {
+            vm: "node1".into(),
+            name: "r1".into(),
+            cpus: 2.0,
+            memory_mib: 2048,
+            width: 720,
+            height: 1280,
+            dpi: 320,
+            ..Default::default()
+        };
+        let path = PathBuf::from("C:/temp/rdc-execution-grant.json");
+        let args = args_redroid_create_with_grant_file(
+            &request,
+            &path,
+            Path::new("/run/rdc-presets/job-1/execution-authorized"),
+        );
+        assert!(args.windows(2).any(|pair| {
+            pair == ["--execution-grant-file", "C:/temp/rdc-execution-grant.json"]
+        }));
+        assert!(!args.iter().any(|arg| arg.contains("device-proof")));
+    }
+
+    #[test]
+    fn protected_redroid_create_argv_carries_the_guest_authorization_path() {
+        let request = QemuRedroidCreateRequest {
+            vm: "node1".into(),
+            name: "r1".into(),
+            cpus: 2.0,
+            memory_mib: 2048,
+            width: 720,
+            height: 1280,
+            dpi: 320,
+            ..Default::default()
+        };
+        let args = args_redroid_create_with_grant_file(
+            &request,
+            Path::new("C:/temp/rdc-execution-grant.json"),
+            Path::new("/run/rdc-presets/job-1/execution-authorized"),
+        );
+        assert!(args.windows(2).any(|pair| {
+            pair == [
+                "--execution-authorization-file",
+                "/run/rdc-presets/job-1/execution-authorized",
+            ]
+        }));
+    }
+
+    #[test]
     fn verify_and_delete_argv_variants() {
         assert_eq!(args_verify(None), vec!["verify", "--json"]);
         assert_eq!(
             args_verify(Some("node1")),
             vec!["verify", "--json", "--vm", "node1"]
         );
-        assert_eq!(args_vm_delete("node1", false), vec!["vm", "delete", "node1"]);
+        assert_eq!(
+            args_vm_delete("node1", false),
+            vec!["vm", "delete", "node1"]
+        );
         assert_eq!(
             args_vm_delete("node1", true),
             vec!["vm", "delete", "node1", "--purge"]
         );
-        assert_eq!(args_redroid_list("node1"), vec!["redroid", "list", "node1", "--json"]);
+        assert_eq!(
+            args_redroid_list("node1"),
+            vec!["redroid", "list", "node1", "--json"]
+        );
         assert_eq!(args_adb_list(), vec!["adb", "list", "--json"]);
     }
 
     #[test]
     fn doctor_json_is_parsed_with_status_normalized_and_missing_fix_tolerated() {
         let report = parse_doctor_json(DOCTOR_JSON).unwrap();
-        assert_eq!(report.state_dir, "C:\\Users\\u\\AppData\\Roaming\\QemuCenter");
+        assert_eq!(
+            report.state_dir,
+            "C:\\Users\\u\\AppData\\Roaming\\QemuCenter"
+        );
         assert_eq!(report.checks.len(), 3);
         assert_eq!(report.checks[0].status, "fail");
         assert_eq!(report.checks[0].fix, "run qemu-center setup whpx");
@@ -1406,7 +1654,9 @@ mod tests {
 
     #[test]
     fn empty_registry_parses_to_no_vms() {
-        assert!(parse_vm_list_json("{\"version\":1,\"vms\":[]}").unwrap().is_empty());
+        assert!(parse_vm_list_json("{\"version\":1,\"vms\":[]}")
+            .unwrap()
+            .is_empty());
         assert!(parse_vm_list_json("{\"version\":1}").unwrap().is_empty());
     }
 
@@ -1508,6 +1758,33 @@ mod tests {
     }
 
     #[test]
+    fn app_hibernation_requires_an_exact_qemu_mapping() {
+        let rows = vec![QemuAdbMapping {
+            serial: "127.0.0.1:24501".into(),
+            vm: "node1".into(),
+            instance: "r13".into(),
+        }];
+        assert!(qemu_mapping_matches(
+            &rows,
+            "node1",
+            "r13",
+            "127.0.0.1:24501"
+        ));
+        assert!(!qemu_mapping_matches(
+            &rows,
+            "node1",
+            "r13",
+            "127.0.0.1:24500"
+        ));
+        assert!(!qemu_mapping_matches(
+            &rows,
+            "node2",
+            "r13",
+            "127.0.0.1:24501"
+        ));
+    }
+
+    #[test]
     fn malformed_json_reports_a_parse_error() {
         assert!(parse_doctor_json("not json").is_err());
         assert!(parse_verify_json("").is_err());
@@ -1547,7 +1824,10 @@ mod tests {
         assert!(vms[0].snapshots.is_empty());
         let raw = r#"{"version":1,"vms":[{"name":"node1","snapshots":["clean-1","v2"]}]}"#;
         let vms = parse_vm_list_json(raw).unwrap();
-        assert_eq!(vms[0].snapshots, vec!["clean-1".to_string(), "v2".to_string()]);
+        assert_eq!(
+            vms[0].snapshots,
+            vec!["clean-1".to_string(), "v2".to_string()]
+        );
     }
 
     // --- CLI staleness guard (binary older than qemu-center/src/*.rs) ---
@@ -1566,9 +1846,18 @@ mod tests {
     #[test]
     fn stale_from_mtimes_requires_a_strictly_newer_source() {
         let t = |secs: u64| std::time::UNIX_EPOCH + Duration::from_secs(secs);
-        assert!(stale_from_mtimes(Some(t(1_000)), Some(t(2_000))), "source newer → stale");
-        assert!(!stale_from_mtimes(Some(t(2_000)), Some(t(1_000))), "rebuilt → fresh");
-        assert!(!stale_from_mtimes(Some(t(2_000)), Some(t(2_000))), "equal → fresh");
+        assert!(
+            stale_from_mtimes(Some(t(1_000)), Some(t(2_000))),
+            "source newer → stale"
+        );
+        assert!(
+            !stale_from_mtimes(Some(t(2_000)), Some(t(1_000))),
+            "rebuilt → fresh"
+        );
+        assert!(
+            !stale_from_mtimes(Some(t(2_000)), Some(t(2_000))),
+            "equal → fresh"
+        );
         // Undecidable (unreadable binary / no sources) → fresh, never blocks.
         assert!(!stale_from_mtimes(None, Some(t(2_000))));
         assert!(!stale_from_mtimes(Some(t(1_000)), None));
@@ -1631,8 +1920,9 @@ mod tests {
 
     #[test]
     fn stale_warning_carries_the_rebuild_hint() {
-        let warning =
-            stale_cli_warning(Path::new("F:/repo/qemu-center/target/debug/qemu-center.exe"));
+        let warning = stale_cli_warning(Path::new(
+            "F:/repo/qemu-center/target/debug/qemu-center.exe",
+        ));
         assert!(warning.starts_with("[warn]"));
         assert!(warning.contains("qemu-center.exe"));
         assert!(warning.contains("落后于源码"));

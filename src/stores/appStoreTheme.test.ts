@@ -41,6 +41,7 @@ describe("tri-state theme preference", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     document.documentElement.removeAttribute("data-theme");
   });
@@ -70,7 +71,7 @@ describe("tri-state theme preference", () => {
       addEventListener: vi.fn((_k: string, fn: () => void) => listeners.add(fn)),
       removeEventListener: vi.fn((_k: string, fn: () => void) => listeners.delete(fn)),
     };
-    vi.spyOn(window, "matchMedia").mockReturnValue(mql as unknown as MediaQueryList);
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue(mql as unknown as MediaQueryList));
 
     useAppStore.getState().setTheme("system");
     expect(useAppStore.getState().themePref).toBe("system");

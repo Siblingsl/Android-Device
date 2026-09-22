@@ -9,6 +9,7 @@
 //! parser.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -17,6 +18,70 @@ use crate::exec;
 /// Minimum free space on the state-dir drive before `vm create` is sensible
 /// (one Ubuntu cloud image ≈ 3 GiB + qcow2 growth for a 40 GiB virtual disk).
 pub const MIN_FREE_BYTES: u64 = 40 * 1024 * 1024 * 1024;
+
+/// PowerShell/CIM argv for the host's currently available physical memory.
+/// `FreePhysicalMemory` is a locale-neutral KiB value.
+pub fn free_physical_memory_command() -> Vec<String> {
+    vec![
+        "powershell".into(),
+        "-NoProfile".into(),
+        "-Command".into(),
+        "(Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory".into(),
+    ]
+}
+
+/// Parse the bare KiB value emitted by [`free_physical_memory_command`].
+/// Empty output, localized error text, commas, and trailing tokens remain
+/// unknown rather than being guessed as a safe amount.
+pub fn parse_free_physical_memory_kib(stdout: &str) -> Option<u64> {
+    let value = stdout.trim();
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse::<u64>().ok()?.checked_mul(1024)
+}
+
+/// Parse Linux `/proc/meminfo`'s `MemAvailable` field into bytes.
+pub fn parse_meminfo_available_bytes(contents: &str) -> Option<u64> {
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some("MemAvailable:") {
+            continue;
+        }
+        let kib = fields.next()?.parse::<u64>().ok()?;
+        if fields.next() != Some("kB") {
+            return None;
+        }
+        return kib.checked_mul(1024);
+    }
+    None
+}
+
+/// Read host available memory without changing any state. The Windows path
+/// uses CIM; Linux uses the kernel's MemAvailable estimate. Other platforms
+/// deliberately remain unknown rather than inventing a value.
+pub fn host_available_memory_bytes() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        let result = exec::run_command(&free_physical_memory_command(), Duration::from_secs(10));
+        return result
+            .success
+            .then(|| parse_free_physical_memory_kib(&result.stdout))
+            .flatten();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|contents| parse_meminfo_available_bytes(&contents));
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
+    }
+}
 
 // ------------------------------------------------------------------ models --
 
@@ -243,7 +308,13 @@ pub fn candidate_qemu_dirs(
     let mut dirs = parse_path_env(path_env);
     if let Some(h) = home {
         dirs.push(h.join("scoop").join("shims"));
-        dirs.push(h.join("AppData").join("Local").join("Microsoft").join("WinGet").join("Links"));
+        dirs.push(
+            h.join("AppData")
+                .join("Local")
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+        );
     }
     if let Some(pf) = program_files {
         dirs.push(pf.join("QEMU"));
@@ -272,7 +343,11 @@ pub fn find_qemu_in(dirs: &[PathBuf]) -> Option<PathBuf> {
 
 /// qemu-img sits next to qemu-system-x86_64 in every distribution layout.
 pub fn find_qemu_img_in(dirs: &[PathBuf]) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "qemu-img.exe" } else { "qemu-img" };
+    let name = if cfg!(windows) {
+        "qemu-img.exe"
+    } else {
+        "qemu-img"
+    };
     for d in dirs {
         let p = d.join(name);
         if p.is_file() {
@@ -394,7 +469,12 @@ pub fn parse_cim_free_bytes(stdout: &str) -> Option<u64> {
 /// `fsutil volume diskfree <drive>` argv. Fallback probe — text parsing is
 /// fragile under app-spawn environments (see [`cim_diskfree_command`]).
 pub fn fsutil_diskfree_command(drive: &str) -> Vec<String> {
-    vec!["fsutil".into(), "volume".into(), "diskfree".into(), drive.into()]
+    vec![
+        "fsutil".into(),
+        "volume".into(),
+        "diskfree".into(),
+        drive.into(),
+    ]
 }
 
 /// Parse `fsutil volume diskfree C:` — observed Windows output formats:
@@ -410,7 +490,10 @@ pub fn parse_fsutil_free_bytes(stdout: &str) -> Option<u64> {
     fn largest_candidate(line: &str) -> Option<u64> {
         line.split_whitespace()
             .filter_map(|tok| {
-                let cleaned: String = tok.chars().filter(|c| c.is_ascii_digit() || *c == ',').collect();
+                let cleaned: String = tok
+                    .chars()
+                    .filter(|c| c.is_ascii_digit() || *c == ',')
+                    .collect();
                 let digits = cleaned.replace(',', "");
                 // Skip tokens that only became digits by stripping a '.' out
                 // of a human-readable size AND are implausibly small either way;
@@ -426,7 +509,8 @@ pub fn parse_fsutil_free_bytes(stdout: &str) -> Option<u64> {
     let mut fallback = None;
     for line in stdout.lines() {
         let lower = line.to_ascii_lowercase();
-        let is_label = lower.starts_with("total") && lower.contains("free bytes") && !lower.contains("avail");
+        let is_label =
+            lower.starts_with("total") && lower.contains("free bytes") && !lower.contains("avail");
         if let Some(v) = largest_candidate(line) {
             if is_label {
                 return Some(v);
@@ -468,7 +552,11 @@ pub fn judge_disk_free(free: Option<u64>) -> (CheckStatus, String) {
     match free {
         Some(b) if b >= MIN_FREE_BYTES => (
             CheckStatus::Ok,
-            format!("{:.1} GiB free (>= {} GiB)", b as f64 / (1 << 30) as f64, MIN_FREE_BYTES >> 30),
+            format!(
+                "{:.1} GiB free (>= {} GiB)",
+                b as f64 / (1 << 30) as f64,
+                MIN_FREE_BYTES >> 30
+            ),
         ),
         Some(b) => (
             CheckStatus::Fail,
@@ -478,7 +566,10 @@ pub fn judge_disk_free(free: Option<u64>) -> (CheckStatus, String) {
                 MIN_FREE_BYTES >> 30
             ),
         ),
-        None => (CheckStatus::Unknown, "could not determine free space".into()),
+        None => (
+            CheckStatus::Unknown,
+            "could not determine free space".into(),
+        ),
     }
 }
 
@@ -674,8 +765,12 @@ pub fn candidate_qemu_dirs_from_env() -> Vec<PathBuf> {
             .or_else(|| std::env::var_os("HOME"))
             .map(PathBuf::from)
             .as_deref(),
-        std::env::var_os("ProgramFiles").map(PathBuf::from).as_deref(),
-        std::env::var_os("ProgramData").map(PathBuf::from).as_deref(),
+        std::env::var_os("ProgramFiles")
+            .map(PathBuf::from)
+            .as_deref(),
+        std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .as_deref(),
     )
 }
 
@@ -755,7 +850,11 @@ fn check_disk_free(state_dir: &Path) -> DoctorCheck {
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>();
-    let drive = if drive.len() == 1 { format!("{drive}:") } else { "C:".to_string() };
+    let drive = if drive.len() == 1 {
+        format!("{drive}:")
+    } else {
+        "C:".to_string()
+    };
 
     // Primary: CIM — structured, locale-neutral.
     let cim_argv = cim_diskfree_command(&drive);
@@ -803,7 +902,11 @@ fn check_tool(id: &'static str, title: &'static str, exe: &str, required: bool) 
     let (status, detail) = match parse_where_output(&out.stdout) {
         Some(p) if out.success => (CheckStatus::Ok, p),
         _ => (
-            if required { CheckStatus::Fail } else { CheckStatus::Unknown },
+            if required {
+                CheckStatus::Fail
+            } else {
+                CheckStatus::Unknown
+            },
             format!("{exe} not found"),
         ),
     };
@@ -978,7 +1081,9 @@ mod tests {
         );
         assert!(dirs.contains(&PathBuf::from("C:\\a")));
         assert_eq!(
-            dirs.iter().filter(|d| **d == PathBuf::from("C:\\a")).count(),
+            dirs.iter()
+                .filter(|d| **d == PathBuf::from("C:\\a"))
+                .count(),
             1,
             "duplicates removed"
         );
@@ -997,9 +1102,20 @@ mod tests {
         let exe = tmp.join(qemu_program_name());
         std::fs::write(&exe, b"stub").unwrap();
         assert_eq!(find_qemu_in(&[tmp.clone()]), Some(exe.clone()));
-        assert_eq!(find_qemu_img_in(&[tmp.clone()]), None, "qemu-img not written");
-        std::fs::write(tmp.join(if cfg!(windows) { "qemu-img.exe" } else { "qemu-img" }), b"x")
-            .unwrap();
+        assert_eq!(
+            find_qemu_img_in(&[tmp.clone()]),
+            None,
+            "qemu-img not written"
+        );
+        std::fs::write(
+            tmp.join(if cfg!(windows) {
+                "qemu-img.exe"
+            } else {
+                "qemu-img"
+            }),
+            b"x",
+        )
+        .unwrap();
         assert!(find_qemu_img_in(&[tmp.clone()]).is_some());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1022,7 +1138,10 @@ mod tests {
             .count();
         assert_eq!(count, 1);
         // None = environment candidates only (back-compat surface).
-        assert_eq!(candidate_qemu_dirs_with(None), candidate_qemu_dirs_from_env());
+        assert_eq!(
+            candidate_qemu_dirs_with(None),
+            candidate_qemu_dirs_from_env()
+        );
     }
 
     #[test]
@@ -1035,8 +1154,15 @@ mod tests {
         assert_eq!(find_qemu_in(&[portable.clone()]), None);
         let exe = portable.join(qemu_program_name());
         std::fs::write(&exe, b"stub").unwrap();
-        std::fs::write(portable.join(if cfg!(windows) { "qemu-img.exe" } else { "qemu-img" }), b"stub")
-            .unwrap();
+        std::fs::write(
+            portable.join(if cfg!(windows) {
+                "qemu-img.exe"
+            } else {
+                "qemu-img"
+            }),
+            b"stub",
+        )
+        .unwrap();
         // On a machine with no machine-wide QEMU, the portable copy is what
         // gets found (it is the only remaining candidate).
         if discover_qemu_bin_with(None).is_none() {
@@ -1065,11 +1191,15 @@ mod tests {
 
     #[test]
     fn probe_command_uses_q35_and_stays_safe_and_minimal() {
-        let cmd = qemu_whpx_probe_command(Path::new("C:/Program Files/QEMU/qemu-system-x86_64.exe"));
+        let cmd =
+            qemu_whpx_probe_command(Path::new("C:/Program Files/QEMU/qemu-system-x86_64.exe"));
         assert_eq!(cmd[0], "C:/Program Files/QEMU/qemu-system-x86_64.exe");
         let s = cmd.join(" ");
         assert!(s.contains("-accel whpx"));
-        assert!(s.contains("-machine q35"), "QEMU 11.x rejects -machine none");
+        assert!(
+            s.contains("-machine q35"),
+            "QEMU 11.x rejects -machine none"
+        );
         assert!(!s.contains("-machine none"));
         assert!(s.contains("-display none"));
         assert!(s.contains("-S"), "CPU paused — nothing actually executes");
@@ -1175,18 +1305,65 @@ mod tests {
     #[test]
     fn cim_free_bytes_parses_real_and_rejects_garbage() {
         // Real sample shape: bare integer + CRLF.
-        assert_eq!(parse_cim_free_bytes("339468333056\r\n"), Some(339_468_333_056));
+        assert_eq!(
+            parse_cim_free_bytes("339468333056\r\n"),
+            Some(339_468_333_056)
+        );
         assert_eq!(parse_cim_free_bytes("339468333056"), Some(339_468_333_056));
-        assert_eq!(parse_cim_free_bytes("  339468333056 \n"), Some(339_468_333_056));
+        assert_eq!(
+            parse_cim_free_bytes("  339468333056 \n"),
+            Some(339_468_333_056)
+        );
         // Empty / whitespace-only output (no matching instance).
         assert_eq!(parse_cim_free_bytes(""), None);
         assert_eq!(parse_cim_free_bytes("   \r\n"), None);
         // PowerShell error text and anything non-numeric → None (caller
         // falls back to fsutil; never invent a size).
-        assert_eq!(parse_cim_free_bytes("Get-CimInstance : Access denied"), None);
+        assert_eq!(
+            parse_cim_free_bytes("Get-CimInstance : Access denied"),
+            None
+        );
         assert_eq!(parse_cim_free_bytes("not-a-number"), None);
         assert_eq!(parse_cim_free_bytes("12,345"), None);
         assert_eq!(parse_cim_free_bytes("339468333056 bytes"), None);
+    }
+
+    #[test]
+    fn free_physical_memory_probe_parses_kib_without_accepting_noise() {
+        assert_eq!(
+            parse_free_physical_memory_kib("3145728\r\n"),
+            Some(3 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            parse_free_physical_memory_kib("  1024 \n"),
+            Some(1024 * 1024)
+        );
+        assert_eq!(parse_free_physical_memory_kib(""), None);
+        assert_eq!(parse_free_physical_memory_kib("Access denied"), None);
+        assert_eq!(parse_free_physical_memory_kib("1,024"), None);
+    }
+
+    #[test]
+    fn meminfo_available_parser_accepts_only_a_valid_memavailable_line() {
+        assert_eq!(
+            parse_meminfo_available_bytes("MemTotal: 16384000 kB\nMemAvailable: 3145728 kB\n"),
+            Some(3 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(parse_meminfo_available_bytes("MemFree: 1024 kB\n"), None);
+        assert_eq!(
+            parse_meminfo_available_bytes("MemAvailable: nope kB\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn free_physical_memory_command_is_a_locale_neutral_cim_query() {
+        let command = free_physical_memory_command();
+        assert_eq!(command[0], "powershell");
+        assert!(command.iter().any(|arg| arg == "-NoProfile"));
+        let joined = command.join(" ");
+        assert!(joined.contains("Win32_OperatingSystem"));
+        assert!(joined.contains("FreePhysicalMemory"));
     }
 
     #[test]
@@ -1212,11 +1389,20 @@ mod tests {
             "Get-CimInstance : The service cannot be started\nmore lines",
             "Total free bytes   : (garbage)",
         );
-        assert!(detail2.contains("cim: Get-CimInstance : The service cannot be started;"), "{detail2}");
-        assert!(detail2.contains("fsutil: Total free bytes   : (garbage)"), "{detail2}");
+        assert!(
+            detail2.contains("cim: Get-CimInstance : The service cannot be started;"),
+            "{detail2}"
+        );
+        assert!(
+            detail2.contains("fsutil: Total free bytes   : (garbage)"),
+            "{detail2}"
+        );
         // Blank stdout on both sides renders as `empty`.
         let blank = diskfree_unknown_detail("\r\n", "");
-        assert_eq!(blank, "could not determine free space (cim: empty; fsutil: empty)");
+        assert_eq!(
+            blank,
+            "could not determine free space (cim: empty; fsutil: empty)"
+        );
     }
 
     #[test]

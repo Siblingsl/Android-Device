@@ -87,7 +87,7 @@ export function ConfigTransfer({ settings, onImported, setStatusText }: Props) {
     <Card className="config-transfer" title="配置导入 / 导出">
       <div className="config-transfer-row">
         <div>
-          <div className="config-transfer-title">迁移设置、设备备注、布局和快捷键</div>
+          <div className="config-transfer-title">迁移设置、设备备注和快捷键</div>
           <div className="muted">导出的 JSON 不包含设备密码或运行中的临时会话，但会包含 AI 配置中的 API Key；请妥善保存导出文件。导入前会先校验版本和内容。</div>
         </div>
         <div className="row">
@@ -104,7 +104,6 @@ export function ConfigTransfer({ settings, onImported, setStatusText }: Props) {
           <div className="config-import-preview-grid">
             <span>应用设置</span><strong>将覆盖</strong>
             <span>设备信息</span><strong>{Object.keys(pending.deviceMetadata).length} 条</strong>
-            <span>窗口布局</span><strong>{pending.arrangement.length} 项</strong>
             <span>快捷键</span><strong>{pending.shortcuts.length} 条</strong>
             <span>键盘映射</span><strong>{pending.keyboardMappings.length} 条</strong>
             <span>自动化脚本</span><strong>{pending.automationScripts.length} 个</strong>

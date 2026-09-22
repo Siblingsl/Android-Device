@@ -1,5 +1,8 @@
 """Node-side preset runner. Python stdlib; Docker only inside the QEMU guest."""
 import copy
+import base64
+import binascii
+import hashlib
 import http.client
 import json
 import os
@@ -9,11 +12,394 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 SDK_VERSIONS = {29: "10", 30: "11", 31: "12", 32: "12", 33: "13", 34: "14", 35: "15", 36: "16"}
+
+# These values are rendered into the protected artifact at release time. The
+# guest must trust a key shipped with the artifact itself; accepting a key from
+# the request would let a copied runner mint its own execution grants.
+EXECUTION_GRANT_KEY_ID = "__RDC_EXECUTION_KEY_ID__"
+EXECUTION_GRANT_PUBLIC_KEY = "__RDC_EXECUTION_PUBLIC_KEY__"
+EXECUTION_GRANT_CONSUME_URL = "__RDC_EXECUTION_CONSUME_URL__"
+EXECUTION_GRANT_ISSUER = "rdc-auth"
+EXECUTION_GRANT_AUDIENCE = "rdc-guest-runner"
+EXECUTION_AUTHORIZATION_AUDIENCE = "rdc-qemu-center"
+EXECUTION_GRANT_CLOCK_SKEW_SECS = 300
+EXECUTION_GRANT_MAX_REQUEST_AGE_SECS = 300
+MAX_EXECUTION_GRANT_FIELD_BYTES = 256
+MAX_EXECUTION_GRANT_PAYLOAD_BYTES = 64 * 1024
+MAX_EXECUTION_CONSUME_RESPONSE_BYTES = 64 * 1024
+MAX_REQUEST_BYTES = 64 * 1024
+MAX_SUBPROCESS_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_DOCKER_RESPONSE_BYTES = 1 * 1024 * 1024
+EXECUTION_AUTHORIZATION_ROOT = "/run/rdc-presets"
+
+
+def _decode_urlsafe_base64(value, label, max_bytes=None):
+    if not isinstance(value, str) or not value:
+        raise ValueError("Invalid execution grant " + label)
+    if max_bytes is not None and len(value) > ((max_bytes + 2) // 3) * 4 + 4:
+        raise ValueError("Execution grant " + label + " is too large")
+    try:
+        padding = "=" * (-len(value) % 4)
+        decoded = base64.urlsafe_b64decode(value + padding)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("Invalid execution grant " + label) from error
+    if max_bytes is not None and len(decoded) > max_bytes:
+        raise ValueError("Execution grant " + label + " is too large")
+    return decoded
+
+
+def _ed25519_public_key_pem(public_key):
+    raw = _decode_urlsafe_base64(public_key, "public key", 32)
+    if len(raw) != 32:
+        raise ValueError("Invalid execution grant public key")
+    der = bytes.fromhex("302a300506032b6570032100") + raw
+    encoded = base64.b64encode(der).decode("ascii")
+    return "-----BEGIN PUBLIC KEY-----\n" + encoded + "\n-----END PUBLIC KEY-----\n"
+
+
+def verify_execution_grant(request, expected_workflow, expected_vm, expected_instance):
+    grant = request.get("executionGrant")
+    if not isinstance(grant, dict):
+        raise ValueError("A signed execution grant is required")
+    if not isinstance(grant.get("device_proof"), str) or not grant["device_proof"]:
+        raise ValueError("Execution grant device proof is required")
+    if grant.get("key_id") != EXECUTION_GRANT_KEY_ID:
+        raise ValueError("Execution grant key is not trusted")
+    payload = _decode_urlsafe_base64(grant.get("payload"), "payload", MAX_EXECUTION_GRANT_PAYLOAD_BYTES)
+    signature = _decode_urlsafe_base64(grant.get("signature"), "signature", 64)
+    if len(signature) != 64:
+        raise ValueError("Invalid execution grant signature")
+    with tempfile.TemporaryDirectory(prefix="rdc-grant-") as temp:
+        root = Path(temp)
+        public_key = root / "grant.pub"
+        signed_payload = root / "grant.payload"
+        signed_signature = root / "grant.sig"
+        public_key.write_text(_ed25519_public_key_pem(EXECUTION_GRANT_PUBLIC_KEY))
+        signed_payload.write_bytes(payload)
+        signed_signature.write_bytes(signature)
+        checked = subprocess.run(
+            ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(public_key),
+             "-rawin", "-in", str(signed_payload), "-sigfile", str(signed_signature)],
+            capture_output=True, text=True, timeout=10,
+        )
+    if checked.returncode != 0:
+        raise ValueError("Execution grant signature is invalid")
+    try:
+        claims = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Execution grant payload is invalid") from error
+    if not isinstance(claims, dict):
+        raise ValueError("Execution grant payload is not an object")
+    required = ("iss", "aud", "client_id", "device_id", "session_id", "client_version", "artifact_id",
+                "artifact_sha256", "action", "vm", "instance", "iat", "exp", "jti", "nonce")
+    if any(not claims.get(field) for field in required):
+        raise ValueError("Execution grant payload is incomplete")
+    string_fields = tuple(field for field in required if field not in ("iat", "exp"))
+    if any(not isinstance(claims[field], str) for field in string_fields):
+        raise ValueError("Execution grant payload is incomplete")
+    if any(len(claims[field]) > MAX_EXECUTION_GRANT_FIELD_BYTES for field in
+           ("client_id", "device_id", "session_id", "client_version", "artifact_id",
+            "action", "vm", "instance", "jti", "nonce")):
+        raise ValueError("Execution grant payload field is too large")
+    if claims["iss"] != EXECUTION_GRANT_ISSUER or claims["aud"] != EXECUTION_GRANT_AUDIENCE:
+        raise ValueError("Execution grant issuer or audience is invalid")
+    if type(claims["iat"]) is not int or type(claims["exp"]) is not int:
+        raise ValueError("Execution grant timestamps are invalid")
+    now = int(time.time())
+    if claims["exp"] <= now \
+            or claims["iat"] < now - EXECUTION_GRANT_MAX_REQUEST_AGE_SECS \
+            or claims["iat"] > now + EXECUTION_GRANT_CLOCK_SKEW_SECS:
+        raise ValueError("Execution grant is expired or not yet valid")
+    if claims["exp"] <= claims["iat"]:
+        raise ValueError("Execution grant expiry is invalid")
+    if claims["action"] != expected_workflow or claims["vm"] != expected_vm \
+            or claims["instance"] != expected_instance:
+        raise ValueError("Execution grant is bound to another operation")
+    if len(claims["artifact_sha256"]) != 64 or \
+            claims["artifact_sha256"] != hashlib.sha256(Path(__file__).read_bytes()).hexdigest():
+        raise ValueError("Execution grant is bound to another core artifact")
+    return claims
+
+
+def consume_execution_grant(grant):
+    endpoint = EXECUTION_GRANT_CONSUME_URL
+    if not isinstance(endpoint, str) or not endpoint or endpoint.startswith("__RDC_EXECUTION_"):
+        raise ValueError("Execution grant consume service is not configured")
+    parsed = urlsplit(endpoint)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.fragment:
+        raise ValueError("Execution grant consume URL is invalid")
+    if parsed.scheme == "http" and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("Execution grant consume URL must use HTTPS")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Execution grant consume URL port is invalid") from error
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    body = json.dumps({"grant": grant}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    connection_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connection = None
+    try:
+        connection = connection_class(parsed.hostname, port, timeout=10)
+        connection.request(
+            "POST",
+            path,
+            body=body,
+            headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
+        )
+        response = connection.getresponse()
+        if response.status == 200:
+            content_length = None
+            getheader = getattr(response, "getheader", None)
+            if getheader is not None:
+                content_length = getheader("Content-Length")
+            if content_length is not None:
+                try:
+                    declared_length = int(content_length)
+                except (TypeError, ValueError) as error:
+                    raise ValueError("Execution authorization receipt size is invalid") from error
+                if declared_length < 0 or declared_length > MAX_EXECUTION_CONSUME_RESPONSE_BYTES:
+                    raise ValueError("Execution authorization receipt is too large")
+            raw = response.read(MAX_EXECUTION_CONSUME_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_EXECUTION_CONSUME_RESPONSE_BYTES:
+                raise ValueError("Execution authorization receipt is too large")
+        if response.status == 200:
+            try:
+                receipt = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("Execution authorization receipt is invalid") from error
+            if not isinstance(receipt, dict):
+                raise ValueError("Execution authorization receipt is invalid")
+            return receipt
+        if response.status == 409:
+            raise ValueError("Execution grant has already been consumed")
+        raise ValueError("Execution grant consume request was rejected")
+    except (OSError, TimeoutError, http.client.HTTPException) as error:
+        raise ValueError("Execution grant consume service is unavailable") from error
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _execution_authorization_marker(request):
+    raw = request.get("executionAuthorizationPath")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Execution authorization marker is required")
+    root = str(EXECUTION_AUTHORIZATION_ROOT).replace("\\", "/").rstrip("/")
+    normalized = raw.replace("\\", "/")
+    if not normalized.startswith(root + "/") or "/../" in normalized or normalized.endswith("/.."):
+        raise ValueError("Execution authorization marker path is invalid")
+    marker = Path(raw)
+    if marker.name != "execution-authorized":
+        raise ValueError("Execution authorization marker name is invalid")
+    return marker
+
+
+def _validate_immutable_image_ref(image):
+    if not isinstance(image, str):
+        raise ValueError("Protected image must use a complete SHA-256 digest")
+    name, separator, digest = image.partition("@sha256:")
+    if not separator or not name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:~-]*", name):
+        raise ValueError("Protected image must use a complete SHA-256 digest")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        raise ValueError("Protected image must use a complete SHA-256 digest")
+
+
+def validate_runner_request(request, request_path=None):
+    if not isinstance(request, dict):
+        raise ValueError("Protected core request is invalid")
+    action = request.get("action")
+    if action not in {"authorize", "activate", "build", "seed", "upgrade", "restore", "details"}:
+        raise ValueError("Unknown guest action")
+    module_ids = request.get("moduleIds", [])
+    if not isinstance(module_ids, list) or len(module_ids) > 64 \
+            or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value)
+                   for value in module_ids):
+        raise ValueError("Invalid module id list")
+    expected_props = request.get("expectedProps", {})
+    if not isinstance(expected_props, dict) or len(expected_props) > 64 \
+            or any(not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", key)
+                   or not isinstance(value, str) or len(value) > 512
+                   for key, value in expected_props.items()):
+        raise ValueError("Invalid expected property map")
+    hide_packages = request.get("hidePackages", [])
+    if not isinstance(hide_packages, list) or len(hide_packages) > 128 \
+            or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._$]{1,128}", value)
+                   for value in hide_packages):
+        raise ValueError("Invalid hidden package list")
+    context = request.get("context")
+    if context is not None:
+        if not isinstance(context, str) or len(context) > 512 or not Path(context).is_absolute():
+            raise ValueError("Build context path is invalid")
+        root = Path(EXECUTION_AUTHORIZATION_ROOT).resolve()
+        resolved = Path(context).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as error:
+            raise ValueError("Build context path is outside the protected root") from error
+        if request_path is not None and resolved != Path(request_path).resolve().parent:
+            raise ValueError("Build context path does not match the request directory")
+    if action == "build":
+        _validate_immutable_image_ref(request.get("baseImage"))
+
+
+def read_bounded_request(request_path):
+    request_path = Path(request_path)
+    try:
+        raw = request_path.read_bytes()
+    except OSError as error:
+        raise ValueError("Protected core request cannot be read") from error
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("Protected core request is too large")
+    try:
+        request = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Protected core request is invalid") from error
+    validate_runner_request(request, request_path)
+    return request
+
+
+def run_bounded_subprocess(args, timeout=120):
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output = {"stdout": bytearray(), "stderr": bytearray(), "overflow": False}
+    lock = threading.Lock()
+
+    def read_stream(name, stream):
+        while True:
+            chunk = stream.read(8192)
+            if not chunk:
+                return
+            with lock:
+                if len(output[name]) + len(chunk) > MAX_SUBPROCESS_OUTPUT_BYTES:
+                    output["overflow"] = True
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    return
+                output[name].extend(chunk)
+
+    readers = [threading.Thread(target=read_stream, args=(name, stream), daemon=True)
+               for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))]
+    for reader in readers:
+        reader.start()
+    try:
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        for reader in readers:
+            reader.join()
+        for stream in (process.stdout, process.stderr):
+            stream.close()
+        raise
+    for reader in readers:
+        reader.join()
+    for stream in (process.stdout, process.stderr):
+        stream.close()
+    if output["overflow"]:
+        raise ValueError("Subprocess output is too large")
+    return subprocess.CompletedProcess(
+        args,
+        return_code,
+        bytes(output["stdout"]).decode(errors="replace"),
+        bytes(output["stderr"]).decode(errors="replace"),
+    )
+
+
+def _verify_execution_authorization_receipt(receipt, claims):
+    if not isinstance(receipt, dict):
+        raise ValueError("Execution authorization receipt is invalid")
+    if receipt.get("key_id") != EXECUTION_GRANT_KEY_ID:
+        raise ValueError("Execution authorization receipt key is not trusted")
+    payload = _decode_urlsafe_base64(receipt.get("payload"), "authorization receipt payload",
+                                     MAX_EXECUTION_GRANT_PAYLOAD_BYTES)
+    signature = _decode_urlsafe_base64(receipt.get("signature"), "authorization receipt signature", 64)
+    if len(signature) != 64:
+        raise ValueError("Invalid execution authorization receipt signature")
+    with tempfile.TemporaryDirectory(prefix="rdc-receipt-") as temp:
+        root = Path(temp)
+        public_key = root / "receipt.pub"
+        signed_payload = root / "receipt.payload"
+        signed_signature = root / "receipt.sig"
+        public_key.write_text(_ed25519_public_key_pem(EXECUTION_GRANT_PUBLIC_KEY))
+        signed_payload.write_bytes(payload)
+        signed_signature.write_bytes(signature)
+        checked = subprocess.run(
+            ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", str(public_key),
+             "-rawin", "-in", str(signed_payload), "-sigfile", str(signed_signature)],
+            capture_output=True, text=True, timeout=10,
+        )
+    if checked.returncode != 0:
+        raise ValueError("Execution authorization receipt signature is invalid")
+    try:
+        receipt_claims = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Execution authorization receipt payload is invalid") from error
+    required = ("iss", "aud", "client_id", "device_id", "session_id", "client_version",
+                "artifact_id", "artifact_sha256", "action", "vm", "instance", "grant_jti",
+                "iat", "exp")
+    if not isinstance(receipt_claims, dict) or any(not receipt_claims.get(field) for field in required):
+        raise ValueError("Execution authorization receipt payload is incomplete")
+    if receipt_claims["iss"] != EXECUTION_GRANT_ISSUER \
+            or receipt_claims["aud"] != EXECUTION_AUTHORIZATION_AUDIENCE:
+        raise ValueError("Execution authorization receipt issuer or audience is invalid")
+    if type(receipt_claims["iat"]) is not int or type(receipt_claims["exp"]) is not int:
+        raise ValueError("Execution authorization receipt timestamps are invalid")
+    now = int(time.time())
+    if receipt_claims["exp"] <= now or receipt_claims["iat"] > now + EXECUTION_GRANT_CLOCK_SKEW_SECS \
+            or receipt_claims["exp"] <= receipt_claims["iat"]:
+        raise ValueError("Execution authorization receipt is expired or not yet valid")
+    for field in ("client_id", "device_id", "session_id", "client_version", "artifact_id",
+                  "artifact_sha256", "action", "vm", "instance"):
+        if receipt_claims[field] != claims[field]:
+            raise ValueError("Execution authorization receipt is bound to another operation")
+    if receipt_claims["grant_jti"] != claims["jti"]:
+        raise ValueError("Execution authorization receipt is bound to another grant")
+    return receipt_claims
+
+
+def write_execution_authorization_marker(request, claims, receipt):
+    _verify_execution_authorization_receipt(receipt, claims)
+    marker = _execution_authorization_marker(request)
+    try:
+        descriptor = os.open(str(marker), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise ValueError("Execution authorization marker already exists") from error
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(receipt, separators=(",", ":"), ensure_ascii=False))
+        if os.name == "posix":
+            import pwd
+            owner = pwd.getpwnam("rdc")
+            os.chown(marker, owner.pw_uid, owner.pw_gid)
+        os.chmod(marker, 0o600)
+    except Exception as error:
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+        raise ValueError("Execution authorization marker cannot be secured") from error
+
+
+def require_execution_authorization_marker(request, claims):
+    marker = _execution_authorization_marker(request)
+    try:
+        value = marker.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("Execution authorization marker is missing") from error
+    try:
+        receipt = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError("Execution authorization marker is not a signed receipt") from error
+    _verify_execution_authorization_receipt(receipt, claims)
 
 
 def android_version(props):
@@ -62,7 +448,7 @@ class UnixHTTP(http.client.HTTPConnection):
 
 class Docker:
     def cli(self, *args, timeout=120):
-        result = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
+        result = run_bounded_subprocess(["docker", *args], timeout=timeout)
         if result.returncode:
             raise RuntimeError("docker " + args[0] + ": " + result.stderr.strip())
         return result.stdout.strip()
@@ -83,7 +469,10 @@ class Docker:
             connection.request("POST", "/containers/create?name=" + quote(name, safe=""),
                                json.dumps(config), {"Content-Type": "application/json"})
             response = connection.getresponse()
-            body = response.read().decode()
+            body = response.read(MAX_DOCKER_RESPONSE_BYTES + 1)
+            if len(body) > MAX_DOCKER_RESPONSE_BYTES:
+                raise ValueError("Docker response is too large")
+            body = body.decode(errors="replace")
             if response.status != 201:
                 raise RuntimeError("container create: " + body)
             return json.loads(body)["Id"]
@@ -414,16 +803,35 @@ def details(docker, request):
     print(json.dumps(rows))
 
 
-def main(request):
-    import fcntl
+def main(request, request_path=None):
+    validate_runner_request(request, request_path)
     name = request.get("name", "")
     if name and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,23}", name):
         raise ValueError("Invalid instance name")
     action = request["action"]
+    workflow = {"details": "preset_details", "restore": "preset_restore"}.get(
+        action, "preset_apply")
+    expected_instance = request.get("executionInstance", name)
+    grant = request.get("executionGrant")
+    claims = verify_execution_grant(request, workflow, request.get("vm", ""), expected_instance)
+    if action == "authorize":
+        receipt = consume_execution_grant(grant)
+        write_execution_authorization_marker(request, claims, receipt)
+        print("[authorized] execution grant consumed", flush=True)
+        return
+    if action == "activate":
+        require_execution_authorization_marker(request, claims)
+        # The activation grant was consumed by the guest preflight before the
+        # host-side Docker create. Remove the marker before protected work so
+        # the same one-time authorization cannot be replayed.
+        _execution_authorization_marker(request).unlink()
+    else:
+        consume_execution_grant(grant)
     docker = Docker()
     if action == "details":
         details(docker, request)
         return
+    import fcntl
     # Prevent repeated clicks or independent app invocations racing on one instance.
     lock_path = Path("/var/lock/rdc-qemu-" + (name or "images") + ".lock")
     with lock_path.open("w") as lock:
@@ -458,7 +866,8 @@ def main(request):
 
 if __name__ == "__main__":
     try:
-        main(json.loads(Path(sys.argv[1]).read_text()))
+        request_path = Path(sys.argv[1])
+        main(read_bounded_request(request_path), request_path)
     except Exception as error:
         print("[error] " + str(error), file=sys.stderr)
         sys.exit(1)

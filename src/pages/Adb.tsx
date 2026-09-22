@@ -9,7 +9,6 @@ import { DeviceService } from "../services/deviceService";
 import { askConfirm } from "../lib/dialogs";
 import { createRequestSequence } from "../lib/requestSequence";
 import { probeTool, type ProbeHit } from "../hooks/useToolProbe";
-import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type { AdbInfo, LanScanResult } from "../types";
@@ -181,11 +180,6 @@ export function AdbPage() {
         <Button icon={<RefreshCw size={15} />} onClick={() => void load()}>
           {t("adb.scan")}
         </Button>
-      </div>
-
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <ToolStatus kind="adb" hit={tools.adb} />
-        <ToolStatus kind="docker" hit={tools.docker} />
       </div>
 
       <div className="grid-stats">

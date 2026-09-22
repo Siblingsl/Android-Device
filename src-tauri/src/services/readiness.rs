@@ -226,11 +226,7 @@ pub fn parse_whpx_state(stdout: &str) -> Option<bool> {
     }
     for line in stdout.lines() {
         let mut parts = line.trim().split(':');
-        if parts
-            .next()
-            .map(|k| k.trim().eq_ignore_ascii_case("State"))
-            == Some(true)
-        {
+        if parts.next().map(|k| k.trim().eq_ignore_ascii_case("State")) == Some(true) {
             if let Some(value) = parts.next() {
                 if let Some(verdict) = state_name(value) {
                     return Some(verdict);
@@ -453,7 +449,10 @@ mod tests {
         }
         let docker = items.iter().find(|i| i.id == "docker").unwrap();
         assert_eq!(docker.cta, "/docker");
-        assert_eq!(items.iter().find(|i| i.id == "scrcpy").unwrap().cta, "/settings");
+        assert_eq!(
+            items.iter().find(|i| i.id == "scrcpy").unwrap().cta,
+            "/settings"
+        );
         assert_eq!(items.iter().find(|i| i.id == "whpx").unwrap().cta, "/qemu");
     }
 
@@ -466,14 +465,29 @@ mod tests {
 
     #[test]
     fn whpx_state_parses_json_and_text_layouts() {
-        assert_eq!(parse_whpx_state(r#"{"FeatureName":"HypervisorPlatform","State":1}"#), Some(true));
-        assert_eq!(parse_whpx_state(r#"{"FeatureName":"HypervisorPlatform","State":2}"#), Some(false));
-        assert_eq!(parse_whpx_state(r#"{"FeatureName":"x","State":"Enabled"}"#), Some(true));
-        assert_eq!(parse_whpx_state("FeatureName : HypervisorPlatform\nState : Disabled"), Some(false));
+        assert_eq!(
+            parse_whpx_state(r#"{"FeatureName":"HypervisorPlatform","State":1}"#),
+            Some(true)
+        );
+        assert_eq!(
+            parse_whpx_state(r#"{"FeatureName":"HypervisorPlatform","State":2}"#),
+            Some(false)
+        );
+        assert_eq!(
+            parse_whpx_state(r#"{"FeatureName":"x","State":"Enabled"}"#),
+            Some(true)
+        );
+        assert_eq!(
+            parse_whpx_state("FeatureName : HypervisorPlatform\nState : Disabled"),
+            Some(false)
+        );
         assert_eq!(parse_whpx_state("State : Enabled"), Some(true));
         assert_eq!(parse_whpx_state("State : Absent"), Some(false));
         assert_eq!(parse_whpx_state(""), None);
-        assert_eq!(parse_whpx_state("Get-WindowsOptionalFeature : Access denied"), None);
+        assert_eq!(
+            parse_whpx_state("Get-WindowsOptionalFeature : Access denied"),
+            None
+        );
         assert_eq!(parse_whpx_state(r#"{"FeatureName":"x","State":0}"#), None);
     }
 

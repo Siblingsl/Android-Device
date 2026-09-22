@@ -1,7 +1,11 @@
-use crate::crypto::{ClientKeyAlgorithm, ProtectedCapability};
+use crate::crypto::{
+    ClientKeyAlgorithm, ProtectedCapability, MAX_CLOCK_SKEW_SECS, REQUEST_MAX_AGE_SECS,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
+
+const NONCE_RETENTION_SECS: i64 = REQUEST_MAX_AGE_SECS + MAX_CLOCK_SKEW_SECS;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -436,6 +440,10 @@ impl AuthStore {
     /// Atomically reserves a nonce; false means it has already been used.
     pub fn consume_nonce(&self, nonce: &str, now: i64) -> Result<bool, StoreError> {
         let connection = self.connection.lock().unwrap();
+        connection.execute(
+            "DELETE FROM used_nonces WHERE used_at < ?1",
+            params![now.saturating_sub(NONCE_RETENTION_SECS)],
+        )?;
         Ok(connection.execute(
             "INSERT OR IGNORE INTO used_nonces (nonce, used_at) VALUES (?1, ?2)",
             params![nonce, now],
@@ -625,6 +633,14 @@ mod tests {
         let store = AuthStore::in_memory().unwrap();
         assert!(store.consume_nonce("nonce-a", 1).unwrap());
         assert!(!store.consume_nonce("nonce-a", 2).unwrap());
+    }
+
+    #[test]
+    fn nonce_pruning_does_not_keep_expired_entries_forever() {
+        let store = AuthStore::in_memory().unwrap();
+        assert!(store.consume_nonce("nonce-old", 1).unwrap());
+        assert!(!store.consume_nonce("nonce-old", 2).unwrap());
+        assert!(store.consume_nonce("nonce-old", 2_000).unwrap());
     }
 
     #[test]

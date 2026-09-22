@@ -53,7 +53,11 @@ fn vendored_module_artifact(relative: PathBuf) -> PathBuf {
         .into_iter()
         .map(|root| root.join(&relative))
         .find(|path| path.is_file())
-        .unwrap_or(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(relative))
+        .unwrap_or(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(relative),
+        )
 }
 
 /// Resolve the pre-built module APK.
@@ -156,7 +160,8 @@ pub fn install_native_cloak(serial_or_container: &str, zip_path: Option<String>)
         return ShellResult {
             success: false,
             stdout: String::new(),
-            stderr: "NativeCloak 模块仅容器实例支持（需要 docker cp + root 写 /data/adb/modules）".into(),
+            stderr: "NativeCloak 模块仅容器实例支持（需要 docker cp + root 写 /data/adb/modules）"
+                .into(),
             exit_code: -1,
         };
     };
@@ -393,7 +398,11 @@ pub fn cloak_first_boot_install(
     }
     Ok(format!(
         "DeviceCloak 模块已安装{}；请在实例内 LSPosed 管理器手动启用一次并勾选目标 App",
-        if profile.is_some() { "并推送配置" } else { "" }
+        if profile.is_some() {
+            "并推送配置"
+        } else {
+            ""
+        }
     ))
 }
 
@@ -460,12 +469,15 @@ mod tests {
 
     #[test]
     fn native_cloak_install_command_prefers_magisk_and_falls_back_to_unzip() {
-        let cmd = native_cloak_install_command("/data/local/tmp/RDC-NativeCloak.zip", "rdc_nativecloak");
+        let cmd =
+            native_cloak_install_command("/data/local/tmp/RDC-NativeCloak.zip", "rdc_nativecloak");
         // Magisk CLI first (matching root.rs's binary discovery pattern).
         assert!(cmd.contains("M=/sbin/magisk; [ -x $M ] || M=/system/etc/init/magisk/magisk"));
         assert!(cmd.contains("$M --install-module /data/local/tmp/RDC-NativeCloak.zip"));
         // Unzip fallback into the canonical module dir with fixed permissions.
-        assert!(cmd.contains("unzip -o /data/local/tmp/RDC-NativeCloak.zip -d /data/adb/modules/rdc_nativecloak"));
+        assert!(cmd.contains(
+            "unzip -o /data/local/tmp/RDC-NativeCloak.zip -d /data/adb/modules/rdc_nativecloak"
+        ));
         assert!(cmd.contains("chmod -R 755 /data/adb/modules/rdc_nativecloak"));
         // Success marker keyed on module.prop, staging zip cleaned up.
         assert!(cmd.contains("[ -f /data/adb/modules/rdc_nativecloak/module.prop ]"));
@@ -489,7 +501,10 @@ mod tests {
         // the test stays free of adb/docker subprocess calls (the
         // not-a-container rejection path itself is exercised only at runtime
         // — it is documented on the function).
-        let r = install_native_cloak("definitely-not-a-container", Some("Z:/no/such/zip.zip".into()));
+        let r = install_native_cloak(
+            "definitely-not-a-container",
+            Some("Z:/no/such/zip.zip".into()),
+        );
         assert!(!r.success);
         assert!(r.stderr.contains("未找到 NativeCloak 模块 zip"));
         assert!(r.stderr.contains("build.sh"));

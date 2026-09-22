@@ -3,11 +3,18 @@ use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::models::{ShellResult, TerminalSession};
 use crate::services::{settings, util};
+
+const MAX_TERMINAL_SESSIONS: usize = 16;
+const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
+const MAX_TERMINAL_OUTPUT_BYTES: usize = 1024 * 1024;
+const OUTPUT_TRUNCATION_MARKER: &str = "\n[terminal output truncated]\n";
+static ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 struct TerminalProcess {
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -22,6 +29,53 @@ struct TerminalProcess {
 
 static SESSIONS: Lazy<Mutex<HashMap<String, TerminalProcess>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn try_reserve_session() -> bool {
+    ACTIVE_SESSIONS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            (current < MAX_TERMINAL_SESSIONS).then_some(current + 1)
+        })
+        .is_ok()
+}
+
+fn release_session() {
+    ACTIVE_SESSIONS.fetch_sub(1, Ordering::SeqCst);
+}
+
+fn utf8_prefix(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = 0;
+    for (index, character) in value.char_indices() {
+        let next = index + character.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+    &value[..end]
+}
+
+fn append_bounded_output(output: &mut String, text: &str, max_bytes: usize) -> bool {
+    if text.is_empty() || output.len() >= max_bytes {
+        return text.is_empty();
+    }
+    let available = max_bytes - output.len();
+    if text.len() <= available {
+        output.push_str(text);
+        return true;
+    }
+    let marker_space = available.min(OUTPUT_TRUNCATION_MARKER.len());
+    let prefix = utf8_prefix(text, available.saturating_sub(marker_space));
+    output.push_str(prefix);
+    let marker = utf8_prefix(
+        OUTPUT_TRUNCATION_MARKER,
+        available.saturating_sub(prefix.len()),
+    );
+    output.push_str(marker);
+    false
+}
 
 pub fn terminal_command(kind: &str, serial: &str) -> (String, Vec<String>) {
     if kind == "device" {
@@ -61,7 +115,7 @@ fn spawn_reader<R: Read + Send + 'static>(
         let mut buffer = [0_u8; 16 * 1024];
         loop {
             match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
                 Ok(size) => {
                     let text = String::from_utf8_lossy(&buffer[..size]);
                     // PowerShell/ConPTY asks for the current cursor position
@@ -70,10 +124,30 @@ fn spawn_reader<R: Read + Send + 'static>(
                     // from the visible terminal buffer.
                     if text.contains("\x1b[6n") {
                         let mut writer = writer.lock();
-                        let _ = writer.write_all(b"\x1b[1;1R");
-                        let _ = writer.flush();
+                        if let Err(error) = writer
+                            .write_all(b"\x1b[1;1R")
+                            .and_then(|_| writer.flush())
+                        {
+                            append_bounded_output(
+                                &mut output.lock(),
+                                &format!("\n终端响应 PTY 查询失败: {error}\n"),
+                                MAX_TERMINAL_OUTPUT_BYTES,
+                            );
+                        }
                     }
-                    output.lock().push_str(&text.replace("\x1b[6n", ""));
+                    append_bounded_output(
+                        &mut output.lock(),
+                        &text.replace("\x1b[6n", ""),
+                        MAX_TERMINAL_OUTPUT_BYTES,
+                    );
+                }
+                Err(error) => {
+                    append_bounded_output(
+                        &mut output.lock(),
+                        &format!("\n终端输出读取失败: {error}\n"),
+                        MAX_TERMINAL_OUTPUT_BYTES,
+                    );
+                    break;
                 }
             }
         }
@@ -95,6 +169,13 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
             ..TerminalSession::default()
         };
     }
+    if !try_reserve_session() {
+        return TerminalSession {
+            status: "error".into(),
+            message: format!("终端会话数量已达上限（{MAX_TERMINAL_SESSIONS}）"),
+            ..TerminalSession::default()
+        };
+    }
 
     let (binary, args) = terminal_command(kind, serial);
     let binary = util::resolve_program(&binary);
@@ -107,6 +188,7 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
     }) {
         Ok(pair) => pair,
         Err(error) => {
+            release_session();
             return TerminalSession {
                 status: "error".into(),
                 message: format!("创建终端 PTY 失败: {error}"),
@@ -127,6 +209,7 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
     let mut child = match pair.slave.spawn_command(command) {
         Ok(child) => child,
         Err(error) => {
+            release_session();
             return TerminalSession {
                 status: "error".into(),
                 message: format!("启动终端失败: {error}"),
@@ -141,6 +224,7 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
+            release_session();
             return TerminalSession {
                 status: "error".into(),
                 message: format!("终端输出管道不可用: {error}"),
@@ -153,6 +237,7 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
+            release_session();
             return TerminalSession {
                 status: "error".into(),
                 message: format!("终端输入管道不可用: {error}"),
@@ -189,6 +274,9 @@ pub fn start(kind: &str, serial: &str) -> TerminalSession {
 }
 
 pub fn write(id: &str, input: &str) -> ShellResult {
+    if input.len() > MAX_TERMINAL_INPUT_BYTES {
+        return failed(format!("终端输入超过 {} 字节", MAX_TERMINAL_INPUT_BYTES));
+    }
     let mut sessions = SESSIONS.lock();
     let Some(session) = sessions.get_mut(id) else {
         return failed("终端会话不存在");
@@ -235,6 +323,7 @@ pub fn read(id: &str) -> TerminalSession {
     };
     if status == "stopped" {
         sessions.remove(id);
+        release_session();
     }
     result
 }
@@ -286,6 +375,7 @@ pub fn stop(id: &str) -> ShellResult {
             return failed(format!("读取终端状态失败: {reason}"));
         }
     };
+    release_session();
     if !terminated_by_request {
         return ShellResult {
             success: status.success(),
@@ -312,7 +402,10 @@ pub fn stop(id: &str) -> ShellResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{read, resize, start, stop, terminal_command, write};
+    use super::{
+        append_bounded_output, read, resize, start, stop, terminal_command, write,
+        MAX_TERMINAL_INPUT_BYTES,
+    };
 
     #[test]
     fn builds_a_device_shell_command_with_the_configured_adb_binary() {
@@ -335,19 +428,21 @@ mod tests {
         let mut output = String::new();
         if cfg!(windows) {
             // ConPTY/PowerShell emits its terminal initialization before it
-            // begins consuming interactive input. Drain that startup window
-            // so this round-trip test matches the UI's ready-to-type state.
-            for _ in 0..40 {
+            // begins consuming interactive input. Wait for the prompt instead
+            // of relying on a fixed sleep, which is flaky on a busy Windows
+            // host.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
                 let chunk = read(&session.id);
                 output.push_str(&chunk.output);
-                if !chunk.output.is_empty() {
+                if output.contains("PS ") {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
         }
         let command = if cfg!(windows) {
-            "Write-Output rdc-pty-ok\r"
+            "Write-Output rdc-pty-ok\r\n"
         } else {
             "printf 'rdc-pty-ok\\n'\n"
         };
@@ -365,5 +460,19 @@ mod tests {
         assert!(output.contains("rdc-pty-ok"), "PTY output: {output:?}");
         assert!(stop(&session.id).success);
         assert_eq!(read(&session.id).status, "stopped");
+    }
+
+    #[test]
+    fn bounded_output_buffer_never_exceeds_its_limit() {
+        let mut output = String::new();
+        assert!(!append_bounded_output(&mut output, "0123456789", 8));
+        assert!(output.len() <= 8);
+    }
+
+    #[test]
+    fn rejects_overlong_terminal_input() {
+        let result = write("missing", &"x".repeat(MAX_TERMINAL_INPUT_BYTES + 1));
+        assert!(!result.success);
+        assert!(result.stderr.contains("输入"));
     }
 }

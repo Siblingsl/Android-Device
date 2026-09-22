@@ -27,11 +27,23 @@ pub const SSH_OK_MARKER: &str = "__QC_SSH_OK__";
 pub const CHECK_SPECS: &[(&str, &str)] = &[
     ("whpx", "WHPX acceleration available on the host"),
     ("ssh", "guest reachable over SSH (rdc@127.0.0.1:<port>)"),
-    ("binderfs", "binder support visible in the guest (/proc/filesystems)"),
+    (
+        "binderfs",
+        "binder support visible in the guest (/proc/filesystems)",
+    ),
     ("docker", "docker engine usable inside the guest"),
-    ("boot-completed", "redroid container reports sys.boot_completed=1"),
-    ("adb-connect", "host adb connects to 127.0.0.1:<port> and getprop answers"),
-    ("clone-timing", "qcow2 snapshot + clone complete (informational timing)"),
+    (
+        "boot-completed",
+        "redroid container reports sys.boot_completed=1",
+    ),
+    (
+        "adb-connect",
+        "host adb connects to 127.0.0.1:<port> and getprop answers",
+    ),
+    (
+        "clone-timing",
+        "qcow2 snapshot + clone complete (informational timing)",
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -70,8 +82,16 @@ pub struct VerifyReport {
 
 impl VerifyReport {
     pub fn counts(&self) -> (usize, usize, usize) {
-        let p = self.checks.iter().filter(|c| c.verdict == Verdict::Pass).count();
-        let f = self.checks.iter().filter(|c| c.verdict == Verdict::Fail).count();
+        let p = self
+            .checks
+            .iter()
+            .filter(|c| c.verdict == Verdict::Pass)
+            .count();
+        let f = self
+            .checks
+            .iter()
+            .filter(|c| c.verdict == Verdict::Fail)
+            .count();
         let u = self.checks.len() - p - f;
         (p, f, u)
     }
@@ -107,9 +127,7 @@ impl VerifyReport {
             }
         }
         let (p, f, u) = self.counts();
-        s.push_str(&format!(
-            "\nsummary: {p} pass / {f} fail / {u} untested\n"
-        ));
+        s.push_str(&format!("\nsummary: {p} pass / {f} fail / {u} untested\n"));
         if u > 0 {
             s.push_str(
                 "note: UNTESTED means the check could not run on this machine \
@@ -189,14 +207,18 @@ pub fn judge_boot(success: bool, stdout: &str) -> (Verdict, String) {
     if success && redroid::judge_boot_completed(stdout) {
         (Verdict::Pass, "sys.boot_completed=1".into())
     } else if !success {
-        (Verdict::Fail, "docker exec failed (container missing?)".into())
+        (
+            Verdict::Fail,
+            "docker exec failed (container missing?)".into(),
+        )
     } else {
         (
             Verdict::Untested,
             format!("still booting (getprop returned {:?})", stdout.trim()),
         )
     }
-}/// 6. host-side adb: `adb connect` must report a connection, then `getprop`
+}
+/// 6. host-side adb: `adb connect` must report a connection, then `getprop`
 /// over that serial must return a non-empty, non-error answer.
 pub fn judge_adb_connect(success: bool, stdout: &str) -> (Verdict, String) {
     let s = stdout.to_ascii_lowercase();
@@ -289,9 +311,10 @@ pub fn judge_clone_timing_probe(p: &TimingProbe<'_>) -> (Verdict, String) {
         (SnapshotPath::QemuImg, true, true) => {
             (Verdict::Pass, format!("{timing} (informational){extra}"))
         }
-        (SnapshotPath::QemuImg, false, _) => {
-            (Verdict::Fail, format!("qemu-img snapshot failed; {timing}{extra}"))
-        }
+        (SnapshotPath::QemuImg, false, _) => (
+            Verdict::Fail,
+            format!("qemu-img snapshot failed; {timing}{extra}"),
+        ),
         (_, true, false) => (
             Verdict::Fail,
             format!("qemu-img backing clone failed; {timing}{extra}"),
@@ -387,7 +410,9 @@ fn find_qemu_img(state_dir: &Path) -> Option<std::path::PathBuf> {
 pub fn run_verify(state_dir: &Path, vm_name: &str, container: Option<&str>) -> VerifyReport {
     let registry = match vm::load_registry(state_dir) {
         Ok(r) => r,
-        Err(e) => return untested_report(vm_name, container, &format!("state.json unreadable: {e}")),
+        Err(e) => {
+            return untested_report(vm_name, container, &format!("state.json unreadable: {e}"))
+        }
     };
     let Some(entry) = registry.get(vm_name) else {
         return untested_report(
@@ -531,10 +556,8 @@ pub fn run_verify(state_dir: &Path, vm_name: &str, container: Option<&str>) -> V
 /// to be deleted. The probe must therefore never be the thing that breaks a
 /// disk: when it cannot do the step safely, it says UNTESTED.
 fn run_clone_timing_probe(state_dir: &Path, entry: &vm::VmEntry) -> (Verdict, String) {
-    let liveness = vm::vm_liveness_from_qmp_probe(qmp::probe(
-        entry.qmp_host_port,
-        qmp::PROBE_TIMEOUT,
-    ));
+    let liveness =
+        vm::vm_liveness_from_qmp_probe(qmp::probe(entry.qmp_host_port, qmp::PROBE_TIMEOUT));
     // `qmp_usable = true`: an answered probe *is* a working QMP channel. For
     // every other liveness value the plan ignores this flag.
     let plan = vm::snapshot_plan(liveness, true);
@@ -576,31 +599,24 @@ fn run_clone_timing_probe(state_dir: &Path, entry: &vm::VmEntry) -> (Verdict, St
         }
         vm::SnapshotPlan::QmpInternal => {
             // The VM is running and owns the disk: QMP is the only legal writer.
-            let device = match qmp::device_for_disk(
-                entry.qmp_host_port,
-                &entry.disk,
-                qmp::PROBE_TIMEOUT,
-            ) {
-                Ok(d) => d,
-                Err(e) => {
-                    // The channel answered a probe but reconnecting failed:
-                    // nothing was written, so this is an honest failure.
-                    return (
-                        Verdict::Fail,
-                        format!(
-                            "could not address the live disk over QMP ({e}); \
+            let device =
+                match qmp::device_for_disk(entry.qmp_host_port, &entry.disk, qmp::PROBE_TIMEOUT) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        // The channel answered a probe but reconnecting failed:
+                        // nothing was written, so this is an honest failure.
+                        return (
+                            Verdict::Fail,
+                            format!(
+                                "could not address the live disk over QMP ({e}); \
                              no qemu-img write was attempted"
-                        ),
-                    );
-                }
-            };
+                            ),
+                        );
+                    }
+                };
             let started = std::time::Instant::now();
-            let snap = qmp::internal_snapshot(
-                entry.qmp_host_port,
-                &device,
-                &tag,
-                qmp::COMMAND_TIMEOUT,
-            );
+            let snap =
+                qmp::internal_snapshot(entry.qmp_host_port, &device, &tag, qmp::COMMAND_TIMEOUT);
             let ms = started.elapsed().as_millis();
             let (ok, note) = match snap {
                 Ok(()) => {
@@ -683,10 +699,16 @@ mod tests {
 
     #[test]
     fn ssh_judgement_requires_the_marker() {
-        assert_eq!(judge_ssh_reachable(true, "__QC_SSH_OK__\n").0, Verdict::Pass);
+        assert_eq!(
+            judge_ssh_reachable(true, "__QC_SSH_OK__\n").0,
+            Verdict::Pass
+        );
         // A banner-only / empty connection is not a pass.
         assert_eq!(judge_ssh_reachable(false, "").0, Verdict::Fail);
-        assert_eq!(judge_ssh_reachable(true, "Permission denied\n").0, Verdict::Fail);
+        assert_eq!(
+            judge_ssh_reachable(true, "Permission denied\n").0,
+            Verdict::Fail
+        );
         assert_eq!(judge_ssh_reachable(true, "").0, Verdict::Fail);
     }
 
@@ -718,7 +740,10 @@ mod tests {
         assert_eq!(judge_boot(true, "0\n").0, Verdict::Untested);
         assert_eq!(judge_boot(true, "\n").0, Verdict::Untested);
         // docker exec itself failed: real failure.
-        assert_eq!(judge_boot(false, "Error: No such container\n").0, Verdict::Fail);
+        assert_eq!(
+            judge_boot(false, "Error: No such container\n").0,
+            Verdict::Fail
+        );
     }
 
     #[test]
@@ -731,16 +756,28 @@ mod tests {
             judge_adb_connect(true, "already connected to 127.0.0.1:24500\n").0,
             Verdict::Pass
         );
-        assert_eq!(judge_adb_connect(true, "cannot connect to 127.0.0.1:24500\n").0, Verdict::Fail);
-        assert_eq!(judge_adb_connect(false, "adb: no such file\n").0, Verdict::Fail);
-        assert_eq!(judge_adb_connect(true, "* daemon started successfully *\n").0, Verdict::Fail);
+        assert_eq!(
+            judge_adb_connect(true, "cannot connect to 127.0.0.1:24500\n").0,
+            Verdict::Fail
+        );
+        assert_eq!(
+            judge_adb_connect(false, "adb: no such file\n").0,
+            Verdict::Fail
+        );
+        assert_eq!(
+            judge_adb_connect(true, "* daemon started successfully *\n").0,
+            Verdict::Fail
+        );
     }
 
     #[test]
     fn adb_getprop_judgement() {
         assert_eq!(judge_adb_getprop(true, "14\n").0, Verdict::Pass);
         assert_eq!(judge_adb_getprop(true, "\n").0, Verdict::Fail);
-        assert_eq!(judge_adb_getprop(false, "error: device offline\n").0, Verdict::Fail);
+        assert_eq!(
+            judge_adb_getprop(false, "error: device offline\n").0,
+            Verdict::Fail
+        );
     }
 
     #[test]
@@ -811,7 +848,9 @@ mod tests {
     /// running case may only ever come out as QMP or Skip (Bug A).
     #[test]
     fn item_seven_never_runs_qemu_img_against_a_running_vm() {
-        use crate::vm::{snapshot_plan, vm_liveness_from_qmp_probe, QmpProbe, SnapshotPlan, VmLiveness};
+        use crate::vm::{
+            snapshot_plan, vm_liveness_from_qmp_probe, QmpProbe, SnapshotPlan, VmLiveness,
+        };
         assert_eq!(
             snapshot_plan(vm_liveness_from_qmp_probe(QmpProbe::Answered), true),
             SnapshotPlan::QmpInternal

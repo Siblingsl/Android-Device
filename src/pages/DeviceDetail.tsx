@@ -107,7 +107,7 @@ import type {
   ScrcpyRecordingOptions,
 } from "../types";
 
-type Tab = "overview" | "control" | "files" | "apps" | "logs" | "settings";
+type Tab = "overview" | "control" | "files" | "apps" | "logs" | "spoof" | "settings";
 type ControlBusyAction = DeviceControlAction | "screenshot" | "gesture" | "recording" | "camera" | "rotation" | "input" | DeviceMediaAction;
 type PreviewOutcome = { success: boolean; message: string };
 type FileTransferState = {
@@ -135,6 +135,11 @@ type InstallRetry = { path: string; name: string; error: string | null };
 function operationErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return message.trim() || fallback;
+}
+
+function safeApkFileName(packageName: string): string {
+  const safeName = packageName.trim().replace(/[^a-zA-Z0-9._-]+/g, "_") || "app";
+  return `${safeName}.apk`;
 }
 
 function reportOperationError(
@@ -171,7 +176,7 @@ export function DeviceDetail() {
   const dismissMonitorAlert = useAppStore((s) => s.dismissMonitorAlert);
   const clearMonitorAlerts = useAppStore((s) => s.clearMonitorAlerts);
   const { t } = useI18n();
-  const tabs: Tab[] = ["overview", "control", "files", "apps", "logs", "settings"];
+  const tabs: Tab[] = ["overview", "control", "files", "apps", "logs", "spoof", "settings"];
   const [tab, setTab] = useState<Tab>(() => {
     try {
       const saved = sessionStorage.getItem(`rdc.detail.tab.${deviceId}`);
@@ -632,6 +637,7 @@ export function DeviceDetail() {
             ["files", "detail.tab.files", true],
             ["apps", "detail.tab.apps", true],
             ["logs", "detail.tab.logs", true],
+            ["spoof", "detail.tab.spoof", true],
             ["settings", "detail.tab.settings", true],
           ] as const
         ).map(([k, labelKey, needsOnline]) => {
@@ -646,7 +652,7 @@ export function DeviceDetail() {
               style={offlineTab ? { opacity: 0.55 } : undefined}
               onClick={() => setTab(k)}
             >
-              <span className="detail-tab-index">0{["overview", "control", "files", "apps", "logs", "settings"].indexOf(k) + 1}</span>
+              <span className="detail-tab-index">0{["overview", "control", "files", "apps", "logs", "spoof", "settings"].indexOf(k) + 1}</span>
               <span>{offlineTab ? t("detail.tab.offline", { label }) : label}</span>
               {offlineTab && (
                 <span className="detail-tab-status">
@@ -740,12 +746,19 @@ export function DeviceDetail() {
         {tab === "apps" && (
           <Apps
             serial={serial}
+            qemuInstance={device.qemuInstance}
             setStatusText={setStatusText}
             disabled={!(device.online && device.adbStatus === "device")}
           />
         )}
         {tab === "logs" && (
           <DeviceLogs serial={serial} disabled={!(device.online && device.adbStatus === "device")} />
+        )}
+        {tab === "spoof" && (
+          <div className="detail-spoof-workspace">
+            <SpoofCard serial={serial} deviceId={deviceId} disabled={!online} />
+            <AuditCard serial={serial} disabled={!online} />
+          </div>
         )}
         {tab === "settings" && (
           <DeviceSettings
@@ -910,7 +923,7 @@ function RootPanel({ device }: { device: DeviceInfo }) {
       className="detail-module detail-root-module"
       title={t("detail.root.title")}
       action={
-        <div className="row" style={{ flexWrap: "wrap" }}>
+        <div className="row detail-root-actions">
           <Button
             size="sm"
             icon={<RefreshCw size={13} />}
@@ -1464,6 +1477,7 @@ function Control({
   const [retryingFeedbackId, setRetryingFeedbackId] = useState<number | null>(null);
   const [shellDiagnostic, setShellDiagnostic] = useState<{ id: number; message: string } | null>(null);
   const [previewState, setPreviewState] = useState<PreviewState>(() => emptyPreview());
+  const [previewOpen, setPreviewOpen] = useState(true);
   const [previewFlash, setPreviewFlash] = useState(false);
   const [livePreview, setLivePreview] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1496,6 +1510,7 @@ function Control({
 
   useEffect(() => {
     setOpenShelves({ media: false, input: false, device: true, terminal: true });
+    setPreviewOpen(true);
   }, [serial]);
 
   const setShelfOpen = (key: ControlShelfKey, open: boolean) => {
@@ -1990,6 +2005,12 @@ function Control({
         }}
       />
       <div className="detail-control-workspace split-control control-workbench">
+      <div className="control-preview-row">
+        <ControlActionShelf
+          label={t("detail.control.previewTitle")}
+          open={previewOpen}
+          onToggle={setPreviewOpen}
+        >
       <DevicePreview
         serial={serial}
         disabled={disabled}
@@ -2058,6 +2079,8 @@ function Control({
         }}
         onRotate={() => void act(t("detail.control.rotate"), () => DeviceService.rotate(serial, !isLandscape), "rotate")}
       />
+        </ControlActionShelf>
+      </div>
 
       <div className="control-action-dock" aria-label={t("detail.control.panelTitle")}>
         <ControlActionShelf
@@ -3148,10 +3171,12 @@ function Files({
 
 function Apps({
   serial,
+  qemuInstance,
   setStatusText,
   disabled = false,
 }: {
   serial: string;
+  qemuInstance?: string;
   setStatusText: (s: string) => void;
   disabled?: boolean;
 }) {
@@ -3178,6 +3203,7 @@ function Apps({
   const [displayId, setDisplayId] = useState("1");
   const [installing, setInstalling] = useState(false);
   const [installRetry, setInstallRetry] = useState<InstallRetry | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
   const loadSequence = useRef(createRequestSequence()).current;
   const detailSequence = useRef(createRequestSequence()).current;
 
@@ -3252,6 +3278,39 @@ function Apps({
     }
   };
 
+  const exportApk = async (target: AppInfo) => {
+    const remotePath = target.apkPath.trim();
+    if (!remotePath) {
+      const reason = t("detail.apps.exportNoPath");
+      setStatusText(reason);
+      void alert(reason);
+      return;
+    }
+    setExporting(target.packageName);
+    try {
+      const localPath = await save({
+        defaultPath: safeApkFileName(target.packageName),
+        filters: [{ name: "APK", extensions: ["apk"] }],
+      });
+      if (!localPath) return;
+      setStatusText(t("detail.apps.exporting", { name: target.packageName }));
+      const result = await DeviceService.downloadFileTracked(serial, remotePath, localPath, createTransferId());
+      if (result.success) {
+        setStatusText(t("detail.apps.exported", { path: localPath }));
+      } else {
+        const reason = operationErrorMessage(result.stderr || result.stdout, t("detail.apps.exportFailed"));
+        setStatusText(reason);
+        void alert(reason);
+      }
+    } catch (e) {
+      if (!isDialogCancellation(e)) {
+        reportOperationError(e, t("detail.apps.exportFailed"), setStatusText);
+      }
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div className="detail-apps-workspace stack app-workbench">
       <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
@@ -3260,6 +3319,7 @@ function Apps({
           <div className="app-filter-main row">
             <Search size={16} className="muted" />
             <input
+              className="app-search-input"
               placeholder={t("detail.apps.searchPlaceholder")}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
@@ -3272,7 +3332,7 @@ function Apps({
             <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
               {keyword ? t("detail.files.matchCount", { m: filtered.length, n: apps.length }) : t("detail.apps.totalCount", { n: apps.length })}
             </span>
-            <label className="row muted" style={{ fontSize: 12 }}>
+            <label className="app-system-toggle">
               <input type="checkbox" checked={includeSystem} onChange={(e) => setIncludeSystem(e.target.checked)} />
               {t("detail.apps.includeSystem")}
             </label>
@@ -3403,7 +3463,13 @@ function Apps({
                           setStatusText(t("detail.apps.starting", { pkg: a.packageName }));
                           try {
                             const r = await DeviceService.startApp(serial, a.packageName);
-                            if (r.success) setStatusText(t("detail.apps.started", { pkg: a.packageName }));
+                            if (r.success) {
+                              setStatusText(t("detail.apps.started", { pkg: a.packageName }));
+                              const mark = DeviceService.runtimeMarkActivity;
+                              if (qemuInstance && typeof mark === "function") {
+                                void mark(qemuInstance, "user_window").catch(() => undefined);
+                              }
+                            }
                             else {
                               setStatusText(r.stderr || r.stdout || t("detail.apps.startFailed"));
                               void alert(r.stderr || r.stdout || t("detail.apps.startFailed"));
@@ -3496,6 +3562,7 @@ function Apps({
                       </Button>
                       <select
                         defaultValue=""
+                        disabled={appBusy !== null || exporting !== null}
                         style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
                         onChange={async (e) => {
                           const v = e.target.value;
@@ -3519,6 +3586,9 @@ function Apps({
                               () => void alert(t("common.panel.copyFailed")),
                             );
                           }
+                          if (v === "export") {
+                            await exportApk(a);
+                          }
                           if (v === "uninstall") {
                             if (!(await askConfirm(t("detail.apps.confirmUninstall", { pkg: a.packageName })))) return;
                             setStatusText(t("detail.apps.uninstalling", { pkg: a.packageName }));
@@ -3540,6 +3610,7 @@ function Apps({
                           {t("detail.more")}
                         </option>
                         <option value="copy">{t("detail.apps.copyPkg")}</option>
+                        <option value="export">{t("detail.apps.exportApk")}</option>
                         <option value="clear">{t("detail.apps.clearData")}</option>
                         <option value="uninstall">{t("detail.apps.uninstall")}</option>
                       </select>
@@ -4301,8 +4372,6 @@ function DeviceSettings({
         </Button>
       </div>
     </Card>
-    <SpoofCard serial={serial} deviceId={deviceId} disabled={offline} />
-    <AuditCard serial={serial} disabled={offline} />
     </fieldset>
   );
 }

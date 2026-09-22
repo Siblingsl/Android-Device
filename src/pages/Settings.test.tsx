@@ -39,6 +39,16 @@ vi.mock("../lib/deviceMetadata", () => ({
   getAllDeviceMetadata: () => ({}),
   removeDeviceMetadata: () => false,
 }));
+vi.mock("../services/deviceService", () => ({
+  DeviceService: {
+    revealInFolder: vi.fn(async () => undefined),
+    authorizationStatus: vi.fn(async () => ({
+      status: "not_registered",
+      securityLevel: "dpapi_software_fallback",
+      keyAlgorithm: "ed25519-dpapi-v1",
+    })),
+  },
+}));
 vi.mock("../components/settings/ShortcutEditor", () => ({ ShortcutEditor: () => null }));
 vi.mock("../components/settings/ConfigTransfer", () => ({ ConfigTransfer: () => null }));
 vi.mock("../components/settings/UpdatePanel", () => ({ UpdatePanel: () => null }));
@@ -175,5 +185,70 @@ describe("SettingsPage accessible form labels", () => {
     await openAdvancedTab();
 
     expect(screen.getByRole("combobox", { name: "默认运行轨道" })).toBeTruthy();
+  });
+
+  it("defaults an omitted QEMU warm-node preference to memory-first", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openAdvancedTab();
+
+    const field = screen.getByText("回收实例时保持 QEMU 节点运行").closest(".field") as HTMLElement;
+    const toggle = field.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("defaults critical-pressure idle reclaim to enabled and persists an explicit opt-out", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openAdvancedTab();
+
+    const toggle = screen.getByRole("checkbox", { name: "临界内存时自动释放闲置实例" }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    expect(toggle.checked).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(__state.saveSettings).toHaveBeenCalled());
+    expect(__state.saveSettings.mock.calls[0][0].runtimeAutoReleaseIdleOnCritical).toBe(false);
+  });
+});
+
+describe("SettingsPage authorization security status", () => {
+  beforeEach(() => {
+    __state.settings = { ...baseSettings };
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("distinguishes DPAPI fallback from TPM-backed protection", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openAdvancedTab();
+    await waitFor(() => expect(screen.getByText(/当前为 DPAPI 回退保护/)).toBeTruthy());
+    expect(screen.queryByText(/当前为 TPM\/VBS 硬件隔离保护/)).toBeNull();
   });
 });

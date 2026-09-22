@@ -87,7 +87,10 @@ fn validate_name(name: &str) -> Result<String, IsoError> {
     if up.is_empty() || up.len() > 24 {
         return Err(IsoError::BadName(name.to_string()));
     }
-    if !up.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !up
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(IsoError::BadName(name.to_string()));
     }
     Ok(up)
@@ -212,7 +215,7 @@ pub fn build_iso(files: &[(&str, &[u8])]) -> Result<Vec<u8>, IsoError> {
     put_u32_le(&mut pt_l, 2, ROOT_DIR_LBA);
     put_u16_le(&mut pt_l, 6, 1); // parent directory number
     pt_l[8] = 0; // identifier "\0"
-    // record length 9 -> pad to even (byte 9 stays 0)
+                 // record length 9 -> pad to even (byte 9 stays 0)
     let path_table_size = 10u32;
     let mut pt_m = pt_l.clone();
     put_u32_be(&mut pt_m, 2, ROOT_DIR_LBA);
@@ -221,8 +224,22 @@ pub fn build_iso(files: &[(&str, &[u8])]) -> Result<Vec<u8>, IsoError> {
     // ---- Root directory extent.
     let mut root: Vec<u8> = Vec::new();
     let root_start = 0usize;
-    write_dir_record(&mut root, root_start, ROOT_DIR_LBA, root_sectors * SECTOR as u32, 2, &[0]);
-    write_dir_record(&mut root, root_start, ROOT_DIR_LBA, root_sectors * SECTOR as u32, 2, &[1]);
+    write_dir_record(
+        &mut root,
+        root_start,
+        ROOT_DIR_LBA,
+        root_sectors * SECTOR as u32,
+        2,
+        &[0],
+    );
+    write_dir_record(
+        &mut root,
+        root_start,
+        ROOT_DIR_LBA,
+        root_sectors * SECTOR as u32,
+        2,
+        &[1],
+    );
     for (n, lba, len) in &extents {
         let ident = format!("{n}.;1").into_bytes();
         write_dir_record(&mut root, root_start, *lba, *len as u32, 0, &ident);
@@ -253,13 +270,12 @@ pub fn build_iso(files: &[(&str, &[u8])]) -> Result<Vec<u8>, IsoError> {
     put_u32_le(&mut img, pvd_at + 104, 0); // optional type L absent
     put_u32_be(&mut img, pvd_at + 108, PATH_TABLE_M_LBA);
     put_u32_be(&mut img, pvd_at + 112, 0); // optional type M absent
-    img[pvd_at + 116..pvd_at + 116 + 34]
-        .copy_from_slice(&root[..34]); // root directory record (74-byte field, 34 used)
+    img[pvd_at + 116..pvd_at + 116 + 34].copy_from_slice(&root[..34]); // root directory record (74-byte field, 34 used)
     pad_str(&mut img, pvd_at + 190, 32, CIDATA_VOLUME_ID); // volume set id
     pad_str(&mut img, pvd_at + 318, 128, "qemu-center"); // publisher
     pad_str(&mut img, pvd_at + 446, 128, "qemu-center iso.rs"); // data preparer
     pad_str(&mut img, pvd_at + 574, 128, "QEMU-CENTER"); // application
-    // Volume dates: 17-byte "YYYYMMDDHHmmssHHo" ASCII, fixed for determinism.
+                                                         // Volume dates: 17-byte "YYYYMMDDHHmmssHHo" ASCII, fixed for determinism.
     let dt = b"2026010100000000\x00"; // 2026-01-01 00:00:00.00 +00:00
     for off in [813usize, 830, 847, 864] {
         img[pvd_at + off..pvd_at + off + 17].copy_from_slice(dt);
@@ -306,7 +322,9 @@ pub fn parse_iso(bytes: &[u8]) -> Result<ParsedIso, IsoError> {
     }
     let pvd_at = PVD_LBA as usize * SECTOR;
     if bytes[pvd_at] != 1 {
-        return Err(IsoError::NotIso("LBA 16 is not a Primary Volume Descriptor"));
+        return Err(IsoError::NotIso(
+            "LBA 16 is not a Primary Volume Descriptor",
+        ));
     }
     if &bytes[pvd_at + 1..pvd_at + 6] != b"CD001" {
         return Err(IsoError::NotIso("missing CD001 standard identifier"));
@@ -522,7 +540,10 @@ mod tests {
             build_iso(&[("a.b", b"x")]),
             Err(IsoError::BadName(_))
         ));
-        assert!(matches!(build_iso(&[("", b"x")]), Err(IsoError::BadName(_))));
+        assert!(matches!(
+            build_iso(&[("", b"x")]),
+            Err(IsoError::BadName(_))
+        ));
         let long = "n".repeat(25);
         assert!(matches!(
             build_iso(&[(long.as_str(), b"x")]),
@@ -554,14 +575,8 @@ mod tests {
     #[test]
     fn large_file_pads_to_sector_boundary() {
         // 5000 bytes -> 3 sectors of storage; next file must not overlap.
-        let files = vec![
-            ("big", vec![7u8; 5000]),
-            ("next", b"tail".to_vec()),
-        ];
-        let refs: Vec<(&str, &[u8])> = files
-            .iter()
-            .map(|(n, c)| (*n, c.as_slice()))
-            .collect();
+        let files = vec![("big", vec![7u8; 5000]), ("next", b"tail".to_vec())];
+        let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, c)| (*n, c.as_slice())).collect();
         let img = build_iso(&refs).unwrap();
         let parsed = parse_iso(&img).unwrap();
         let mut got = parsed.files;
@@ -580,8 +595,10 @@ mod tests {
         let files: Vec<(String, Vec<u8>)> = (0..24)
             .map(|i| (format!("f{i:02}"), b"data".to_vec()))
             .collect();
-        let refs: Vec<(&str, &[u8])> =
-            files.iter().map(|(n, c)| (n.as_str(), c.as_slice())).collect();
+        let refs: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_slice()))
+            .collect();
         let img = build_iso(&refs).unwrap();
         // Walk records exactly like parse_iso and assert the no-straddle rule.
         let root = &img[20 * 2048..21 * 2048];
@@ -601,7 +618,10 @@ mod tests {
         let mut junk = vec![0u8; 20 * 2048];
         junk[0x8000] = 7; // not a PVD
         assert!(matches!(parse_iso(&junk), Err(IsoError::NotIso(_))));
-        assert!(matches!(parse_iso(&[0u8; 100]), Err(IsoError::Truncated(_))));
+        assert!(matches!(
+            parse_iso(&[0u8; 100]),
+            Err(IsoError::Truncated(_))
+        ));
         // A PVD that claims a root extent beyond the image.
         let mut img = build_iso(&sample_refs(&sample())).unwrap();
         let p = 0x8000 + 116;
@@ -629,6 +649,9 @@ mod tests {
         let contents = b"ssh_pwauth: false\nusers:\n  - name: rdc\n";
         let img = build_iso(&[("user-data", contents)]).unwrap();
         let parsed = parse_iso(&img).unwrap();
-        assert_eq!(parsed.files, vec![("user-data".to_string(), contents.to_vec())]);
+        assert_eq!(
+            parsed.files,
+            vec![("user-data".to_string(), contents.to_vec())]
+        );
     }
 }

@@ -77,8 +77,18 @@ pub fn adversarial_audit(serial: &str, profile_id: Option<String>) -> Adversaria
             result.stderr.trim().to_string()
         };
         for id in [
-            "cgroup", "qemu", "cpuinfo", "version", "gl", "sensors", "fingerprint", "securityPatch",
-            "mac", "hostname", "dns", "telephony",
+            "cgroup",
+            "qemu",
+            "cpuinfo",
+            "version",
+            "gl",
+            "sensors",
+            "fingerprint",
+            "securityPatch",
+            "mac",
+            "hostname",
+            "dns",
+            "telephony",
         ] {
             audit.checks.push(AuditCheck {
                 id: id.into(),
@@ -87,9 +97,7 @@ pub fn adversarial_audit(serial: &str, profile_id: Option<String>) -> Adversaria
                 detail: audit.message.clone(),
             });
         }
-        audit
-            .checks
-            .sort_by_key(|c| category_rank(&c.category));
+        audit.checks.sort_by_key(|c| category_rank(&c.category));
         return audit;
     }
 
@@ -116,7 +124,9 @@ pub fn adversarial_audit(serial: &str, profile_id: Option<String>) -> Adversaria
 
     let props = sections.get("PROPS").unwrap_or(&empty);
     let (fingerprint, patch) = parse_props(props);
-    audit.checks.push(identity_check(&fingerprint, profile.as_ref()));
+    audit
+        .checks
+        .push(identity_check(&fingerprint, profile.as_ref()));
     audit.checks.push(patch_check(&patch));
 
     let mac = sections.get("MAC").unwrap_or(&empty);
@@ -226,9 +236,17 @@ fn cgroup_check(content: &str) -> AuditCheck {
 
 /// ro.kernel.qemu / ro.boot.qemu — both empty on a properly hardened guest.
 fn qemu_check(content: &str) -> AuditCheck {
-    let values: Vec<&str> = content.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let values: Vec<&str> = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if values.is_empty() {
-        check("qemu", "pass", "ro.kernel.qemu / ro.boot.qemu 均为空".into())
+        check(
+            "qemu",
+            "pass",
+            "ro.kernel.qemu / ro.boot.qemu 均为空".into(),
+        )
     } else {
         check(
             "qemu",
@@ -248,11 +266,19 @@ fn cpuinfo_check(content: &str) -> AuditCheck {
             format!("/proc/cpuinfo 暴露 x86 特征：{}", detail_excerpt(content)),
         )
     } else if lower.contains("aarch64") || lower.contains("armv") {
-        check("cpuinfo", "pass", "cpuinfo 显示 ARM 架构（或已被 bind-mount 覆盖）".into())
+        check(
+            "cpuinfo",
+            "pass",
+            "cpuinfo 显示 ARM 架构（或已被 bind-mount 覆盖）".into(),
+        )
     } else if content.trim().is_empty() {
         check("cpuinfo", "unknown", "无法读取 /proc/cpuinfo".into())
     } else {
-        check("cpuinfo", "unknown", format!("cpuinfo 架构未知：{}", detail_excerpt(content)))
+        check(
+            "cpuinfo",
+            "unknown",
+            format!("cpuinfo 架构未知：{}", detail_excerpt(content)),
+        )
     }
 }
 
@@ -263,12 +289,19 @@ fn version_check(content: &str) -> AuditCheck {
         check(
             "version",
             "fail",
-            format!("/proc/version 含 redroid/generic 字样：{}", detail_excerpt(content)),
+            format!(
+                "/proc/version 含 redroid/generic 字样：{}",
+                detail_excerpt(content)
+            ),
         )
     } else if content.trim().is_empty() {
         check("version", "unknown", "无法读取 /proc/version".into())
     } else {
-        check("version", "pass", format!("内核版本未见已知容器字样：{}", detail_excerpt(content)))
+        check(
+            "version",
+            "pass",
+            format!("内核版本未见已知容器字样：{}", detail_excerpt(content)),
+        )
     }
 }
 
@@ -298,12 +331,19 @@ fn gl_check(content: &str, profile: Option<&SpoofProfile>) -> AuditCheck {
             ),
         )
     } else if content.trim().is_empty() {
-        check("gl", "unknown", "未能从 SurfaceFlinger 读取 GLES 信息".into())
+        check(
+            "gl",
+            "unknown",
+            "未能从 SurfaceFlinger 读取 GLES 信息".into(),
+        )
     } else {
         check(
             "gl",
             "pass",
-            format!("SurfaceFlinger 未见软件渲染器字样：{}{expectation}", detail_excerpt(content)),
+            format!(
+                "SurfaceFlinger 未见软件渲染器字样：{}{expectation}",
+                detail_excerpt(content)
+            ),
         )
     }
 }
@@ -319,7 +359,11 @@ fn sensors_check(content: &str) -> AuditCheck {
             format!("sensor HAL 暴露加速度计：{}", detail_excerpt(content)),
         )
     } else if content.trim().is_empty() {
-        check("sensors", "fail", "dumpsys sensorservice 中未见加速度计（HAL 层缺失）".into())
+        check(
+            "sensors",
+            "fail",
+            "dumpsys sensorservice 中未见加速度计（HAL 层缺失）".into(),
+        )
     } else {
         check("sensors", "fail", "传感器服务无加速度计条目".into())
     }
@@ -354,9 +398,7 @@ fn identity_check(fingerprint: &str, profile: Option<&SpoofProfile>) -> AuditChe
             format!("fingerprint 含 redroid 字样：{fp}"),
         );
     }
-    let mismatch = profile
-        .map(|p| p.build_fingerprint != fp)
-        .unwrap_or(false);
+    let mismatch = profile.map(|p| p.build_fingerprint != fp).unwrap_or(false);
     if mismatch {
         check(
             "fingerprint",
@@ -364,7 +406,11 @@ fn identity_check(fingerprint: &str, profile: Option<&SpoofProfile>) -> AuditChe
             format!("fingerprint 已伪装但与所选档案不一致：{fp} {expectation}"),
         )
     } else {
-        check("fingerprint", "pass", format!("fingerprint 已伪装：{fp} {expectation}"))
+        check(
+            "fingerprint",
+            "pass",
+            format!("fingerprint 已伪装：{fp} {expectation}"),
+        )
     }
 }
 
@@ -378,12 +424,20 @@ fn patch_check(patch: &str) -> AuditCheck {
             "ro.build.version.security_patch 为空，无法核验证书基线".into(),
         )
     } else {
-        check("securityPatch", "pass", format!("security_patch = {}", patch.trim()))
+        check(
+            "securityPatch",
+            "pass",
+            format!("security_patch = {}", patch.trim()),
+        )
     }
 }
 
 fn parse_macs(content: &str) -> (String, String) {
-    let values: Vec<&str> = content.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let values: Vec<&str> = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     let wlan = values.first().copied().unwrap_or("").to_string();
     let eth = values.get(1).copied().unwrap_or("").to_string();
     (wlan, eth)
@@ -591,7 +645,10 @@ mod tests {
             version_check("Linux version 5.10.0-redroid #1 SMP").verdict,
             "fail"
         );
-        assert_eq!(version_check("Linux version 5.15.0-generic #1").verdict, "fail");
+        assert_eq!(
+            version_check("Linux version 5.15.0-generic #1").verdict,
+            "fail"
+        );
         assert_eq!(
             version_check("Linux version 5.15.0-android13-ab123 #1 SMP").verdict,
             "pass"
@@ -640,7 +697,10 @@ mod tests {
         assert_eq!(matching.verdict, "pass");
         assert!(matching.detail.contains(&profile.build_fingerprint));
 
-        let mismatch = identity_check("Xiaomi/other/other:13/B/I:user/release-keys", Some(&profile));
+        let mismatch = identity_check(
+            "Xiaomi/other/other:13/B/I:user/release-keys",
+            Some(&profile),
+        );
         assert_eq!(mismatch.verdict, "pass");
         assert!(mismatch.detail.contains("不一致"));
     }
@@ -664,9 +724,8 @@ mod tests {
 
     #[test]
     fn props_and_macs_parse_from_section_text() {
-        let (fp, patch) = parse_props(
-            "fp=Xiaomi/alioth/alioth:13/B/V:user/release-keys\npatch=2023-11-01",
-        );
+        let (fp, patch) =
+            parse_props("fp=Xiaomi/alioth/alioth:13/B/V:user/release-keys\npatch=2023-11-01");
         assert!(fp.starts_with("Xiaomi/alioth"));
         assert_eq!(patch, "2023-11-01");
 
@@ -678,8 +737,18 @@ mod tests {
     #[test]
     fn every_check_id_has_a_category() {
         for id in [
-            "cgroup", "qemu", "cpuinfo", "version", "gl", "sensors", "fingerprint", "securityPatch",
-            "mac", "hostname", "dns", "telephony",
+            "cgroup",
+            "qemu",
+            "cpuinfo",
+            "version",
+            "gl",
+            "sensors",
+            "fingerprint",
+            "securityPatch",
+            "mac",
+            "hostname",
+            "dns",
+            "telephony",
         ] {
             assert_ne!(category_of(id), "other", "category missing for {id}");
         }
@@ -689,7 +758,10 @@ mod tests {
     fn gl_fail_detail_names_gpu_passthrough_remedy() {
         let check = gl_check("GLES:0, Android Emulator (SwiftShader)", None);
         assert_eq!(check.verdict, "fail");
-        assert!(check.detail.contains("GPU 透传"), "fail detail must name the remedy");
+        assert!(
+            check.detail.contains("GPU 透传"),
+            "fail detail must name the remedy"
+        );
         assert!(check.detail.contains("WSL2"));
     }
 
@@ -720,7 +792,10 @@ mod tests {
         let single = dns_check("dns1=9.9.9.9");
         assert_eq!(single.verdict, "pass");
         assert!(single.detail.contains("net.dns1=9.9.9.9"));
-        assert!(single.detail.contains("不"), "detail must note consistency is not judged");
+        assert!(
+            single.detail.contains("不"),
+            "detail must note consistency is not judged"
+        );
 
         let empty = dns_check("dns1=\ndns2=");
         assert_eq!(empty.verdict, "unknown");
@@ -745,12 +820,42 @@ mod tests {
         // Insertion order across categories, deliberately shuffled.
         let mut audit = AdversarialAudit::default();
         audit.checks = vec![
-            AuditCheck { id: "mac".into(), category: "attestation".into(), verdict: "pass".into(), detail: String::new() },
-            AuditCheck { id: "cgroup".into(), category: "cgroup".into(), verdict: "pass".into(), detail: String::new() },
-            AuditCheck { id: "dns".into(), category: "network".into(), verdict: "pass".into(), detail: String::new() },
-            AuditCheck { id: "cpuinfo".into(), category: "cpu".into(), verdict: "pass".into(), detail: String::new() },
-            AuditCheck { id: "hostname".into(), category: "network".into(), verdict: "pass".into(), detail: String::new() },
-            AuditCheck { id: "telephony".into(), category: "telephony".into(), verdict: "unknown".into(), detail: String::new() },
+            AuditCheck {
+                id: "mac".into(),
+                category: "attestation".into(),
+                verdict: "pass".into(),
+                detail: String::new(),
+            },
+            AuditCheck {
+                id: "cgroup".into(),
+                category: "cgroup".into(),
+                verdict: "pass".into(),
+                detail: String::new(),
+            },
+            AuditCheck {
+                id: "dns".into(),
+                category: "network".into(),
+                verdict: "pass".into(),
+                detail: String::new(),
+            },
+            AuditCheck {
+                id: "cpuinfo".into(),
+                category: "cpu".into(),
+                verdict: "pass".into(),
+                detail: String::new(),
+            },
+            AuditCheck {
+                id: "hostname".into(),
+                category: "network".into(),
+                verdict: "pass".into(),
+                detail: String::new(),
+            },
+            AuditCheck {
+                id: "telephony".into(),
+                category: "telephony".into(),
+                verdict: "unknown".into(),
+                detail: String::new(),
+            },
         ];
         audit.checks.sort_by_key(|c| category_rank(&c.category));
         let ids: Vec<&str> = audit.checks.iter().map(|c| c.id.as_str()).collect();

@@ -294,7 +294,11 @@ pub fn device_proxy_status(serial: &str) -> DeviceProxyStatus {
                 "http" => status.http_proxy = normalize_http_proxy(v),
                 "rdc" => {
                     let v = v.trim();
-                    status.original = if v.is_empty() { String::new() } else { v.into() };
+                    status.original = if v.is_empty() {
+                        String::new()
+                    } else {
+                        v.into()
+                    };
                 }
                 "tun" => status.transparent_running = !v.trim().is_empty(),
                 _ => {}
@@ -387,13 +391,7 @@ pub fn apply_transparent_proxy(serial: &str, proxy: &str) -> ShellResult {
     // 4) repoint the default route, keeping host/loopback paths intact
     let route_out = util::run_command_timeout(
         &docker::docker_bin(),
-        &[
-            "exec",
-            &container,
-            "sh",
-            "-c",
-            "ip route show default",
-        ],
+        &["exec", &container, "sh", "-c", "ip route show default"],
         Duration::from_secs(10),
     );
     let (gw, dev) = parse_default_route(&route_out.stdout).unwrap_or_else(|| {

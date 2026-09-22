@@ -46,6 +46,7 @@ import type {
   QemuRedroidInstance,
   QemuRedroidRuntimeStats,
   RuntimeIdleReleaseResult,
+  RuntimeAppHibernateResult,
   RuntimeStartDecision,
   QemuVerifyReport,
   QemuVmCreateRequest,
@@ -54,6 +55,9 @@ import type {
   RuntimeResourceSnapshot,
   ArtMode,
   ArtOptimizationResult,
+  AuthorizationCapability,
+  AuthorizationRegistration,
+  AuthorizationRuntimeStatus,
 } from "../types";
 
 /** Unified Device Service — all device capabilities go through here */
@@ -80,6 +84,8 @@ export const DeviceService = {
       vm: vm ?? null,
       instance: instance ?? null,
     }),
+  runtimeMarkActivity: (instance: string, kind: string) =>
+    invoke<void>("runtime_mark_activity", { instance, kind }),
 
   // Devices
   listDevices: () => invoke<DeviceInfo[]>("list_devices"),
@@ -151,8 +157,6 @@ export const DeviceService = {
     invoke<ShellResult>("start_app_activity", { serial, package: packageName, activity }),
   createAppShortcut: (serial: string, packageName: string) =>
     invoke<string>("create_app_shortcut", { serial, package: packageName }),
-  openDeviceWindow: (id: string, title: string, x: number, y: number, width: number, height: number) =>
-    invoke<void>("open_device_window", { id, title, x, y, width, height }),
   stopApp: (serial: string, packageName: string) =>
     invoke<ShellResult>("stop_app", { serial, package: packageName }),
   clearAppData: (serial: string, packageName: string) =>
@@ -482,6 +486,12 @@ export const DeviceService = {
       package: packageName,
       mode,
     }),
+  authorizationStatus: () => invoke<AuthorizationRuntimeStatus>("authorization_status"),
+  authorizationRegister: () => invoke<AuthorizationRegistration>("authorization_register"),
+  authorizationAcquireSession: (capability: AuthorizationCapability) =>
+    invoke<AuthorizationRuntimeStatus>("authorization_acquire_session", { capability }),
+  authorizationHeartbeat: () => invoke<AuthorizationRuntimeStatus>("authorization_heartbeat"),
+  authorizationRevokeLocal: () => invoke<AuthorizationRuntimeStatus>("authorization_revoke_local"),
 };
 
 /**
@@ -499,6 +509,11 @@ export const QemuService = {
   vmCreate: (req: QemuVmCreateRequest) =>
     invoke<QemuCliOutput>("qemu_vm_create", { req }),
   vmStart: (name: string) => invoke<QemuCliOutput>("qemu_vm_start", { name }),
+  vmSetMemory: (name: string, memoryMib: number) =>
+    invoke<QemuCliOutput>("qemu_vm_set_memory", { name, memoryMib }),
+  /** Explicitly return reclaimable guest pages through virtio-balloon. */
+  vmMemoryReclaim: (name: string) =>
+    invoke<QemuCliOutput>("qemu_vm_memory_reclaim", { name }),
   vmStop: (name: string) => invoke<QemuCliOutput>("qemu_vm_stop", { name }),
   vmDelete: (name: string, purge = true) =>
     invoke<QemuCliOutput>("qemu_vm_delete", { name, purge }),
@@ -530,6 +545,13 @@ export const QemuService = {
     invoke<RuntimeStartDecision>("runtime_request_start", { vm, instance }),
   runtimeReleaseIdle: (vm: string, instance: string) =>
     invoke<RuntimeIdleReleaseResult>("runtime_release_idle", { vm, instance }),
+  runtimeHibernateApp: (vm: string, instance: string, serial: string, packageName: string) =>
+    invoke<RuntimeAppHibernateResult>("runtime_hibernate_app", {
+      vm,
+      instance,
+      serial,
+      package: packageName,
+    }),
   adbList: () => invoke<QemuAdbMapping[]>("qemu_adb_list"),
   verify: (vm: string) => invoke<QemuVerifyReport>("qemu_verify", { vm }),
 };

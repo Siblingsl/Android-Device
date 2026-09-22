@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "../../stores/appStore";
 import { useI18n } from "../../i18n";
+import { WindowControls, WindowDragRegion, WindowResizeHandles } from "./WindowControls";
 
 const items = [
   { to: "/", icon: LayoutDashboard, key: "common.nav.dashboard" },
@@ -37,12 +38,14 @@ export function Sidebar() {
     <header className="topbar">
       <div className="topbar-inner">
         <NavLink to="/" className="brand" end>
-          <div className="logo" aria-hidden="true"><span>J</span></div>
+          <div className="logo" aria-hidden="true"><img src="/just-run-logo.png" alt="" /></div>
           <div className="brand-copy">
             <div className="brand-title">Just Run</div>
             <div className="brand-sub">Device tools <span className="brand-mark">/ simple</span></div>
           </div>
         </NavLink>
+
+        <WindowDragRegion />
 
         <div className="topbar-tools">
           <nav className="nav" aria-label="Primary navigation">
@@ -77,16 +80,17 @@ export function Sidebar() {
             ))}
           </nav>
 
-          <span className="topbar-divider" aria-hidden="true" />
-
           <div className="topbar-actions">
             <NavLink to="/settings" className="settings-link" title={t("common.nav.settings")}>
               <Settings size={16} />
             </NavLink>
           </div>
+
+          <WindowControls />
         </div>
       </div>
       <div className="topbar-rule" />
+      <WindowResizeHandles />
     </header>
   );
 }

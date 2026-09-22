@@ -5,10 +5,10 @@
 ## 自动化门槛
 
 - [x] `npx tsc --noEmit`
-- [x] `npx vitest run`（60 文件 / 460 用例）
-- [x] `cargo test --manifest-path src-tauri/Cargo.toml`（296 通过 / 0 失败 / 2 忽略）
-- [x] `cargo test --manifest-path qemu-center/Cargo.toml`（215 库 + 8 CLI 通过）
-- [x] `cargo test --manifest-path authorization-service/Cargo.toml`（23 库测试 + 2 管理工具测试 + 2 启动配置测试 + 3 集成通过）
+- [x] `npx vitest run`（61 文件 / 464 用例）
+- [x] `cargo test --manifest-path src-tauri/Cargo.toml`（301 通过 / 0 失败 / 2 忽略）
+- [x] `cargo test --manifest-path qemu-center/Cargo.toml`（224 库 + 21 CLI 通过）
+- [x] `cargo test --manifest-path authorization-service/Cargo.toml`（23 库测试 + 2 管理工具测试 + 2 启动配置测试 + 4 集成通过）
 - [x] `git diff --check`
 
 服务端额外覆盖：nonce 重放、执行票据的已发布 artifact 哈希不匹配、execution grant JTI 一次性消费与重放拒绝、旧 session 撤销、客户端版本不匹配、设备绑定、权限撤销、目标 ABI/Android 不匹配、加密分块解密和完整性绑定；控制面超大请求在 JSON 解析前由 `64 KiB` body limit 拒绝，证据见 `E-030-authorization-control-plane-body-limit.md` 与 E-035。
@@ -23,6 +23,18 @@
 状态与主机可用内存；Windows 使用 CIM，Linux 使用 `/proc/meminfo`，已知余量不足时
 拒绝启动，主机内存探针不可用时仅允许带 warning 的明确单节点启动。记录见
 `E-029-cli-vm-start-memory-guard.md`。
+
+QEMU guest 内存回收额外覆盖：节点启动参数包含唯一的 `virtio-balloon` 设备，
+`qemu-center vm memory-reclaim <name>` 只在节点运行且活跃实例指标完整时计算保守目标，
+并在 QMP `balloon` 后用 `query-balloon` 验证 actual；失败时不停止 VM、不修改磁盘。
+桌面端按钮是显式触发，不设后台定时器；critical 压力下的 runtime start 还会在
+既有闲置释放前最多自动尝试一次同一 CLI，成功后重新探测压力，失败或仍 critical
+则保留原 fallback。代码级结果见
+`E-068-qemu-balloon-memory-reclaim.md`；真实 target/actual、主机工作集变化、登录/连续浏览
+和 30 分钟稳定性仍待人工。补充的 2048 MiB 隔离对照见
+`E-071-balloon-host-working-set-boundary-20260920.md`：活跃 r13 时规划器会在安全余量不足
+时拒绝继续回收；空闲 guest 的 target=1536 MiB 仍可能得到 actual=2048 MiB、reclaimed=0，
+因此 balloon 不能被当作固定宿主节省量。
 
 ## 内存矩阵
 
@@ -92,10 +104,10 @@ standard 推荐；证据见 `E-060`。
 但在已有启动/排队任务时阻止新增请求，避免指标不可用时形成并发启动洪峰。
 自动化证据见 `work/runtime-core-protection-20260917/evidence/E-010-unknown-pressure-start-guard.md`。
 
-临界压力下现在会先尝试自动释放同一节点内一个已确认闲置、状态为运行中且未保护的实例，
-随后重新读取压力；目标实例、保护实例、退出实例和 unknown 状态均不会被停止，节点保持运行。
-该功能默认开启，可在高级设置中关闭；当前只完成了纯逻辑和状态分类测试，实际停止/恢复
-仍需在隔离节点人工演练。
+临界压力下现在会先尝试一次同一节点 guest balloon 回收并重新读取压力；若仍为 critical，
+才尝试自动释放同一节点内一个已确认闲置、状态为运行中且未保护的实例。目标实例、保护
+实例、退出实例和 unknown 状态均不会被停止，节点保持运行。该功能默认开启，可在高级设置
+中关闭；当前只完成了纯逻辑和状态分类测试，实际自动回收/停止/恢复仍需在隔离节点人工演练。
 
 ## ART A/B
 
@@ -117,9 +129,15 @@ Android 13 的 verify-only 命令为 `cmd package compile -m verify --check-prof
 - [x] 撤销客户端、撤销 entitlement、重新注册新版本后，旧 session 和旧 transfer 均拒绝（E-008、E-046；生产现场演练仍待人工）。
 - [x] 协议层已证明：临时 artifact、改名后的 artifact 或复制的 grant 没有当前设备私钥的 `device_proof` 不能复用；缺失证明/错误设备证明均返回 403 且不消费 JTI，见 E-050。真实跨机器复制演练仍需人工。
 - [x] 创建、升级、恢复和列表增强完成后，客户端临时目录不残留下载的明文核心。
-- [ ] 断网、过期和服务端不可达时 fail closed；普通只读诊断仍可使用。
+- [x] 受保护创建的代码路径已在 Docker 前增加 guest 在线预授权闸门：服务端不可达或预授权证明缺失/错绑时，`qemu-center redroid create` 在任何 Docker 命令前退出；普通只读诊断仍可使用。真实部署断网、过期和服务端不可达演练仍待人工。
 - [x] 当前 release 主程序中不存在可离线工作的本地核心脚本正文或服务端私钥（E-032）；`windows-release.yml` 已将 `scripts/verify-release-core.ps1` 设为阻断步骤。
 - [x] guest runner 缺少票据、票据签名不可信、工作流/VM/实例/核心 artifact 不匹配、消费服务拒绝/不可达或自身文件哈希不匹配时，在 Docker 操作前 fail closed；原始 placeholder runner 不能直接作为生产 artifact 发布，必须经过 `artifact publish-runner` 渲染（E-035）。
+- [x] 多阶段创建/升级不复用一次性 JTI：`build/seed/activate` 分别申请并消费独立的短时 grant，升级的 `build/upgrade` 也分别消费独立 grant；票据不足时在下一阶段前 fail closed（E-061）。
+- [x] 桌面端的 QEMU 创建入口强制先取得服务端核心和执行票据；激活阶段先由 guest 在线消费票据并写入同作业证明，再由 `qemu-center redroid create` 校验签名 grant、VM/实例/动作/时间、artifact 绑定和 guest 证明后才触碰 Docker；见 E-062 与 E-063。
+- [x] guest 作业证明已升级为服务端签名的 authorization receipt：节点侧读取并验签回执，逐项比对设备/会话/版本/核心/动作/VM/实例/JTI 和有效期；旧式纯 JTI 标记、篡改回执或错绑回执均在 Docker 前拒绝，见 E-065。
+- [x] 节点侧增加同一状态目录的一次性 receipt 账本：同一 JTI 的重复或并发消费在 `docker ps`、`docker volume create`、`docker run` 前原子拒绝；非法 JTI 也拒绝，见 E-066。整体复制/删除 host 状态目录仍属于管理员边界，需由服务端新 grant 与设备 proof 兜底。
+- [x] 已完成无生产密钥的轮换演练：跨服务重启的旧/新 execution grant 与 authorization receipt 分别绑定 `auth-old`/`auth-next`，旧票据重放和旧 authority 验证新回执均拒绝；runner 渲染也验证了两代公钥不串代，四个 release 产物扫描 clean，Windows release workflow 已接入该演练，见 E-067。该项只证明代码级协议，不替代生产 TLS、secret manager、真实账号、跨设备和 live guest 验收。
+- [x] 宿主机可用内存不足时，CLI 在创建 QEMU 前拒绝启动并确认没有生成 QEMU 进程；见 E-064。该护栏证据不替代真实业务稳定性矩阵。
 - [ ] 按 [`docs/ops/authorization-key-rotation-runbook.md`](ops/authorization-key-rotation-runbook.md)
   完成一次服务端签名密钥轮换：双公钥客户端 → 暂停受保护操作 → 服务端切换并重新发布
   runner → 旧客户端退出后移除旧公钥。

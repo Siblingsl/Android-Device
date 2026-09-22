@@ -17,6 +17,9 @@ use std::sync::Arc;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 pub const LEASE_MAX_SECS: i64 = 15 * 60;
+pub const REQUEST_MAX_AGE_SECS: i64 = 5 * 60;
+pub const MAX_CLOCK_SKEW_SECS: i64 = 5 * 60;
+pub const MAX_NONCE_BYTES: usize = 256;
 pub const ARTIFACT_CHUNK_SIZE: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,6 +122,34 @@ pub struct SignedExecutionGrant {
     pub device_proof: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct ExecutionAuthorizationReceiptClaims {
+    pub iss: String,
+    pub aud: String,
+    pub client_id: String,
+    pub device_id: String,
+    pub session_id: String,
+    pub client_version: String,
+    pub artifact_id: String,
+    pub artifact_sha256: String,
+    pub action: String,
+    pub vm: String,
+    pub instance: String,
+    pub grant_jti: String,
+    pub iat: i64,
+    pub exp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct SignedExecutionAuthorizationReceipt {
+    pub key_id: String,
+    /// URL-safe base64 of the canonical receipt claims signed by the service.
+    pub payload: String,
+    pub signature: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SigningAuthority {
     key_id: String,
@@ -201,6 +232,42 @@ impl SigningAuthority {
             signature,
             device_proof: None,
         }
+    }
+
+    pub fn sign_execution_authorization_receipt(
+        &self,
+        claims: ExecutionAuthorizationReceiptClaims,
+    ) -> SignedExecutionAuthorizationReceipt {
+        let payload =
+            canonical_json(&claims).expect("authorization protocol values are serializable");
+        let signature = URL_SAFE_NO_PAD.encode(self.signing_key.sign(&payload).to_bytes());
+        SignedExecutionAuthorizationReceipt {
+            key_id: self.key_id.clone(),
+            payload: URL_SAFE_NO_PAD.encode(payload),
+            signature,
+        }
+    }
+
+    pub fn verify_execution_authorization_receipt(
+        &self,
+        receipt: &SignedExecutionAuthorizationReceipt,
+    ) -> Result<ExecutionAuthorizationReceiptClaims, CryptoError> {
+        if receipt.key_id != self.key_id {
+            return Err(CryptoError::InvalidSignature);
+        }
+        let payload = URL_SAFE_NO_PAD
+            .decode(&receipt.payload)
+            .map_err(|error| CryptoError::Malformed(error.to_string()))?;
+        let signature = URL_SAFE_NO_PAD
+            .decode(&receipt.signature)
+            .map_err(|error| CryptoError::Malformed(error.to_string()))?;
+        let signature = ed25519_dalek::Signature::from_slice(&signature)
+            .map_err(|error| CryptoError::Malformed(error.to_string()))?;
+        self.signing_key
+            .verifying_key()
+            .verify(&payload, &signature)
+            .map_err(|_| CryptoError::InvalidSignature)?;
+        serde_json::from_slice(&payload).map_err(|error| CryptoError::Malformed(error.to_string()))
     }
 
     pub fn verify_execution_grant(
@@ -331,6 +398,7 @@ pub struct SessionProof<'a> {
     pub device_id: &'a str,
     pub client_version: &'a str,
     pub nonce: &'a str,
+    pub iat: i64,
     pub capabilities: &'a [ProtectedCapability],
 }
 
@@ -341,6 +409,39 @@ pub struct HeartbeatProof<'a> {
     pub client_id: &'a str,
     pub device_id: &'a str,
     pub nonce: &'a str,
+    pub iat: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ExecutionGrantProof<'a> {
+    pub artifact_id: &'a str,
+    pub artifact_sha256: &'a str,
+    pub action: &'a str,
+    pub vm: &'a str,
+    pub instance: &'a str,
+    pub nonce: &'a str,
+    pub iat: i64,
+}
+
+pub fn validate_request_time(iat: i64, now: i64) -> Result<(), CryptoError> {
+    if iat < now.saturating_sub(REQUEST_MAX_AGE_SECS)
+        || iat > now.saturating_add(MAX_CLOCK_SKEW_SECS)
+    {
+        return Err(CryptoError::Malformed(
+            "signed request timestamp is outside the accepted window".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_nonce(nonce: &str) -> Result<(), CryptoError> {
+    if nonce.trim().is_empty() || nonce.len() > MAX_NONCE_BYTES {
+        return Err(CryptoError::Malformed(
+            "request nonce is empty or too large".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, CryptoError> {

@@ -44,7 +44,7 @@ describe("TerminalPage", () => {
     vi.mocked(TerminalSessionService.list).mockResolvedValue([session]);
     vi.mocked(TerminalSessionService.subscribe).mockImplementation(async (callback) => {
       onOutput = callback;
-      return vi.fn();
+      return () => {};
     });
     vi.mocked(TerminalSessionService.write).mockResolvedValue({ success: true, error: "" });
     vi.mocked(TerminalSessionService.stop).mockResolvedValue({ success: true, error: "" });

@@ -168,10 +168,7 @@ const BRAND_PACKAGES: &[(&[&str], &[&str])] = &[
 /// packages are appended after the base list so the list stays stable when
 /// only the brand changes the tail. Unknown brands get the base list only.
 pub fn usage_package_list(brand: &str) -> Vec<String> {
-    let mut out: Vec<String> = BASE_PACKAGES
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let mut out: Vec<String> = BASE_PACKAGES.iter().map(|s| (*s).to_string()).collect();
     let b = brand.to_ascii_lowercase();
     if let Some((_, pkgs)) = BRAND_PACKAGES
         .iter()
@@ -184,9 +181,7 @@ pub fn usage_package_list(brand: &str) -> Vec<String> {
 
 /// The `mkdir + cat` command the package list is streamed into (pure, tested).
 pub fn pkg_list_write_command() -> String {
-    format!(
-        "mkdir -p {USAGE_DIR_REMOTE} && cat > {USAGE_PKG_LIST_REMOTE}"
-    )
+    format!("mkdir -p {USAGE_DIR_REMOTE} && cat > {USAGE_PKG_LIST_REMOTE}")
 }
 
 /// Permissions fixup so app processes (DeviceCloak's host process reads the
@@ -223,9 +218,7 @@ pub fn usage_readme_text(profile: &SpoofProfile) -> String {
 
 /// Pure builder for the README `cat >` command (streamed via stdin, tested).
 pub fn readme_write_command() -> String {
-    format!(
-        "mkdir -p {USAGE_DIR_REMOTE} && cat > {USAGE_README_REMOTE}"
-    )
+    format!("mkdir -p {USAGE_DIR_REMOTE} && cat > {USAGE_README_REMOTE}")
 }
 
 /// Seed the usage baseline for one container instance:
@@ -291,7 +284,10 @@ pub fn seed_usage_baseline(serial: &str, profile: &SpoofProfile) -> ShellResult 
     if write_readme.success {
         stdout_parts.push(format!("说明已写入 {USAGE_README_REMOTE}"));
     } else {
-        warnings.push(format!("README 写入失败（不影响功能）: {}", write_readme.stderr.trim()));
+        warnings.push(format!(
+            "README 写入失败（不影响功能）: {}",
+            write_readme.stderr.trim()
+        ));
     }
 
     // 3) permissions (best effort)
@@ -338,7 +334,11 @@ pub fn seed_usage_baseline(serial: &str, profile: &SpoofProfile) -> ShellResult 
         success: write_list.success && touch.success,
         stdout: stdout_parts.join("\n"),
         stderr,
-        exit_code: if write_list.success && touch.success { 0 } else { 1 },
+        exit_code: if write_list.success && touch.success {
+            0
+        } else {
+            1
+        },
     }
 }
 

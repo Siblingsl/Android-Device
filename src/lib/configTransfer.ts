@@ -1,6 +1,5 @@
 import type { AppSettings } from "../types";
 import { DEVICE_METADATA_STORAGE_KEY, defaultDeviceMetadata, getAllDeviceMetadata, type DeviceMetadata } from "./deviceMetadata";
-import { ARRANGEMENT_STORAGE_KEY, type ArrangementItem } from "../stores/layoutStore";
 import { DEFAULT_SHORTCUTS, SHORTCUT_ACTIONS, SHORTCUT_STORAGE_KEY, type ShortcutBinding } from "./shortcutConfig";
 import { KEYBOARD_MAPPING_STORAGE_KEY, type KeyboardMapping } from "./keyboardMapping";
 import { AUTOMATION_STORAGE_KEY, normalizeAutomationScript, type AutomationScript } from "./automation";
@@ -16,7 +15,6 @@ export interface AppConfigBackup {
   exportedAt: string;
   settings: AppSettings;
   deviceMetadata: Record<string, DeviceMetadata>;
-  arrangement: ArrangementItem[];
   shortcuts: ShortcutBinding[];
   keyboardMappings: KeyboardMapping[];
   automationScripts: AutomationScript[];
@@ -35,7 +33,6 @@ function readStored<T>(key: string, fallback: T): T {
 }
 
 export function buildConfigBackup(settings: AppSettings): AppConfigBackup {
-  const arrangement = readStored<ArrangementItem[]>(ARRANGEMENT_STORAGE_KEY, []).filter((item) => item && typeof item.id === "string");
   const shortcuts = readStored<ShortcutBinding[]>(SHORTCUT_STORAGE_KEY, DEFAULT_SHORTCUTS).filter((item) => item && typeof item.id === "string" && typeof item.key === "string");
   const keyboardMappings = readStored<KeyboardMapping[]>(KEYBOARD_MAPPING_STORAGE_KEY, []).filter((item) => item && typeof item.id === "string" && typeof item.trigger === "string");
   const automationScripts = readStored<AutomationScript[]>(AUTOMATION_STORAGE_KEY, []).filter((item) => item && typeof item.id === "string" && Array.isArray(item.steps));
@@ -54,7 +51,6 @@ export function buildConfigBackup(settings: AppSettings): AppConfigBackup {
     exportedAt: new Date().toISOString(),
     settings: { ...settings },
     deviceMetadata: getAllDeviceMetadata(),
-    arrangement,
     shortcuts,
     keyboardMappings,
     automationScripts,
@@ -89,16 +85,6 @@ export function parseConfigBackup(raw: string, fallbackSettings: AppSettings): A
       };
     }
   }
-  const arrangement = Array.isArray(parsed.arrangement)
-    ? parsed.arrangement.filter((item): item is ArrangementItem => Boolean(item) && typeof item === "object" && typeof item.id === "string" && (item.span === 1 || item.span === 2)).map((item, index) => ({
-      ...item,
-      order: index,
-      height: Number.isFinite(Number(item.height)) ? Math.max(240, Math.min(1400, Math.round(Number(item.height)))) : 360,
-      x: Number.isFinite(Number(item.x)) ? Math.round(Number(item.x)) : index * 20,
-      y: Number.isFinite(Number(item.y)) ? Math.round(Number(item.y)) : index * 20,
-      width: Number.isFinite(Number(item.width)) ? Math.max(320, Math.min(2400, Math.round(Number(item.width)))) : 560,
-    }))
-    : [];
   const knownActions = new Set(SHORTCUT_ACTIONS.map((item) => item.value));
   const shortcuts = Array.isArray(parsed.shortcuts)
     ? parsed.shortcuts.filter((item): item is ShortcutBinding => Boolean(item) && typeof item === "object" && typeof item.id === "string" && typeof item.key === "string" && knownActions.has(item.action as ShortcutBinding["action"])).map((item) => ({ ...item, deviceId: typeof item.deviceId === "string" ? item.deviceId : "", enabled: item.enabled === true }))
@@ -127,7 +113,6 @@ export function parseConfigBackup(raw: string, fallbackSettings: AppSettings): A
     exportedAt: typeof parsed.exportedAt === "string" ? parsed.exportedAt : new Date().toISOString(),
     settings,
     deviceMetadata: metadata,
-    arrangement,
     shortcuts,
     keyboardMappings,
     automationScripts,
@@ -140,7 +125,6 @@ export function parseConfigBackup(raw: string, fallbackSettings: AppSettings): A
 export function applyClientConfig(config: AppConfigBackup) {
   try {
     localStorage.setItem(DEVICE_METADATA_STORAGE_KEY, JSON.stringify(config.deviceMetadata));
-    localStorage.setItem(ARRANGEMENT_STORAGE_KEY, JSON.stringify(config.arrangement));
     localStorage.setItem(SHORTCUT_STORAGE_KEY, JSON.stringify(config.shortcuts));
     localStorage.setItem(KEYBOARD_MAPPING_STORAGE_KEY, JSON.stringify(config.keyboardMappings));
     localStorage.setItem(AUTOMATION_STORAGE_KEY, JSON.stringify(config.automationScripts));

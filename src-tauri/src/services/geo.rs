@@ -152,9 +152,7 @@ pub fn geo_consistency(
     }
 
     if let Some(proxy) = proxy_country.map(str::trim).filter(|c| !c.is_empty()) {
-        if !geo.country.trim().is_empty()
-            && !proxy.eq_ignore_ascii_case(geo.country.trim())
-        {
+        if !geo.country.trim().is_empty() && !proxy.eq_ignore_ascii_case(geo.country.trim()) {
             issues.push(GeoIssue {
                 code: "proxyCountryMismatch".into(),
                 message: format!(
@@ -244,9 +242,7 @@ mod tests {
         assert_eq!(issues.len(), 2); // timezone mismatch + country mismatch
         assert!(issues.iter().any(|i| i.code == "timezoneMismatch"));
         assert!(issues.iter().any(|i| i.code == "timezoneCountryMismatch"));
-        assert!(issues
-            .iter()
-            .all(|i| !i.message.is_empty()));
+        assert!(issues.iter().all(|i| !i.message.is_empty()));
     }
 
     #[test]

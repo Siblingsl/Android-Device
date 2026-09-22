@@ -474,16 +474,14 @@ pub fn host_has_qemu_process() -> io::Result<bool> {
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ));
         }
-        return Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|name| {
-                name.trim()
-                    .rsplit(['\\', '/'])
-                    .next()
-                    .unwrap_or(name.trim())
-                    .to_ascii_lowercase()
-                    .starts_with("qemu-system-")
-            }));
+        return Ok(String::from_utf8_lossy(&output.stdout).lines().any(|name| {
+            name.trim()
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or(name.trim())
+                .to_ascii_lowercase()
+                .starts_with("qemu-system-")
+        }));
     }
 
     #[cfg(not(any(windows, unix)))]

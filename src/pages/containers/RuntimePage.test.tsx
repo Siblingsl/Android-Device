@@ -3,8 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
 // Evaluated before the page tree on purpose: `appStore` and `i18n` form an
-// import cycle (the store calls tStatic while initializing), and the Docker
-// panel's chain reaches i18n first through `ui/ToolStatus`. Importing the store
+// import cycle (the store calls tStatic while initializing). Importing the store
 // first keeps the cycle in the order the other page tests already rely on.
 import { useAppStore } from "../../stores/appStore";
 import RuntimePage from "./RuntimePage";
@@ -175,8 +174,11 @@ function currentLocation() {
 /** Flush the panels' mount-time loads. */
 async function flush() {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    // React.lazy resolves through several microtasks. Keep this timer-free
+    // because lifecycle tests intentionally use fake timers on this path.
+    for (let i = 0; i < 8; i += 1) {
+      await Promise.resolve();
+    }
   });
 }
 
@@ -192,6 +194,10 @@ function expectOnlyDockerPanel() {
 function expectOnlyQemuPanel() {
   expect(panelEl("qemu")).toBeTruthy();
   expect(panelEl("docker")).toBeNull();
+}
+
+async function waitForPanel(track: "docker" | "qemu") {
+  await waitFor(() => expect(panelEl(track)).toBeTruthy());
 }
 
 /** Direct children of the router outlet wrapper the panel must not be wrapped in. */
@@ -236,6 +242,7 @@ describe("RuntimePage track resolution", () => {
   it("falls back to the Docker track when nothing is remembered", async () => {
     renderShell("/containers");
     await flush();
+    await waitForPanel("docker");
 
     expect(activeTab()?.textContent).toContain("本机 Docker");
     expectOnlyDockerPanel();
@@ -245,9 +252,19 @@ describe("RuntimePage track resolution", () => {
     useAppStore.setState({ settings: { ...baseSettings, defaultTrack: "qemu" } });
     renderShell("/containers");
     await flush();
+    await waitForPanel("qemu");
 
     expect(activeTab()?.textContent).toContain("QEMU 节点");
     expectOnlyQemuPanel();
+  });
+
+  it("keeps the QEMU experimental guidance compact in the merged shell", async () => {
+    renderShell("/containers?track=qemu");
+    await flush();
+    await waitForPanel("qemu");
+
+    expect(screen.getByText("实验性轨道")).toBeTruthy();
+    expect(screen.queryByText(/实验性轨道：使用前请运行节点验收/)).toBeNull();
   });
 
   it("lets ?track= win over the remembered track", async () => {
@@ -263,6 +280,7 @@ describe("RuntimePage track resolution", () => {
     useAppStore.setState({ settings: { ...baseSettings, defaultTrack: "qemu" } });
     renderShell("/containers?track=podman");
     await flush();
+    await waitForPanel("qemu");
 
     expect(activeTab()?.textContent).toContain("QEMU 节点");
     expectOnlyQemuPanel();
@@ -271,6 +289,8 @@ describe("RuntimePage track resolution", () => {
   it("mounts only the active track's panel", async () => {
     const { unmount } = renderShell("/containers?track=docker");
     await flush();
+    expect(panelEl("docker")?.getAttribute("role")).toBe("tabpanel");
+    expect(panelEl("docker")?.getAttribute("aria-labelledby")).toBe("runtime-tab-docker");
     expect(panelEl("qemu")).toBeNull();
     unmount();
 
@@ -593,7 +613,7 @@ describe("RuntimePage lifecycle (P3)", () => {
     renderShell("/containers?track=docker");
     await flush();
 
-    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新来源：本机 Docker" }));
     await waitFor(() => expect(useAppStore.getState().statusText).toContain("刷新失败"));
 
     const { statusText } = useAppStore.getState();
@@ -627,26 +647,29 @@ describe("RuntimePage header dedup (P5)", () => {
     expect(screen.queryByText("Docker 状态、WSL 内核、镜像、容器与 Redroid 实例")).toBeNull();
   });
 
-  it("keeps every header capability of both panels reachable", async () => {
+  it("keeps Docker refresh in the source badge and creation beside its instance list", async () => {
     renderShell("/containers?track=docker");
     await flush();
 
-    // Docker: 刷新 (re-read) + 创建实例 (opens the create form) survive the
-    // header dedup in the panel's own action row.
-    const dockerActions = panelEl("docker")?.querySelector(".runtime-panel-actions") as HTMLElement;
-    expect(dockerActions).toBeTruthy();
-    expect(within(dockerActions).getByRole("button", { name: "刷新" })).toBeTruthy();
-    expect(within(dockerActions).getByRole("button", { name: "创建实例" })).toBeTruthy();
+    const dockerPanel = panelEl("docker") as HTMLElement;
+    expect(dockerPanel.querySelector(".runtime-panel-actions")).toBeNull();
+    const dockerSource = screen.getByRole("button", { name: "刷新来源：本机 Docker" });
+    expect(dockerSource).toBeTruthy();
+    const instanceCard = screen.getByText("Redroid 实例").closest(".module") as HTMLElement;
+    expect(instanceCard).toBeTruthy();
+    expect(within(instanceCard).getByRole("button", { name: "创建实例" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "QEMU 节点" }));
     await flush();
 
-    // QEMU: 刷新 (vm list) + 重新体检 (the explicit doctor re-run) likewise.
     expect(panelEl("qemu")?.querySelector(".page-header")).toBeNull();
-    const qemuActions = panelEl("qemu")?.querySelector(".runtime-panel-actions") as HTMLElement;
-    expect(qemuActions).toBeTruthy();
-    expect(within(qemuActions).getByRole("button", { name: "刷新" })).toBeTruthy();
-    expect(within(qemuActions).getByRole("button", { name: "重新体检" })).toBeTruthy();
+    const qemuPanel = panelEl("qemu") as HTMLElement;
+    expect(qemuPanel.querySelector(".runtime-panel-actions")).toBeNull();
+    const qemuSource = screen.getByRole("button", { name: "刷新来源：QEMU 节点" });
+    expect(qemuSource).toBeTruthy();
+    const environmentCard = screen.getByText("环境就绪").closest(".module") as HTMLElement;
+    expect(environmentCard).toBeTruthy();
+    expect(within(environmentCard).getByRole("button", { name: "重新体检" })).toBeTruthy();
   });
 
   it("keeps the panel's own header on the standalone route (rollback path)", async () => {
@@ -664,6 +687,7 @@ describe("RuntimePage header dedup (P5)", () => {
     expect(titles).toHaveLength(1);
     expect(titles[0].textContent).toBe("Docker 管理");
     expect(screen.getByRole("button", { name: "创建实例" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "刷新" })).toBeTruthy();
   });
 });
 

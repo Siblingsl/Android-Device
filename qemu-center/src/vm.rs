@@ -41,6 +41,8 @@ pub const STATE_VERSION: u32 = 1;
 /// commands that must address the VM's live disk — the internal snapshot of
 /// Bug A — use this id as their `device` argument.
 pub const DISK_DEVICE_ID: &str = "disk0";
+/// QMP id of the virtio balloon device used for explicit guest-page reclaim.
+pub const BALLOON_DEVICE_ID: &str = "balloon0";
 
 /// CPU model pinned for [`Accel::Whpx`] runs (`-cpu <this>`).
 ///
@@ -81,8 +83,6 @@ pub const CONSOLE_LOG_FILENAME: &str = "console.log";
 /// Docker track's ADB range (see src-tauri/src/services/docker.rs
 /// `suggest_free_adb_port`: 5555..6000).
 pub const RESERVED_HOST_PORT_RANGES: &[(u16, u16)] = &[(5555, 6000)];
-
-const DEFAULT_IMAGE: &str = "redroid/redroid:14.0.0-latest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -248,6 +248,8 @@ pub fn qemu_command(o: &LaunchOptions) -> Vec<String> {
     // Entropy for cloud-init's ssh host key generation (boot latency).
     a.push("-device".into());
     a.push("virtio-rng-pci".into());
+    a.push("-device".into());
+    a.push(format!("virtio-balloon-pci,id={BALLOON_DEVICE_ID}"));
     // User-mode networking with all forwards pre-declared (slirp cannot be
     // extended after start without QMP).
     a.push("-netdev".into());
@@ -692,7 +694,7 @@ pub fn now_unix() -> u64 {
 /// Default container image for new VMs (mirrors the RDC Docker track's redroid
 /// image family; kept as its own constant — this crate imports nothing from RDC).
 pub fn default_redroid_image() -> String {
-    DEFAULT_IMAGE.to_string()
+    String::new()
 }
 
 // ---------------------------------------------------------------------- QMP --
@@ -756,6 +758,21 @@ pub fn qmp_delete_internal_snapshot_frame(device: &str, tag: &str) -> String {
 /// started before the `id=disk0` argv convention existed.
 pub fn qmp_query_block_frame() -> &'static str {
     r#"{"execute":"query-block"}"#
+}
+
+/// Ask QEMU to target the guest at `value` bytes. The maximum `-m` value is
+/// unchanged; this only lets a virtio-balloon guest return reclaimable pages.
+pub fn qmp_balloon_frame(value: u64) -> String {
+    serde_json::json!({
+        "execute": "balloon",
+        "arguments": { "value": value },
+    })
+    .to_string()
+}
+
+/// Read the actual guest RAM retained by the balloon device after a request.
+pub fn qmp_query_balloon_frame() -> &'static str {
+    r#"{"execute":"query-balloon"}"#
 }
 
 /// The `error.desc` of a QMP reply, if it is an error reply.
@@ -1016,6 +1033,7 @@ mod tests {
             "file=C:/qc/vms/node1/disk.qcow2,if=virtio,format=qcow2,cache=writeback",
             "file=C:/qc/vms/node1/seed.img,if=virtio,format=raw,read-only=on",
             "-device virtio-rng-pci",
+            "-device virtio-balloon-pci,id=balloon0",
             "-device virtio-net-pci,netdev=net0",
             "-display none",
             "-serial file:C:/qc/vms/node1/console.log",
@@ -1374,6 +1392,11 @@ mod tests {
     }
 
     #[test]
+    fn default_redroid_image_does_not_return_a_mutable_tag() {
+        assert!(default_redroid_image().is_empty());
+    }
+
+    #[test]
     fn registry_get_contains_and_used_ports() {
         let mut reg = Registry::default();
         reg.vms.push(entry("a", 22300, vec![24500, 24501]));
@@ -1479,6 +1502,15 @@ mod tests {
         assert_eq!(v["execute"], "blockdev-snapshot-internal-sync");
         assert_eq!(v["arguments"]["device"], "disk0");
         assert_eq!(v["arguments"]["name"], "verify-1789462000");
+
+        let balloon = qmp_balloon_frame(2 * 1024 * 1024 * 1024);
+        let balloon_value: serde_json::Value = serde_json::from_str(&balloon).unwrap();
+        assert_eq!(balloon_value["execute"], "balloon");
+        assert_eq!(
+            balloon_value["arguments"]["value"],
+            2 * 1024 * 1024 * 1024u64
+        );
+        assert_eq!(qmp_query_balloon_frame(), r#"{"execute":"query-balloon"}"#);
 
         let d = qmp_delete_internal_snapshot_frame("disk0", "verify-1789462000");
         let v: serde_json::Value = serde_json::from_str(&d).unwrap();

@@ -18,12 +18,13 @@
         "minWidth": 920,
         "minHeight": 600,
         "center": true,
-        "decorations": true,
+        "decorations": false,
         "additionalBrowserArgs": "--force-renderer-accessibility"
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "plugins": {
@@ -43,6 +44,7 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "../qemu-center/target/release/qemu-center.exe": "qemu-center/qemu-center.exe",
       "../vendor/gnirehtet/windows-x64/gnirehtet.exe": "gnirehtet/windows-x64/gnirehtet.exe",
       "../vendor/gnirehtet/windows-x64/gnirehtet.apk": "gnirehtet/windows-x64/gnirehtet.apk",
       "../vendor/gnirehtet/windows-x64/gnirehtet-run.cmd": "gnirehtet/windows-x64/gnirehtet-run.cmd",

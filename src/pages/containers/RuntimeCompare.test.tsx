@@ -3,8 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
 // Evaluated before the page tree on purpose: `appStore` and `i18n` form an
-// import cycle (the store calls tStatic while initializing), and the Docker
-// panel's chain reaches i18n first through `ui/ToolStatus`. Importing the store
+// import cycle (the store calls tStatic while initializing). Importing the store
 // first keeps the cycle in the order the other page tests already rely on.
 import { useAppStore } from "../../stores/appStore";
 import RuntimeCompare from "./RuntimeCompare";
@@ -358,6 +357,10 @@ function panelEl(track: "docker" | "qemu"): HTMLElement | null {
   return document.getElementById(`runtime-panel-${track}`);
 }
 
+async function waitForPanel(track: "docker" | "qemu") {
+  await waitFor(() => expect(panelEl(track)).toBeTruthy());
+}
+
 /** The compare view's own DOM only: the badges carry identically named buttons. */
 function compare() {
   return within(compareEl());
@@ -377,8 +380,11 @@ function cell(group: HTMLElement, metric: string, track: "docker" | "qemu"): HTM
 
 async function flush() {
   await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    // Keep the helper timer-free: some compare tests advance fake timers while
+    // the lazy runtime panel still resolves through several microtasks.
+    for (let i = 0; i < 8; i += 1) {
+      await Promise.resolve();
+    }
   });
 }
 
@@ -395,6 +401,7 @@ async function renderWithSnapshots(
 ) {
   const view = renderShell(entry);
   await flush();
+  await waitForPanel(entry.includes("track=qemu") ? "qemu" : "docker");
   await act(async () => {
     useAppStore.setState({ runtimeSources: sources });
   });
@@ -479,6 +486,7 @@ describe("compare view entry and deep links (P6)", () => {
     await flush();
     expect(currentLocation()).toBe("/containers?track=qemu");
     expect(compareEl()).toBeNull();
+    await waitForPanel("qemu");
     expect(panelEl("qemu")).toBeTruthy();
   });
 
@@ -490,6 +498,7 @@ describe("compare view entry and deep links (P6)", () => {
 
     expect(currentLocation()).toBe("/containers?track=qemu");
     expect(compareEl()).toBeNull();
+    await waitForPanel("qemu");
     expect(panelEl("qemu")).toBeTruthy();
   });
 
@@ -498,6 +507,7 @@ describe("compare view entry and deep links (P6)", () => {
     await flush();
 
     expect(compareEl()).toBeNull();
+    await waitForPanel("qemu");
     expect(panelEl("qemu")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "QEMU 节点" }).getAttribute("aria-selected")).toBe("true");
 

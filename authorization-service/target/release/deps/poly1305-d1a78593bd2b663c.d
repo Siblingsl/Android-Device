@@ -1,0 +1,10 @@
+F:\code\project\Android-Device\authorization-service\target\release\deps\poly1305-d1a78593bd2b663c.d: C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\lib.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\avx2.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\avx2\helpers.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\autodetect.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\soft.rs
+
+F:\code\project\Android-Device\authorization-service\target\release\deps\libpoly1305-d1a78593bd2b663c.rmeta: C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\lib.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\avx2.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\avx2\helpers.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\autodetect.rs C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\soft.rs
+
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\lib.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\avx2.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\avx2\helpers.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\autodetect.rs:
+C:\Users\User\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\poly1305-0.8.0\src\backend\soft.rs:

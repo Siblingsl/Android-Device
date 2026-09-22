@@ -20,6 +20,7 @@ vi.mock("../services/deviceService", () => ({
     spoofProfileUsage: vi.fn(),
     createInstance: vi.fn(),
     getCreateStage: vi.fn(),
+    startDockerDesktop: vi.fn(),
   },
 }));
 vi.mock("../hooks/useToolProbe", () => ({
@@ -57,8 +58,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const dockerInfo = (version: string): DockerInfo => ({
-  running: true,
+const dockerInfo = (version: string, running = true): DockerInfo => ({
+  running,
   version,
   images: [],
   containers: [],
@@ -175,6 +176,94 @@ describe("DockerPage refresh ordering", () => {
     });
     expect(screen.queryByText("Docker 旧版")).toBeNull();
     expect(screen.getByText("Docker 新版")).toBeTruthy();
+  });
+
+  it("does not reserve page space for global tool statuses", async () => {
+    vi.mocked(DeviceService.refreshDockerInfo).mockResolvedValue(dockerInfo("Docker"));
+
+    render(
+      <MemoryRouter>
+        <DockerPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelectorAll(".tool-status")).toHaveLength(0);
+  });
+});
+
+describe("DockerPage Docker setup guidance", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(DeviceService.getWslKernelStatus).mockRejectedValue(new Error("unavailable"));
+    vi.mocked(DeviceService.getMagiskAssets).mockResolvedValue({
+      magiskDir: "",
+      magiskOk: false,
+      lsposedOk: false,
+      shamikoOk: false,
+    });
+    vi.mocked(DeviceService.getLocalGappsPath).mockResolvedValue("");
+    vi.mocked(DeviceService.checkInstanceName).mockResolvedValue(false);
+    vi.mocked(DeviceService.checkAdbPort).mockResolvedValue(false);
+    vi.mocked(DeviceService.nextFreeAdbPort).mockResolvedValue(5555);
+    vi.mocked(DeviceService.pathExists).mockResolvedValue(false);
+    vi.mocked(DeviceService.listSpoofProfiles).mockResolvedValue(spoofProfilesFixture);
+    vi.mocked(DeviceService.spoofProfileUsage).mockResolvedValue([]);
+    vi.mocked(DeviceService.refreshDockerInfo).mockResolvedValue(dockerInfo("unavailable", false));
+    vi.mocked(DeviceService.startDockerDesktop).mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  async function renderDockerPage() {
+    render(
+      <MemoryRouter>
+        <DockerPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("shows an official install entry when the Docker CLI is missing", async () => {
+    vi.mocked(probeTool).mockResolvedValue({ ok: false, text: "program not found" });
+    await renderDockerPage();
+
+    expect(screen.getByText("未安装")).toBeTruthy();
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    fireEvent.click(screen.getByRole("button", { name: "安装 Docker Desktop" }));
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://www.docker.com/products/docker-desktop/",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    openSpy.mockRestore();
+    expect(screen.queryByRole("button", { name: "启动 Docker Desktop" })).toBeNull();
+  });
+
+  it("offers to start Docker Desktop when the CLI exists but the engine is stopped", async () => {
+    vi.mocked(probeTool).mockResolvedValue({
+      ok: false,
+      text: 'error during connect: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.',
+    });
+    await renderDockerPage();
+
+    expect(screen.getByText("未运行")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "启动 Docker Desktop" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(DeviceService.startDockerDesktop).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "安装 Docker Desktop" })).toBeNull();
   });
 });
 

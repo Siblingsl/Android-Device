@@ -10,7 +10,8 @@ use crate::services::authorization::{
     random_x25519_keypair, require_capability, validate_artifact_manifest,
     validate_execution_grant, validate_session_binding, verify_signed_artifact_manifest,
     verify_signed_execution_grant, verify_signed_lease, ArtifactManifest, AuthorizationError,
-    AuthorizationStatus, ClientKeyAlgorithm, ExecutionGrantContext, HeartbeatProof,
+    AuthorizationStatus, ClientKeyAlgorithm, ExecutionGrantContext, ExecutionGrantProof,
+    HeartbeatProof,
     ProtectedCapability, RegistrationProof, SessionProof, SignedExecutionGrant, SignedLease,
 };
 use crate::services::secure_store::{
@@ -21,19 +22,18 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::VerifyingKey;
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::Lazy;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const REGISTRATION_STORE_KEY: &str = "authorization-client-registration";
-const CORE_SCRIPT_TEMP_PREFIX: &str = "rdc-qemu-guest-";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +80,7 @@ pub struct SessionRequest {
     pub device_id: String,
     pub client_version: String,
     pub nonce: String,
+    pub iat: i64,
     pub capabilities: Vec<ProtectedCapability>,
     pub signature: String,
 }
@@ -97,6 +98,7 @@ pub struct HeartbeatRequest {
     pub client_id: String,
     pub device_id: String,
     pub nonce: String,
+    pub iat: i64,
     pub signature: String,
 }
 
@@ -133,6 +135,8 @@ pub struct ExecutionGrantRequest {
     pub vm: String,
     pub instance: String,
     pub nonce: String,
+    pub iat: i64,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -333,12 +337,14 @@ where
             .registration()?
             .ok_or(AuthorizationError::NotRegistered)?;
         ensure_registration_matches(&registration, &identity)?;
+        let iat = current_unix_time()?;
         let nonce = Uuid::new_v4().to_string();
         let proof = SessionProof {
             client_id: &registration.client_id,
             device_id: &identity.device_id,
             client_version: &self.client_version,
             nonce: &nonce,
+            iat,
             capabilities: &capabilities,
         };
         let payload = canonical_json(&proof)?;
@@ -349,6 +355,7 @@ where
                 device_id: identity.device_id.clone(),
                 client_version: self.client_version.clone(),
                 nonce,
+                iat,
                 capabilities: capabilities.clone(),
                 signature: URL_SAFE_NO_PAD
                     .encode(signer.sign_canonical(&payload).map_err(map_store_error)?),
@@ -381,12 +388,14 @@ where
             .registration()?
             .ok_or(AuthorizationError::NotRegistered)?;
         ensure_registration_matches(&registration, &identity)?;
+        let iat = current_unix_time()?;
         let nonce = Uuid::new_v4().to_string();
         let proof = HeartbeatProof {
             session_id: &current.lease.claims.session_id,
             client_id: &registration.client_id,
             device_id: &identity.device_id,
             nonce: &nonce,
+            iat,
         };
         let payload = canonical_json(&proof)?;
         let response = self
@@ -397,6 +406,7 @@ where
                     client_id: registration.client_id,
                     device_id: identity.device_id.clone(),
                     nonce,
+                    iat,
                     signature: URL_SAFE_NO_PAD
                         .encode(signer.sign_canonical(&payload).map_err(map_store_error)?),
                 },
@@ -508,6 +518,18 @@ where
         if session.lease.claims.exp <= now {
             return Err(AuthorizationError::LeaseExpired);
         }
+        let iat = current_unix_time()?;
+        let nonce = Uuid::new_v4().to_string();
+        let proof = ExecutionGrantProof {
+            artifact_id,
+            artifact_sha256,
+            action,
+            vm,
+            instance,
+            nonce: &nonce,
+            iat,
+        };
+        let payload = canonical_json(&proof)?;
         let response = self
             .transport
             .issue_execution_grant(
@@ -518,12 +540,20 @@ where
                     action: action.into(),
                     vm: vm.into(),
                     instance: instance.into(),
-                    nonce: Uuid::new_v4().to_string(),
+                    nonce,
+                    iat,
+                    signature: URL_SAFE_NO_PAD
+                        .encode(signer.sign_canonical(&payload).map_err(map_store_error)?),
                 },
             )
             .await?;
         let key = self.trusted_key(&response.key_id)?;
         let claims = verify_signed_execution_grant(&response, &key.public_key_base64url, now)?;
+        let expected_artifact_sha256 = if artifact_sha256.trim().is_empty() {
+            claims.artifact_sha256.as_str()
+        } else {
+            artifact_sha256
+        };
         validate_execution_grant(
             &claims,
             &session.lease.claims,
@@ -532,7 +562,7 @@ where
                 session_id,
                 client_version: &self.client_version,
                 artifact_id,
-                artifact_sha256,
+                artifact_sha256: expected_artifact_sha256,
                 action,
                 vm,
                 instance,
@@ -768,38 +798,6 @@ fn current_unix_time() -> Result<i64, AuthorizationError> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .map_err(|_| AuthorizationError::Malformed("system clock is before Unix epoch".into()))
-}
-
-fn cleanup_stale_core_artifacts_once() -> Result<(), AuthorizationError> {
-    static CLEANUP_RESULT: OnceCell<Result<(), String>> = OnceCell::new();
-    match CLEANUP_RESULT.get_or_init(|| cleanup_stale_core_artifacts_in(&std::env::temp_dir())) {
-        Ok(()) => Ok(()),
-        Err(detail) => Err(AuthorizationError::SecureStore(detail.clone())),
-    }
-}
-
-fn cleanup_stale_core_artifacts_in(directory: &Path) -> Result<(), String> {
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("scan protected core temporary directory: {error}"))?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("inspect protected core temporary entry: {error}"))?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(CORE_SCRIPT_TEMP_PREFIX) || !name.ends_with(".py") {
-            continue;
-        }
-        if !entry
-            .file_type()
-            .map_err(|error| format!("inspect protected core temporary file: {error}"))?
-            .is_file()
-        {
-            continue;
-        }
-        fs::remove_file(entry.path())
-            .map_err(|error| format!("remove stale protected core temporary file: {error}"))?;
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1106,26 +1104,14 @@ pub async fn runtime_ensure_capabilities(
     runtime_acquire_capabilities(capabilities).await
 }
 
-pub async fn runtime_download_core_script(
-    target_android: &str,
-) -> Result<PathBuf, AuthorizationError> {
-    runtime_download_core_artifact("qemu-guest-script", target_android).await
-}
-
-pub async fn runtime_download_restore_core_script() -> Result<PathBuf, AuthorizationError> {
-    let (artifact_id, target_android) = restore_core_artifact_spec();
-    runtime_download_core_artifact(artifact_id, target_android).await
-}
-
-pub async fn runtime_download_metadata_core_script() -> Result<PathBuf, AuthorizationError> {
-    let (artifact_id, target_android) = universal_core_artifact_spec();
-    runtime_download_core_artifact(artifact_id, target_android).await
+#[derive(Debug, Clone)]
+pub struct AuthorizedCoreArtifact {
+    pub execution_grant: SignedExecutionGrant,
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthorizedCoreArtifact {
-    pub path: PathBuf,
-    pub execution_grant: SignedExecutionGrant,
+pub struct AuthorizedCoreWorkflow {
+    pub execution_grants: Vec<SignedExecutionGrant>,
 }
 
 pub async fn runtime_download_core_with_execution_grant(
@@ -1139,6 +1125,27 @@ pub async fn runtime_download_core_with_execution_grant(
         "preset_apply",
         vm,
         instance,
+    )
+    .await
+}
+
+/// Download one protected runner and issue one single-use grant for each
+/// runner stage. A create workflow invokes the runner three times
+/// (build/seed/activate); reusing one JTI would either fail on stage two or
+/// force the server to weaken its replay protection.
+pub async fn runtime_download_core_with_execution_grants(
+    target_android: &str,
+    vm: &str,
+    instance: &str,
+    stage_count: usize,
+) -> Result<AuthorizedCoreWorkflow, AuthorizationError> {
+    runtime_download_core_artifact_with_execution_grants(
+        "qemu-guest-script",
+        target_android,
+        "preset_apply",
+        vm,
+        instance,
+        stage_count,
     )
     .await
 }
@@ -1172,31 +1179,6 @@ pub async fn runtime_download_metadata_core_with_execution_grant(
     .await
 }
 
-async fn runtime_download_core_artifact(
-    artifact_id: &str,
-    target_android: &str,
-) -> Result<PathBuf, AuthorizationError> {
-    cleanup_stale_core_artifacts_once()?;
-    let session = runtime_ensure_capabilities(vec![
-        ProtectedCapability::ProtectedPreset,
-        ProtectedCapability::ProtectedArtifact,
-    ])
-    .await?;
-    let mut client = configured_runtime_client()?;
-    let destination =
-        std::env::temp_dir().join(format!("rdc-qemu-guest-{}.py", Uuid::new_v4().simple()));
-    download_artifact_with_session(
-        &mut client,
-        session,
-        artifact_id,
-        "x86_64",
-        target_android,
-        &destination,
-    )
-    .await?;
-    Ok(destination)
-}
-
 async fn runtime_download_core_artifact_with_execution_grant(
     artifact_id: &str,
     target_android: &str,
@@ -1204,40 +1186,55 @@ async fn runtime_download_core_artifact_with_execution_grant(
     vm: &str,
     instance: &str,
 ) -> Result<AuthorizedCoreArtifact, AuthorizationError> {
-    cleanup_stale_core_artifacts_once()?;
+    let workflow = runtime_download_core_artifact_with_execution_grants(
+        artifact_id,
+        target_android,
+        action,
+        vm,
+        instance,
+        1,
+    )
+    .await?;
+    let mut execution_grants = workflow.execution_grants.into_iter();
+    Ok(AuthorizedCoreArtifact {
+        execution_grant: execution_grants
+            .next()
+            .expect("one execution grant was requested"),
+    })
+}
+
+async fn runtime_download_core_artifact_with_execution_grants(
+    artifact_id: &str,
+    _target_android: &str,
+    action: &str,
+    vm: &str,
+    instance: &str,
+    stage_count: usize,
+) -> Result<AuthorizedCoreWorkflow, AuthorizationError> {
+    if stage_count == 0 {
+        return Err(AuthorizationError::Malformed(
+            "protected workflow must contain at least one execution stage".into(),
+        ));
+    }
     let session = runtime_ensure_capabilities(vec![
         ProtectedCapability::ProtectedPreset,
         ProtectedCapability::ProtectedArtifact,
     ])
     .await?;
     let mut client = configured_runtime_client()?;
-    let destination =
-        std::env::temp_dir().join(format!("rdc-qemu-guest-{}.py", Uuid::new_v4().simple()));
-    let result = async {
-        let manifest = download_artifact_with_session(
-            &mut client,
-            session,
-            artifact_id,
-            "x86_64",
-            target_android,
-            &destination,
-        )
-        .await?;
-        let execution_grant = client
-            .request_execution_grant(artifact_id, &manifest.sha256, action, vm, instance)
-            .await?;
-        Ok::<_, AuthorizationError>(AuthorizedCoreArtifact {
-            path: destination.clone(),
-            execution_grant,
-        })
+    client.adopt_session(session);
+    let mut execution_grants = Vec::with_capacity(stage_count);
+    for _ in 0..stage_count {
+        execution_grants.push(
+            client
+                .request_execution_grant(artifact_id, "", action, vm, instance)
+                .await?,
+        );
     }
-    .await;
-    if result.is_err() {
-        let _ = fs::remove_file(&destination);
-    }
-    result
+    Ok(AuthorizedCoreWorkflow { execution_grants })
 }
 
+#[cfg(test)]
 async fn download_artifact_with_session<T, S>(
     client: &mut AuthorizationClient<T, S>,
     session: AuthorizationSession,
@@ -1830,26 +1827,6 @@ mod tests {
                 .await,
             Err(AuthorizationError::NotRegistered)
         );
-    }
-
-    #[test]
-    fn stale_core_cleanup_removes_only_final_runner_files() {
-        let directory =
-            std::env::temp_dir().join(format!("rdc-core-cleanup-test-{}", Uuid::new_v4().simple()));
-        fs::create_dir_all(&directory).unwrap();
-        let stale = directory.join("rdc-qemu-guest-old.py");
-        let partial = directory.join(".rdc-qemu-guest-old.py.part-123");
-        let unrelated = directory.join("keep.txt");
-        fs::write(&stale, b"protected runner").unwrap();
-        fs::write(&partial, b"partial ciphertext").unwrap();
-        fs::write(&unrelated, b"unrelated").unwrap();
-
-        cleanup_stale_core_artifacts_in(&directory).unwrap();
-
-        assert!(!stale.exists());
-        assert!(partial.exists());
-        assert!(unrelated.exists());
-        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]

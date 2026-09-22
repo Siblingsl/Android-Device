@@ -32,10 +32,9 @@ fn valid_package(package: &str) -> bool {
     count >= 2
         && parts.all(|part| {
             !part.is_empty()
-                && part
-                    .bytes()
-                    .enumerate()
-                    .all(|(index, byte)| byte.is_ascii_alphanumeric() || (index > 0 && byte == b'_'))
+                && part.bytes().enumerate().all(|(index, byte)| {
+                    byte.is_ascii_alphanumeric() || (index > 0 && byte == b'_')
+                })
                 && part.as_bytes()[0].is_ascii_alphanumeric()
         })
 }
@@ -46,7 +45,10 @@ pub fn art_args(package: &str, mode: ArtMode) -> Vec<String> {
             "cmd".into(),
             "package".into(),
             "compile".into(),
+            "-m".into(),
+            "verify".into(),
             "--check-prof".into(),
+            "true".into(),
             package.into(),
         ],
         ArtMode::SpeedProfile => vec![
@@ -123,7 +125,16 @@ mod tests {
     fn reset_and_verify_are_distinct_commands() {
         assert_eq!(
             art_args("com.example.app", ArtMode::VerifyOnly),
-            vec!["cmd", "package", "compile", "--check-prof", "com.example.app"]
+            vec![
+                "cmd",
+                "package",
+                "compile",
+                "-m",
+                "verify",
+                "--check-prof",
+                "true",
+                "com.example.app"
+            ]
         );
         assert_eq!(
             art_args("com.example.app", ArtMode::Reset),

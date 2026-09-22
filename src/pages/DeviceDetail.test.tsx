@@ -953,6 +953,63 @@ describe("DeviceDetail refresh ordering", () => {
     expect(alert).toHaveBeenCalledWith("uninstall unavailable");
   });
 
+  it("exports an installed APK to the selected local path", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("Demo")]);
+    vi.mocked(save).mockResolvedValueOnce("C:/exports/com.example.demo.apk");
+    vi.mocked(DeviceService.downloadFileTracked).mockResolvedValueOnce({
+      success: true,
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const appActions = screen.getAllByRole("combobox");
+    fireEvent.change(appActions[appActions.length - 1], { target: { value: "export" } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(save).toHaveBeenCalledWith({
+      defaultPath: "com.example.demo.apk",
+      filters: [{ name: "APK", extensions: ["apk"] }],
+    });
+    expect(DeviceService.downloadFileTracked).toHaveBeenCalledWith(
+      "device-1-serial",
+      "/data/app/Demo.apk",
+      "C:/exports/com.example.demo.apk",
+      expect.any(String),
+    );
+    expect(DeviceService.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps APK export silent when the save dialog is cancelled", async () => {
+    vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
+    vi.mocked(DeviceService.listApps).mockResolvedValue([app("Demo")]);
+    vi.mocked(save).mockResolvedValueOnce(null);
+
+    renderDetail("apps");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const appActions = screen.getAllByRole("combobox");
+    fireEvent.change(appActions[appActions.length - 1], { target: { value: "export" } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(DeviceService.downloadFile).not.toHaveBeenCalled();
+    expect(alert).not.toHaveBeenCalled();
+  });
+
   it("uses tracked upload and renders a real event percentage", async () => {
     const pending = deferred<ShellResult>();
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
@@ -1314,7 +1371,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("disables the spoof card when the device is offline", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue({ ...device("device-1"), online: false, adbStatus: "offline" });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1325,7 +1382,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("shows a restart suggestion after applying a profile", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1343,7 +1400,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("renders the deep-spoofing section and disabled buttons when offline", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue({ ...device("device-1"), online: false, adbStatus: "offline" });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1361,7 +1418,7 @@ describe("DeviceDetail spoof card", () => {
       scopeCount: 3,
       configPushed: true,
     });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1435,7 +1492,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("renders the battery spoofing section, persists the toggle and applies on demand", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1466,7 +1523,7 @@ describe("DeviceDetail spoof card", () => {
     vi.mocked(DeviceService.applyBatteryPolicy).mockClear();
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
     sessionStorage.clear();
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1489,7 +1546,7 @@ describe("DeviceDetail spoof card", () => {
       online: false,
       adbStatus: "offline",
     });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1500,7 +1557,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("runs the adversarial audit and renders verdict rows", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1522,7 +1579,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("links the selected spoof profile into the audit call", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1566,7 +1623,7 @@ describe("DeviceDetail spoof card", () => {
         },
       ],
     });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1603,7 +1660,7 @@ describe("DeviceDetail spoof card", () => {
         },
       ],
     });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1623,7 +1680,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("shows the consistent geo verdict when no issues are found", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1638,7 +1695,7 @@ describe("DeviceDetail spoof card", () => {
 
   it("installs the native cloak module and seeds the usage baseline", async () => {
     vi.mocked(DeviceService.getDevice).mockResolvedValue(device("device-1"));
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1670,7 +1727,7 @@ describe("DeviceDetail spoof card", () => {
       configPushed: true,
       nativeInstalled: true,
     });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -1684,7 +1741,7 @@ describe("DeviceDetail spoof card", () => {
       online: false,
       adbStatus: "offline",
     });
-    renderDetail("settings");
+    renderDetail("spoof");
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();

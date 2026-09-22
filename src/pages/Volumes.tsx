@@ -9,7 +9,6 @@ import { Button } from "../components/ui/Button";
 import { Skeleton } from "../components/ui/Skeleton";
 import { DeviceService } from "../services/deviceService";
 import { probeTool } from "../hooks/useToolProbe";
-import { ToolStatus } from "../components/ui/ToolStatus";
 import { useAppStore } from "../stores/appStore";
 import { useI18n } from "../i18n";
 import type { DockerVolume } from "../types";
@@ -180,7 +179,6 @@ export function VolumesPage() {
       </div>
 
       <div className="row" style={{ flexWrap: "wrap" }}>
-        <ToolStatus kind="docker" hit={docker ?? undefined} />
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}

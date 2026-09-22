@@ -5,6 +5,11 @@
   "windows": ["main", "device-window-*"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
     "dialog:default",
     "global-shortcut:default",
     "updater:default"

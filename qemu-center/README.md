@@ -88,37 +88,56 @@ cargo run --manifest-path qemu-center/Cargo.toml -- doctor --json
 cargo run --manifest-path qemu-center/Cargo.toml -- vm create node1 \
   --image <state-dir>/images/noble-server-cloudimg-amd64.img
 
-# 2) 启动（Windows 下 detached spawn，无控制台窗口）+ 等 SSH
+# 2) 启动（Windows 下 detached spawn，无控制台窗口）+ 等 guest readiness
 cargo run --manifest-path qemu-center/Cargo.toml -- vm start node1
 cargo run --manifest-path qemu-center/Cargo.toml -- guest wait node1 --timeout-secs 600
 
-# 3) 节点内建一个 redroid 实例（自动从端口块里分配端口）
-cargo run --manifest-path qemu-center/Cargo.toml -- redroid create node1 r1
+# 3) 节点内建一个 redroid 实例（受保护能力；必须有桌面端生成的服务端 grant 文件）
+cargo run --manifest-path qemu-center/Cargo.toml -- redroid create node1 r1 \
+  --execution-grant-file <server-issued-grant-file> \
+  --execution-authorization-file /run/rdc-presets/<job>/execution-authorized
+
+# 也可以按内存阶梯选择 profile；省略 --cpus/--memory 时使用 profile 默认值
+cargo run --manifest-path qemu-center/Cargo.toml -- redroid create node1 lean1 --profile lean \
+  --execution-grant-file <server-issued-grant-file> \
+  --execution-authorization-file /run/rdc-presets/<job>/execution-authorized
 
 # 4) adb 映射 + 验收
 cargo run --manifest-path qemu-center/Cargo.toml -- adb map node1
 cargo run --manifest-path qemu-center/Cargo.toml -- verify --vm node1
 ```
 
-首次启动会由 cloud-init 自动完成：建 `rdc` 用户并注入节点专属公钥、关闭密码登录、安装 docker.io、redroid 内核准备（装 `linux-modules-extra` + binder_linux 开机自加载等，详见第 5 节「guest 置备四点真机修复」）、docker daemon 走宿主代理。**首启需要几分钟**（cloud image 首启 + apt 安装，modules-extra 下载约 100 MB）。
+首次启动会由 cloud-init 自动完成：建 `rdc` 用户并注入节点专属公钥、关闭密码登录、安装 docker.io、redroid 内核准备（装 `linux-modules-extra` + binder_linux 开机自加载等，详见第 5 节「guest 置备四点真机修复」）、docker daemon 走宿主代理。**首启需要几分钟**（cloud image 首启 + apt 安装，modules-extra 下载约 100 MB）。SSH 可能在 cloud-init 完成前就已可用，因此 CLI 的 guest Docker 操作统一用 `sudo -n docker`，不依赖 `rdc` 的 docker 组会话是否已经刷新；`guest provision` 的恢复脚本也会以 root 执行。
+
+`vm start` 在 detached spawn 前会先做两项只读护栏：QMP 必须证明节点已停止，且已知主机可用内存必须覆盖节点配置的 `-m` 加 1024 MiB 余量。Windows 使用无区域依赖的 CIM 查询，Linux 使用 `/proc/meminfo`；主机内存探针不可用时保留明确单节点启动兼容路径，但会输出 warning。该检查不会强杀进程，也不会修改磁盘。
 
 常用命令：
 
 ```bash
 qemu-center vm list [--json]
 qemu-center vm stop node1                 # QMP ACPI 优雅关机
+qemu-center vm set-memory node1 3072      # 仅停止节点可用，下次启动生效
+qemu-center vm memory-reclaim node1       # 显式按 guest 实际使用量回收 balloon 页，不停止 VM
 qemu-center vm snapshot node1 clean-1     # qcow2 内部快照（建议先停 VM）
-qemu-center vm clone node1 node2          # backing file 秒级克隆（新端口块）
-qemu-center vm delete node1 [--purge]
+qemu-center vm clone node1 node2          # 停止源节点后 backing file 秒级克隆（新端口块）
+qemu-center vm delete node1 [--purge]    # 仅 QMP 确认节点已停止后允许；purge 同时清理节点 key
 qemu-center guest provision node1         # 首启失败时的补救（补 modules-extra/binder 自加载/补 docker 与代理，与 runcmd 同一套步骤）
 qemu-center redroid list node1            # 含 guest 内实时容器状态
 qemu-center redroid start|stop node1 r1
 qemu-center adb list [--json]
 ```
 
+`vm memory-reclaim` 是显式、可观测的内存回收动作：节点必须正在运行，且所有活跃
+redroid 实例都必须能提供当前内存指标；否则命令 fail-closed，不会发送 QMP balloon
+请求。qemu-center 会按实例使用量计算保守目标（不低于 1536 MiB），发送
+`virtio-balloon` 请求后再用 `query-balloon` 校验实际值，输出 target/actual/reclaimed。
+它不会修改 qcow2、停止 VM 或改变节点下次启动的最大内存；页面不会在后台定时触发。
+
 ### 3.2 RDC 应用内使用（已接入）
 
 主仓库 RDC 桌面应用已把本 CLI 接入应用内（实验性）：**左侧导航「QEMU 节点」（`#/qemu`）**，用户点击即可完成建轨全流程，不再需要敲命令行。接线方式是子进程调用本 CLI（RDC 侧桥接见 `src-tauri/src/services/qemu.rs`），本 crate 的代码与测试不受影响。
+
+`qemu-center` 是内部编排器，不是独立授权客户端。`redroid create` 在任何 Docker 操作前必须读取由 Tauri 临时生成的服务端签名 grant 文件，并校验 guest runner 已在同一 `/run/rdc-presets/<job>` 目录完成在线预授权证明；公钥环在发布构建时嵌入，CLI 不接受命令行内联 token 或调用方自带公钥。guest runner 仍会校验设备证明并向服务端一次性消费 JTI。单独复制 CLI、伪造路径或离线运行均不能替代有效服务端授权。
 
 **UI 按钮 → CLI 命令映射：**
 
@@ -128,12 +147,19 @@ qemu-center adb list [--json]
 | [一键安装环境] | `setup all --distro noble`，结束后自动重跑 doctor |
 | [启用 WHPX] / [安装 QEMU] / [下载镜像] | `setup whpx` / `setup qemu`（默认便携进项目）/ `setup image --distro noble` |
 | [创建节点] 表单 | `vm create <name> --image <默认镜像> … [--auto-setup]`（imagePath 留空时 RDC 自动解析 `<repo>/qemu-center/state/images/` 下的 noble 镜像） |
-| 创建成功后自动等待 | `guest wait <name>`（RDC 侧按 15s 分片轮询，可随时取消等待；VM 继续在后台启动） |
+| 创建成功后自动等待 | `guest wait <name>`（先等 SSH，再等 cloud-init/binder/Docker readiness；RDC 侧按 15s 分片轮询，可随时取消等待；VM 继续在后台启动） |
 | 行内 [启动] [停止] | `vm start/stop <name>`（停止 = QMP ACPI 优雅关机） |
 | 行内 [删除] | `vm delete <name> --purge`（确认对话框后执行，磁盘/密钥一并删除） |
 | 行内 [验收] / 验收卡 [运行验收] | `verify --json --vm <name>`（七项 PASS/FAIL/UNTESTED 徽标；UNTESTED 如实显示"本机无法判定"，不是失败） |
-| [创建实例] 表单 | `redroid create <vm> <name> --cpus --memory --width --height --dpi`，成功后展示 `127.0.0.1:<port>` serial 并可一键复制 |
+| [创建实例] 表单 | `redroid create <vm> <name> --profile <profile> --cpus --memory --width --height --dpi`（profile 可选 `lean` / `standard` / `full`），成功后展示 `127.0.0.1:<port>` serial 并可一键复制 |
 | 节点卡选中节点 | `redroid list <vm> --json`（实例表：容器/端口/serial/guest 内实时状态） |
+
+内存建议：优先使用 `lean`（3 GiB 及以上节点默认 1536 MiB）或 `standard`（默认 2048 MiB）；`full` 默认 3072 MiB，适合需要完整预装的实例。省略 `--cpus/--memory` 时，CLI 会按所选 profile 和节点规格派生默认值；显式传入的值仍优先。完整预装或多实例应先看桌面端的宿主/QEMU/容器采样，再把节点提高到 4096 MiB 以上。已有节点的 `-m` 不会被自动改写，避免在线改动 guest 或 qcow2。
+
+已有节点可以在**优雅停止后**使用 `vm set-memory <name> <MiB>` 调整 QEMU
+内存；命令由 QMP 明确确认节点已停止后才更新 `state.json`，运行中或状态不明会
+拒绝，不会强杀 QEMU、修改 qcow2 或改变现有容器上限。有效范围为 1536–16384 MiB，
+建议先用 3072 MiB 做 lean/standard 对照，再根据 full 实例的实测峰值决定是否提高。
 
 页面底部的可折叠「命令日志」面板会把每次按钮触发的 CLI 输出按行追加，等价于在终端里看到的内容。
 
@@ -143,7 +169,7 @@ qemu-center adb list [--json]
 - `setup image`：免提权，下载约 600 MiB 的 cloud image 并做 SHA256 校验，期间按钮显示加载态；
 - 其余命令（vm/redroid/guest/verify）不弹任何系统对话框。
 
-**二进制发现顺序**（RDC 侧 `resolve_qemu_center_bin`）：环境变量 `QEMU_CENTER_BIN` → 仓库内 `qemu-center/target/{debug,release}/qemu-center.exe` → PATH（`where qemu-center`）。开发期先 `cargo build --manifest-path qemu-center/Cargo.toml` 即可被应用找到。
+**二进制发现顺序**（RDC 侧 `resolve_qemu_center_bin`）：环境变量 `QEMU_CENTER_BIN` → 已安装资源目录 `resources/qemu-center/qemu-center.exe` → 仓库内 `qemu-center/target/{debug,release}/qemu-center.exe` → PATH（`where qemu-center`）。开发期先 `cargo build --manifest-path qemu-center/Cargo.toml` 即可被应用找到；Windows release workflow 会先用发布公钥环构建并打包该资源。
 
 Settings 页「默认运行轨道」下拉可记录 docker|qemu 偏好（`default_track` 字段）；在 QEMU verify 七项全绿之前，QEMU 页面顶部会保持「实验性」提示，所有功能默认仍走 Docker 轨道。
 
@@ -163,17 +189,19 @@ Settings 页「默认运行轨道」下拉可记录 docker|qemu 偏好（`defaul
 
 退出码：全 PASS = 0；有 FAIL = 1；仅 UNTESTED = 3（便于脚本区分"没跑"和"失败"）。
 
-## 5. 诚实边界（运行时未验证）
+## 5. 诚实边界（按验证层级）
 
-本环境**无法运行 QEMU/WHPX**，因此如实区分三档：
+本轮已在 Windows + WHPX 上运行独立的 `matrix3072` 测试节点；因此把
+“纯函数测试”“一次性运行时冒烟”和“目标应用真机验收”分开记录，不把
+节点启动成功夸大成小红书业务已验收：
 
 | 档位 | 内容 |
 |---|---|
-| ✅ **纯函数已测**（191 个单测：188 lib + 3 bin，`cargo test` 全绿） | ISO9660 生成/回读（含 CD001 标识、扇区数、确定性、回读内容一致；**已退役为库 API/测试资产**，见下方 seed 载体条目）、**FAT16 seed 镜像生成器**（BPB 字段断言、测试内解析器走 BPB→根目录→FAT 链全链路逐字节回读、LFN checksum 独立实现对拍、空文件表仅卷标条目、300 KiB 多簇链、确定性 + FAT2 副本一致、8.3 短名截断/非法字符/冲突回退、LFN 上限与根目录容量守卫、cloud-init 渲染结果过 FAT 载体回读）、cloud-init YAML 渲染与确定性（ISO 版 `seed_files` 与镜像版 `seed_image_files` 内容一致性、文件名小写逐字保留）、QEMU/qemu-img 参数拼装快照（含 seed.img virtio read-only 盘、**WHPX 变体必须带 `-cpu max,-svm,-vmx` 且 TCG 变体必须不带该掩码**、**两种加速器都带 `-serial file:<vm_dir>/console.log`**、Windows 反斜杠盘路径渲染成 `/` 分隔）、hostfwd 串、端口块分配唯一性、state.json 读写回环、redroid docker run 参数同构、各类输出判定（WHPX 探测/features/fsutil/readiness/boot_completed/adb connect）、便携化参数与解析（NSIS `/S /D=` 末位、空格目标拒绝、weilnetz 目录页解析、便携 state dir 派生、doctor 便携候选） |
-| ⚠️ **命令拼装已测，运行时未验证** | `vm start`（QEMU 实际拉起）、`vm stop`（QMP 握手）、`guest wait/provision`（SSH 实连）、`redroid create`（guest 内 docker run）、`vm snapshot/clone`（qemu-img 实际执行）、`adb map` 实测连通 |
-| 🔬 **需用户真机运行** | `doctor`（本机已实跑一次，见下）、`verify` 七项、整条 `vm create → guest wait → redroid create → adb map` 链路、cloud-init 首启是否与应用内 binderfs 准备完全一致。**seed 载体链路已在真机手工全链路验证**（见下方 seed 载体条目）：用户在 node1 上用手工生成的同规格 seed.img 跑通 `cloud-init status=done` / Docker 29.1.3 active / SSH 公钥认证；用 CLI 重建节点后应按 verify 第 2/4 项复验一致 |
+| ✅ **纯函数已测**（最终复验见 E-017） | ISO9660 生成/回读（含 CD001 标识、扇区数、确定性、回读内容一致；**已退役为库 API/测试资产**，见下方 seed 载体条目）、**FAT16 seed 镜像生成器**（BPB 字段断言、测试内解析器走 BPB→根目录→FAT 链全链路逐字节回读、LFN checksum 独立实现对拍、空文件表仅卷标条目、300 KiB 多簇链、确定性 + FAT2 副本一致、8.3 短名截断/非法字符/冲突回退、LFN 上限与根目录容量守卫、cloud-init 渲染结果过 FAT 载体回读）、cloud-init YAML 渲染与确定性（ISO 版 `seed_files` 与镜像版 `seed_image_files` 内容一致性、文件名小写逐字保留）、QEMU/qemu-img 参数拼装快照（含 seed.img virtio read-only 盘、**WHPX 变体必须带 `-cpu max,-svm,-vmx` 且 TCG 变体必须不带该掩码**、**两种加速器都带 `-serial file:<vm_dir>/console.log`**、Windows 反斜杠盘路径渲染成 `/` 分隔）、hostfwd 串、端口块分配唯一性、state.json 读写回环、redroid docker run 参数同构、guest bootstrap 权限窗口、运行中/未知状态删除护栏与节点密钥清理、各类输出判定（WHPX 探测/features/fsutil/readiness/boot_completed/adb connect）、便携化参数与解析（NSIS `/S /D=` 末位、空格目标拒绝、weilnetz 目录页解析、便携 state dir 派生、doctor 便携候选） |
+| ✅ **一次性运行时冒烟** | 独立 3072 MiB 节点上实跑 `vm create → vm start → guest wait → redroid create lean1 → redroid stats`；`guest provision` 真实返回 `QC_PROVISION_DONE`、`binderfs=Ok`、`docker=Ok`。精简实例达到 `boot_completed=true`、`oom_kills=0`；XHS lean 冷启动/ART 对照见 `E-016`，guest readiness 与安全清理见 `E-015` |
+| 🔬 **需用户真机运行** | `verify` 七项、`adb map`/宿主 ADB 连通、目标应用登录与连续浏览、3 次重复的内存矩阵、升级/恢复和视觉走查。**seed 载体链路已在真机手工全链路验证**（见下方 seed 载体条目）：用户在 node1 上用手工生成的同规格 seed.img 跑通 `cloud-init status=done` / Docker 29.1.3 active / SSH 公钥认证；用 CLI 重建节点后仍应按 verify 第 2/4 项复验一致 |
 
-`doctor` 在本开发机上已实际跑过一次（真实输出：WHPX 功能 Disabled、QEMU 未安装、磁盘 90.3 GiB 充足、ssh/adb 已找到）——这同时暴露并修复了一个真实格式差异：新版 Windows 的 `fsutil volume diskfree` 把原始字节数放在括号**外**（`96,967,008,256 ( 90.3 GB)`），旧版放在括号**内**；解析器现已兼容两种格式并对本地化输出做回退。
+`doctor` 在本开发机上已实际跑过：当前真实输出为 **8 项全 OK**（WHPX、QEMU、qemu-img、SSH、ADB、磁盘和 state dir）。早期诊断曾遇到 WHPX Disabled、QEMU 未安装，以及一个真实格式差异：新版 Windows 的 `fsutil volume diskfree` 把原始字节数放在括号**外**（`96,967,008,256 ( 90.3 GB)`），旧版放在括号**内**；解析器现已兼容两种格式并对本地化输出做回退。
 
 其他已知边界：
 - **seed 载体演进：自写 ISO → QEMU VVFAT → 自写 FAT16（前两步均被真机证伪，第三步真机全链路跑通）**：
@@ -191,7 +219,7 @@ Settings 页「默认运行轨道」下拉可记录 docker|qemu 偏好（`defaul
   3. **binder_linux 开机自动加载**：`/etc/modules-load.d/binder.conf`（不带参数的默认加载）+ 本次 boot 的 `modprobe binder_linux devices="binder,hwbinder,vndbinder"`。
   4. **guest 内 docker 走宿主代理**（用户网络环境 docker pull 被墙）：systemd drop-in 写 `HTTP_PROXY/HTTPS_PROXY=http://10.0.2.2:10808`、`NO_PROXY=localhost,127.0.0.1`。QEMU user-net 网关固定 `10.0.2.2`（即宿主）；`10808` 是用户 v2rayN mixed 端口——**端口不同就改 `src/cloudinit.rs` 的 `GUEST_DOCKER_PROXY` 常量后重编**（个人工具，刻意不做运行时配置）。drop-in 用逐行 printf 写入（heredoc 转义在 runcmd 里会坏，真机验证过）。
 - **已用旧版（坏 ISO / VVFAT）创建的节点不会自动迁移**：无 seed.img 的 VM 在 `vm start` 时照常无 seed 启动（与现状一致）。要获得正确 seed，删除重建即可：`vm delete node1 --purge && vm create node1 …`。
-- **快照/克隆与运行中的 VM**：qcow2 内部快照要求 VM 已停止（或在 guest 内 quiesce）。CLI 不强制拦截，README 明示风险。
+- **快照/克隆与运行中的 VM**：qcow2 内部快照和 backing-file 克隆要求 VM 已停止（或在 guest 内 quiesce）。CLI 对快照使用安全路径，对克隆在 QMP 未明确报告停止时直接拒绝，避免矩阵基线不一致。
 - **端口块在 VM 启动时固定**：slirp 的 hostfwd 无法在启动后追加（除非走 QMP），所以 `vm create` 时一次性预留 `--adb-port-count`（默认 32）个转发；块耗尽需新建/克隆节点。
 - **state.json 无跨进程锁**：写入用 temp+rename 原子替换，但两个并发的 `qemu-center` 进程可能互相覆盖。单操作者 CLI 场景可接受，属已知局限。
 - **不碰主仓库**：本 crate 不 import `src-tauri` 任何代码；redroid 参数是按 redroid 官方文档语义**独立重写**的（见 `src/redroid.rs` 模块注释）。
@@ -245,11 +273,11 @@ $env:QEMU_CENTER_STATE_DIR = "F:\code\project\Android-Device\qemu-center\state"
 ## 7. 开发
 
 ```bash
-cargo test --manifest-path qemu-center/Cargo.toml      # 191 个用例
+cargo test --manifest-path qemu-center/Cargo.toml      # 215 个库测试 + 12 个命令行测试
 cargo run  --manifest-path qemu-center/Cargo.toml -- doctor
 cargo run  --manifest-path qemu-center/Cargo.toml -- setup all
 ```
 
-依赖红线：仅 `serde` / `serde_json` / `clap` / `dirs`。ISO 生成器、FAT16 seed 镜像生成器、cloud-init 渲染、参数拼装、输出解析全部自写、零额外依赖。
+依赖红线：运行时只使用 `serde` / `serde_json` / `clap` / `dirs`，授权闸门额外使用 `base64` / `ed25519-dalek` 做发布公钥验签。ISO 生成器、FAT16 seed 镜像生成器、cloud-init 渲染、参数拼装、输出解析全部自写。
 
 RDC 应用内接入已启动（见上文 3.2 节）；适配设计沿革见 [`docs/architecture.md`](docs/architecture.md)。本 crate 仍不依赖 RDC 代码，反向走 CLI 子进程 + `--json` 契约。

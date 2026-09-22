@@ -242,7 +242,10 @@ fn parse_runtime_metrics(inspected: &serde_json::Value) -> Option<RuntimeMetrics
     let state = inspected.get("State").and_then(|v| v.as_object());
     let mut measured = false;
 
-    let (cpu_quota_cores, cpu_unlimited) = match host.and_then(|v| v.get("NanoCpus")).and_then(|v| v.as_u64()) {
+    let (cpu_quota_cores, cpu_unlimited) = match host
+        .and_then(|v| v.get("NanoCpus"))
+        .and_then(|v| v.as_u64())
+    {
         Some(nano) => {
             measured = true;
             if nano == 0 {
@@ -253,24 +256,31 @@ fn parse_runtime_metrics(inspected: &serde_json::Value) -> Option<RuntimeMetrics
         }
         None => (None, None),
     };
-    let (memory_quota_bytes, memory_unlimited) = match host.and_then(|v| v.get("Memory")).and_then(|v| v.as_u64()) {
-        Some(bytes) => {
-            measured = true;
-            if bytes == 0 {
-                (None, Some(true))
-            } else {
-                (Some(bytes), Some(false))
+    let (memory_quota_bytes, memory_unlimited) =
+        match host.and_then(|v| v.get("Memory")).and_then(|v| v.as_u64()) {
+            Some(bytes) => {
+                measured = true;
+                if bytes == 0 {
+                    (None, Some(true))
+                } else {
+                    (Some(bytes), Some(false))
+                }
             }
-        }
-        None => (None, None),
-    };
-    let disk_bytes = inspected.get("SizeRw").and_then(|v| v.as_u64()).map(|bytes| {
-        measured = true;
-        bytes
-    });
+            None => (None, None),
+        };
+    let disk_bytes = inspected
+        .get("SizeRw")
+        .and_then(|v| v.as_u64())
+        .map(|bytes| {
+            measured = true;
+            bytes
+        });
 
     let clean_time = |key: &str| {
-        let value = state.and_then(|v| v.get(key)).and_then(|v| v.as_str())?.trim();
+        let value = state
+            .and_then(|v| v.get(key))
+            .and_then(|v| v.as_str())?
+            .trim();
         if value.is_empty() || value.starts_with("0001-01-01") {
             None
         } else {
@@ -316,7 +326,10 @@ fn enrich_runtime_metrics(containers: &mut [DockerContainer]) {
     for container in containers.iter_mut().filter(|c| c.is_redroid) {
         let clean_name = container.name.trim_start_matches('/');
         let Some(entry) = entries.iter().find(|entry| {
-            entry.get("Name").and_then(|v| v.as_str()).map(|name| name.trim_start_matches('/') == clean_name)
+            entry
+                .get("Name")
+                .and_then(|v| v.as_str())
+                .map(|name| name.trim_start_matches('/') == clean_name)
                 .unwrap_or(false)
                 || entry.get("Id").and_then(|v| v.as_str()) == Some(container.id.as_str())
         }) else {
@@ -644,7 +657,10 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
     // --hostname` and the in-instance resetprop never disagree.
     let hostname_profile = crate::services::spoof::profile_by_id(label_profile_id);
     let hostname = crate::services::spoof::derive_hostname(
-        hostname_profile.as_ref().map(|p| p.brand.as_str()).unwrap_or(""),
+        hostname_profile
+            .as_ref()
+            .map(|p| p.brand.as_str())
+            .unwrap_or(""),
         req.adb_port,
     );
     // Per-instance DNS rotation (only when trace cleansing is on — same
@@ -795,14 +811,20 @@ pub fn create_redroid(req: &CreateInstanceRequest) -> ShellResult {
                     } else {
                         crate::services::spoof::profile_by_id(profile_id)
                     };
-                    match cloak::cloak_first_boot_install(&container_name, profile.as_ref(), &serial) {
+                    match cloak::cloak_first_boot_install(
+                        &container_name,
+                        profile.as_ref(),
+                        &serial,
+                    ) {
                         Ok(msg) => {
                             r.stdout = format!("{}\n{}", r.stdout.trim(), msg.trim());
                         }
                         Err(e) => {
                             log::warn(
                                 "Docker",
-                                &format!("DeviceCloak install incomplete for {container_name}: {e}"),
+                                &format!(
+                                    "DeviceCloak install incomplete for {container_name}: {e}"
+                                ),
                             );
                             r.stdout = format!(
                                 "{}\nDeviceCloak 深度伪装安装未完成（警告，不阻断）：{e}",
@@ -920,10 +942,7 @@ fn first_boot_net_hostname(container_name: &str, req: &CreateInstanceRequest, se
         Duration::from_secs(15),
     );
     if apply.success {
-        log::info(
-            "Docker",
-            &format!("[{serial}] net.hostname -> {hostname}"),
-        );
+        log::info("Docker", &format!("[{serial}] net.hostname -> {hostname}"));
     } else {
         log::warn(
             "Docker",
@@ -995,12 +1014,7 @@ pub fn container_clean_traces_enabled(container: &str) -> Option<bool> {
 fn container_gpu_passthrough(id_or_name: &str) -> bool {
     let r = util::run_command_timeout(
         &docker_bin(),
-        &[
-            "inspect",
-            "--format",
-            "{{json .Config.Cmd}}",
-            id_or_name,
-        ],
+        &["inspect", "--format", "{{json .Config.Cmd}}", id_or_name],
         Duration::from_secs(10),
     );
     r.success && r.stdout.contains("androidboot.redroid_gpu_mode=host")
@@ -2494,7 +2508,8 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
     let gpu_host = container_gpu_passthrough(id_or_name);
     // Same brand-derived hostname rule as the create flow (brand from the
     // source's spoof label, port = the clone's own ADB port).
-    let clone_hostname = crate::services::spoof::derive_hostname(&container_spoof_brand(id_or_name), port);
+    let clone_hostname =
+        crate::services::spoof::derive_hostname(&container_spoof_brand(id_or_name), port);
     args.extend([
         "-v".into(),
         volume_map,
@@ -2507,13 +2522,11 @@ pub fn clone_container(id_or_name: &str, new_name: &str) -> ShellResult {
         args.extend(["--device".into(), "/dev/dri".into()]);
     }
     args.push(image_id);
-    args.push(
-        if gpu_host {
-            "androidboot.redroid_gpu_mode=host".to_string()
-        } else {
-            "androidboot.redroid_gpu_mode=guest".to_string()
-        },
-    );
+    args.push(if gpu_host {
+        "androidboot.redroid_gpu_mode=host".to_string()
+    } else {
+        "androidboot.redroid_gpu_mode=guest".to_string()
+    });
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut r = util::run_command_timeout(&docker_bin(), &arg_refs, Duration::from_secs(120));
     let run_ok = r.success;
@@ -3154,9 +3167,12 @@ mod tests {
         assert_eq!(dns_for_port(5555), "9.9.9.9"); // 5555 % 3 == 2
         assert_eq!(dns_for_port(5556), "1.1.1.1"); // 5556 % 3 == 0
         assert_eq!(dns_for_port(5557), "8.8.8.8"); // 5557 % 3 == 1
-        // The pool only contains the three documented resolvers.
+                                                   // The pool only contains the three documented resolvers.
         for port in [0u16, 1, 2, 5555, 5558, 6000, 65535] {
-            assert!(matches!(dns_for_port(port), "1.1.1.1" | "8.8.8.8" | "9.9.9.9"));
+            assert!(matches!(
+                dns_for_port(port),
+                "1.1.1.1" | "8.8.8.8" | "9.9.9.9"
+            ));
         }
     }
 
@@ -3187,8 +3203,14 @@ mod tests {
         assert_eq!(metrics.memory_quota_bytes, Some(4_294_967_296));
         assert_eq!(metrics.memory_unlimited, Some(false));
         assert_eq!(metrics.disk_bytes, Some(1_048_576));
-        assert_eq!(metrics.started_at.as_deref(), Some("2026-09-16T10:00:00.000000000Z"));
-        assert_eq!(metrics.finished_at.as_deref(), Some("2026-09-16T10:01:00.000000000Z"));
+        assert_eq!(
+            metrics.started_at.as_deref(),
+            Some("2026-09-16T10:00:00.000000000Z")
+        );
+        assert_eq!(
+            metrics.finished_at.as_deref(),
+            Some("2026-09-16T10:01:00.000000000Z")
+        );
     }
 
     #[test]

@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import clsx from "clsx";
 import { ArrowLeft, Container, LoaderCircle, Scale, Server } from "lucide-react";
-import DockerTrackPanel from "../tracks/DockerTrackPanel";
-import QemuTrackPanel from "../tracks/QemuTrackPanel";
 import RuntimeCompare from "./RuntimeCompare";
 import RuntimeSourceBadges from "./RuntimeSourceBadges";
 import { Button } from "../../components/ui/Button";
@@ -20,6 +18,9 @@ import {
   type RuntimeTrack,
   type TrackTaskInfo,
 } from "../../lib/runtimeTrack";
+
+const DockerTrackPanel = lazy(() => import("../tracks/DockerTrackPanel"));
+const QemuTrackPanel = lazy(() => import("../tracks/QemuTrackPanel"));
 
 const TRACK_ICON: Record<RuntimeTrack, typeof Container> = { docker: Container, qemu: Server };
 const TRACK_LABEL_KEY: Record<RuntimeTrack, string> = {
@@ -332,24 +333,28 @@ export default function RuntimePage() {
           `aria-controls`) and `showHeader={false}` because the shell above
           already renders the page title once. */}
       {track === "docker" || tasks.docker ? (
-        <DockerTrackPanel
-          active={track === "docker"}
-          onTaskChange={onDockerTask}
-          showHeader={false}
-          panelId={panelDomId("docker")}
-          panelLabelId={tabDomId("docker")}
-          refreshSignal={refreshSignals.docker}
-        />
+        <Suspense fallback={null}>
+          <DockerTrackPanel
+            active={track === "docker"}
+            onTaskChange={onDockerTask}
+            showHeader={false}
+            panelId={panelDomId("docker")}
+            panelLabelId={tabDomId("docker")}
+            refreshSignal={refreshSignals.docker}
+          />
+        </Suspense>
       ) : null}
       {track === "qemu" || tasks.qemu ? (
-        <QemuTrackPanel
-          active={track === "qemu"}
-          onTaskChange={onQemuTask}
-          showHeader={false}
-          panelId={panelDomId("qemu")}
-          panelLabelId={tabDomId("qemu")}
-          refreshSignal={refreshSignals.qemu}
-        />
+        <Suspense fallback={null}>
+          <QemuTrackPanel
+            active={track === "qemu"}
+            onTaskChange={onQemuTask}
+            showHeader={false}
+            panelId={panelDomId("qemu")}
+            panelLabelId={tabDomId("qemu")}
+            refreshSignal={refreshSignals.qemu}
+          />
+        </Suspense>
       ) : null}
     </>
   );

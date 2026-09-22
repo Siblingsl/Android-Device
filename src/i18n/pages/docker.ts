@@ -47,6 +47,13 @@ export const dockerZh: Record<string, string> = {
 
   // Stats cards
   "docker.dockerStatus": "Docker 状态",
+  "docker.notInstalled": "未安装",
+  "docker.notInstalledHint": "未检测到 Docker CLI，请先安装 Docker Desktop。",
+  "docker.installDocker": "安装 Docker Desktop",
+  "docker.installDockerTitle": "打开 Docker Desktop 官方下载页",
+  "docker.engineStoppedHint": "Docker CLI 已找到，但 Docker 引擎尚未启动。",
+  "docker.startDocker": "启动 Docker Desktop",
+  "docker.startDockerFailed": "无法启动 Docker Desktop，请手动打开。",
   "docker.version": "版本",
 
   // Create form
@@ -299,6 +306,13 @@ export const dockerEn: Record<string, string> = {
 
   // Stats cards
   "docker.dockerStatus": "Docker status",
+  "docker.notInstalled": "Not installed",
+  "docker.notInstalledHint": "Docker CLI was not found. Install Docker Desktop first.",
+  "docker.installDocker": "Install Docker Desktop",
+  "docker.installDockerTitle": "Open the official Docker Desktop download page",
+  "docker.engineStoppedHint": "Docker CLI was found, but the Docker engine is not running.",
+  "docker.startDocker": "Start Docker Desktop",
+  "docker.startDockerFailed": "Docker Desktop could not be started. Open it manually.",
   "docker.version": "Version",
 
   // Create form

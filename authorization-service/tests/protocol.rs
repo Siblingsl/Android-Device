@@ -5,17 +5,21 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use rdc_authorization_service::crypto::{
     canonical_json, decrypt_artifact_chunk, derive_artifact_key, derive_x25519_shared_secret,
-    random_x25519_keypair, ClientKeyAlgorithm, ProtectedCapability, RegistrationProof,
-    SessionProof, SignedArtifactManifest, SigningAuthority,
+    random_x25519_keypair, ClientKeyAlgorithm, ExecutionGrantProof, ProtectedCapability, RegistrationProof,
+    SessionProof, SignedArtifactManifest, SignedExecutionAuthorizationReceipt,
+    SignedExecutionGrant, SigningAuthority,
 };
 use rdc_authorization_service::routes::{
-    ArtifactChunkResponse, ArtifactPrepareRequest, SessionRequest, SessionResponse,
+    ArtifactChunkResponse, ArtifactPrepareRequest, ConsumeExecutionGrantRequest,
+    ExecutionGrantRequest, SessionRequest, SessionResponse,
 };
 use rdc_authorization_service::store::{AuthStore, ClientRecord};
 use rdc_authorization_service::{router, AppState};
 use serde::{de::DeserializeOwned, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -69,8 +73,73 @@ fn app_fixture(
     (router(state), store, key)
 }
 
+fn persistent_execution_app_fixture(
+    root: &Path,
+    database: &Path,
+    authority: SigningAuthority,
+    initialize: bool,
+) -> (axum::Router, SigningKey) {
+    let store = AuthStore::open(database).unwrap();
+    let (key, client) = client_fixture();
+    if initialize {
+        store
+            .create_pending_client(
+                &client.client_id,
+                &client.account_id,
+                &client.device_id,
+                &client.device_public_key,
+                client.client_key_algorithm,
+                &client.client_version,
+                1_000,
+            )
+            .unwrap();
+        store
+            .approve_client_for_account(&client.client_id, &client.account_id)
+            .unwrap();
+        store
+            .grant_entitlement("account-a", ProtectedCapability::ProtectedArtifact)
+            .unwrap();
+        store
+            .grant_entitlement("account-a", ProtectedCapability::ProtectedPreset)
+            .unwrap();
+        let artifact = root.join("core.py");
+        std::fs::write(&artifact, b"server-delivered-core\n").unwrap();
+        store
+            .publish_artifact("qemu-guest-script", "1", "x86_64", "android-13", &artifact)
+            .unwrap();
+    }
+    let state = AppState::new(store, authority, root.to_path_buf());
+    (router(state), key)
+}
+
 fn session_request(key: &SigningKey, nonce: &str) -> SessionRequest {
     session_request_for(key, "client-a", "device-a", "1.0.0", nonce)
+}
+
+fn execution_session_request(key: &SigningKey, nonce: &str) -> SessionRequest {
+    let iat = request_time();
+    let capabilities = vec![
+        ProtectedCapability::ProtectedArtifact,
+        ProtectedCapability::ProtectedPreset,
+    ];
+    let proof = SessionProof {
+        client_id: "client-a",
+        device_id: "device-a",
+        client_version: "1.0.0",
+        nonce,
+        iat,
+        capabilities: &capabilities,
+    };
+    let payload = canonical_json(&proof).unwrap();
+    SessionRequest {
+        client_id: "client-a".into(),
+        device_id: "device-a".into(),
+        client_version: "1.0.0".into(),
+        nonce: nonce.into(),
+        iat,
+        capabilities,
+        signature: URL_SAFE_NO_PAD.encode(key.sign(&payload).to_bytes()),
+    }
 }
 
 fn session_request_for(
@@ -80,12 +149,14 @@ fn session_request_for(
     client_version: &str,
     nonce: &str,
 ) -> SessionRequest {
+    let iat = request_time();
     let capabilities = vec![ProtectedCapability::ProtectedArtifact];
     let proof = SessionProof {
         client_id,
         device_id,
         client_version,
         nonce,
+        iat,
         capabilities: &capabilities,
     };
     let payload = canonical_json(&proof).unwrap();
@@ -94,8 +165,43 @@ fn session_request_for(
         device_id: device_id.into(),
         client_version: client_version.into(),
         nonce: nonce.into(),
+        iat,
         capabilities,
         signature: URL_SAFE_NO_PAD.encode(key.sign(&payload).to_bytes()),
+    }
+}
+
+fn request_time() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+fn execution_request(
+    key: &SigningKey,
+    artifact_sha256: &str,
+    nonce: &str,
+) -> ExecutionGrantRequest {
+    let iat = request_time();
+    let proof = ExecutionGrantProof {
+        artifact_id: "qemu-guest-script",
+        artifact_sha256,
+        action: "preset_apply",
+        vm: "node1",
+        instance: "r13",
+        nonce,
+        iat,
+    };
+    ExecutionGrantRequest {
+        artifact_id: "qemu-guest-script".into(),
+        artifact_sha256: artifact_sha256.into(),
+        action: "preset_apply".into(),
+        vm: "node1".into(),
+        instance: "r13".into(),
+        nonce: nonce.into(),
+        iat,
+        signature: URL_SAFE_NO_PAD.encode(key.sign(&canonical_json(&proof).unwrap()).to_bytes()),
     }
 }
 
@@ -382,4 +488,114 @@ async fn restarted_service_uses_the_new_signing_key_id() {
     assert_eq!(response.status(), StatusCode::OK);
     let session: SessionResponse = response_json(response).await;
     assert_eq!(session.lease.key_id, "auth-2026-02");
+}
+
+#[tokio::test]
+async fn restarting_with_next_signing_key_keeps_execution_grants_bound_to_their_authority() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("auth.sqlite");
+    let old_secret = URL_SAFE_NO_PAD.encode([7; 32]);
+    let next_secret = URL_SAFE_NO_PAD.encode([8; 32]);
+    let old_authority = SigningAuthority::from_base64url("auth-old", &old_secret).unwrap();
+    let next_authority = SigningAuthority::from_base64url("auth-next", &next_secret).unwrap();
+    let old_authority_for_verify = old_authority.clone();
+
+    let (old_app, key) =
+        persistent_execution_app_fixture(temp.path(), &database, old_authority, true);
+    let session_response = post_json(
+        &old_app,
+        "/v1/sessions",
+        &execution_session_request(&key, "rotation-session"),
+        None,
+    )
+    .await;
+    assert_eq!(session_response.status(), StatusCode::OK);
+    let session: SessionResponse = response_json(session_response).await;
+    assert_eq!(session.lease.key_id, "auth-old");
+
+    let artifact_sha256 = format!("{:x}", Sha256::digest(b"server-delivered-core\n"));
+    let old_grant_response = post_json(
+        &old_app,
+        "/v1/execution-grants",
+        &execution_request(&key, &artifact_sha256, "rotation-grant-old"),
+        Some(&session.lease.claims.session_id),
+    )
+    .await;
+    assert_eq!(old_grant_response.status(), StatusCode::OK);
+    let mut old_grant: SignedExecutionGrant = response_json(old_grant_response).await;
+    assert_eq!(old_grant.key_id, "auth-old");
+    old_grant.device_proof =
+        Some(URL_SAFE_NO_PAD.encode(key.sign(old_grant.payload.as_bytes()).to_bytes()));
+
+    let old_receipt_response = post_json(
+        &old_app,
+        "/v1/execution-grants/consume",
+        &ConsumeExecutionGrantRequest {
+            grant: old_grant.clone(),
+        },
+        None,
+    )
+    .await;
+    assert_eq!(old_receipt_response.status(), StatusCode::OK);
+    let old_receipt: SignedExecutionAuthorizationReceipt =
+        response_json(old_receipt_response).await;
+    assert_eq!(old_receipt.key_id, "auth-old");
+    old_authority_for_verify
+        .verify_execution_authorization_receipt(&old_receipt)
+        .unwrap();
+
+    let old_replay_response = post_json(
+        &old_app,
+        "/v1/execution-grants/consume",
+        &ConsumeExecutionGrantRequest {
+            grant: old_grant.clone(),
+        },
+        None,
+    )
+    .await;
+    assert_eq!(old_replay_response.status(), StatusCode::CONFLICT);
+
+    drop(old_app);
+    let next_authority_for_verify = next_authority.clone();
+    let (next_app, _) =
+        persistent_execution_app_fixture(temp.path(), &database, next_authority, false);
+    let next_grant_response = post_json(
+        &next_app,
+        "/v1/execution-grants",
+        &execution_request(&key, &artifact_sha256, "rotation-grant-next"),
+        Some(&session.lease.claims.session_id),
+    )
+    .await;
+    assert_eq!(next_grant_response.status(), StatusCode::OK);
+    let mut next_grant: SignedExecutionGrant = response_json(next_grant_response).await;
+    assert_eq!(next_grant.key_id, "auth-next");
+    next_grant.device_proof =
+        Some(URL_SAFE_NO_PAD.encode(key.sign(next_grant.payload.as_bytes()).to_bytes()));
+
+    let next_receipt_response = post_json(
+        &next_app,
+        "/v1/execution-grants/consume",
+        &ConsumeExecutionGrantRequest { grant: next_grant },
+        None,
+    )
+    .await;
+    assert_eq!(next_receipt_response.status(), StatusCode::OK);
+    let next_receipt: SignedExecutionAuthorizationReceipt =
+        response_json(next_receipt_response).await;
+    assert_eq!(next_receipt.key_id, "auth-next");
+    next_authority_for_verify
+        .verify_execution_authorization_receipt(&next_receipt)
+        .unwrap();
+    assert!(old_authority_for_verify
+        .verify_execution_authorization_receipt(&next_receipt)
+        .is_err());
+
+    let old_after_restart_response = post_json(
+        &next_app,
+        "/v1/execution-grants/consume",
+        &ConsumeExecutionGrantRequest { grant: old_grant },
+        None,
+    )
+    .await;
+    assert_eq!(old_after_restart_response.status(), StatusCode::FORBIDDEN);
 }

@@ -170,7 +170,9 @@ fn lfn_checksum(short: &[u8; 11]) -> u8 {
 /// followed by the 8.3 entry by the caller.
 fn lfn_entries(long: &str, checksum: u8) -> Result<Vec<[u8; 32]>, String> {
     if long.contains('\0') || long.contains('/') {
-        return Err(format!("file name {long:?} contains a path/illegal character"));
+        return Err(format!(
+            "file name {long:?} contains a path/illegal character"
+        ));
     }
     let units: Vec<u16> = long.encode_utf16().collect();
     if units.is_empty() {
@@ -266,10 +268,7 @@ struct ShortName {
 /// split at the last dot, uppercase + filter both chunks, and when the result
 /// does not fit 8.3 (or had to be altered) truncate the base and append
 /// `~N`, shrinking the base as the tail grows.
-fn derive_short_name(
-    long: &str,
-    used: &mut BTreeSet<[u8; 11]>,
-) -> Result<ShortName, String> {
+fn derive_short_name(long: &str, used: &mut BTreeSet<[u8; 11]>) -> Result<ShortName, String> {
     let (raw_base, raw_ext) = match long.rfind('.') {
         Some(i) if i + 1 < long.len() => (&long[..i], &long[i + 1..]),
         _ => (long, ""),
@@ -309,7 +308,9 @@ fn derive_short_name(
     loop {
         let digits = tail.to_string().len();
         if digits > 6 {
-            return Err(format!("cannot derive a unique 8.3 short name for {long:?}"));
+            return Err(format!(
+                "cannot derive a unique 8.3 short name for {long:?}"
+            ));
         }
         // base + '~' + digits must fit the 8-byte base field.
         let take = 6.min(8usize.saturating_sub(1 + digits));
@@ -417,7 +418,15 @@ pub fn build_fat16_image(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String>
             first_cluster = next_cluster as u16;
             for i in 0..n {
                 let c = next_cluster + i;
-                put_fat_entry(&mut img, c, if i + 1 == n { FAT_ENTRY_EOC } else { (c + 1) as u16 });
+                put_fat_entry(
+                    &mut img,
+                    c,
+                    if i + 1 == n {
+                        FAT_ENTRY_EOC
+                    } else {
+                        (c + 1) as u16
+                    },
+                );
                 let src = i as usize * CLUSTER_BYTES;
                 let end = (src + CLUSTER_BYTES).min(bytes.len());
                 let dst = DATA_START + (c as usize - FIRST_DATA_CLUSTER as usize) * CLUSTER_BYTES;
@@ -523,7 +532,10 @@ mod tests {
             while c >= 2 && out.len() < size {
                 out.extend_from_slice(cluster(c));
                 let next = fat_entry(c) as u32;
-                assert!(next == 0xFFFF || next == c + 1, "unexpected chain link {next}");
+                assert!(
+                    next == 0xFFFF || next == c + 1,
+                    "unexpected chain link {next}"
+                );
                 c = next;
             }
             out.truncate(size);
@@ -606,17 +618,29 @@ mod tests {
         assert_eq!(&img[3..11], b"MSDOS5.0");
         assert_eq!(read_u16(&img, 0x0B), 512, "bytes per sector");
         assert_eq!(img[0x0D], 4, "sectors per cluster → 2 KiB clusters");
-        assert_eq!(read_u16(&img, 0x0E), 4, "reserved sectors (mkfs.fat-parity)");
+        assert_eq!(
+            read_u16(&img, 0x0E),
+            4,
+            "reserved sectors (mkfs.fat-parity)"
+        );
         assert_eq!(img[0x10], 2, "number of FATs");
         assert_eq!(read_u16(&img, 0x11), 512, "root entries");
         // 131072 sectors cannot fit the 16-bit field; the 32-bit one carries it.
         assert_eq!(read_u16(&img, 0x13), 0, "total_sectors_16");
         assert_eq!(read_u32(&img, 0x20), 131072, "total_sectors_32");
         assert_eq!(img[0x15], 0xF8, "media descriptor");
-        assert_eq!(read_u16(&img, 0x16), 128, "sectors per FAT (converged fixed point)");
+        assert_eq!(
+            read_u16(&img, 0x16),
+            128,
+            "sectors per FAT (converged fixed point)"
+        );
         assert_eq!(FAT_SECTORS, 128);
         assert_eq!(CLUSTER_COUNT, 32695);
-        assert_eq!(read_u16(&img, 0x18), 32, "sectors per track (mkfs.fat parity)");
+        assert_eq!(
+            read_u16(&img, 0x18),
+            32,
+            "sectors per track (mkfs.fat parity)"
+        );
         assert_eq!(read_u16(&img, 0x1A), 8, "heads (mkfs.fat parity)");
         assert_eq!(img[0x24], 0x80, "drive number");
         assert_eq!(img[0x26], 0x29, "extended boot signature");
@@ -663,7 +687,10 @@ mod tests {
             assert_ne!(e.nt_flags & 0x08, 0, "lowercase base must set the NT flag");
             // No extension for these names → first cluster high word unused.
             assert!(e.first_cluster >= 2);
-            assert_eq!(read_u16(&img, FAT_START + e.first_cluster as usize * 2), 0xFFFF);
+            assert_eq!(
+                read_u16(&img, FAT_START + e.first_cluster as usize * 2),
+                0xFFFF
+            );
         }
     }
 
@@ -731,7 +758,9 @@ mod tests {
         // And the FAT holds nothing but the two reserved entries.
         assert_eq!(read_u16(&img, FAT_START + 2 * 2), 0x0000);
         assert_eq!(read_u16(&img, FAT_START + 3 * 2), 0x0000);
-        assert!(img[DATA_START..DATA_START + CLUSTER_BYTES].iter().all(|&b| b == 0));
+        assert!(img[DATA_START..DATA_START + CLUSTER_BYTES]
+            .iter()
+            .all(|&b| b == 0));
     }
 
     // --- ⑥ multi-cluster file (300 KiB → 150 clusters) ---
@@ -864,7 +893,8 @@ mod tests {
     // --- ⑩ guards ---
 
     #[test]
-    fn builder_rejects_names_beyond_the_lfn_limit_and_over_capacity() {        let too_long = "x".repeat(256);
+    fn builder_rejects_names_beyond_the_lfn_limit_and_over_capacity() {
+        let too_long = "x".repeat(256);
         let err = build_fat16_image(&[(too_long, vec![1, 2, 3])]).unwrap_err();
         assert!(err.contains("255"), "unexpected error: {err}");
         // 512 single-LFN files × (1 LFN + 1 short) exceed the 512 root slots
@@ -873,6 +903,9 @@ mod tests {
             .map(|i| (format!("f{i:04}"), vec![0u8; 1]))
             .collect();
         let err = build_fat16_image(&files).unwrap_err();
-        assert!(err.contains("root directory full"), "unexpected error: {err}");
+        assert!(
+            err.contains("root directory full"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -48,13 +48,31 @@ pub struct RedroidSpec {
     pub height: u32,
     pub dpi: u32,
     pub gpu_mode: GpuMode,
-    /// redroid image tag (default `redroid/redroid:14.0.0-latest`).
+    /// Content-addressed redroid image reference (`name@sha256:<digest>`).
     pub image: String,
 }
 
 /// Container name for a logical instance name.
 pub fn container_name(name: &str) -> String {
     format!("qc-{name}")
+}
+
+/// Protected redroid execution must use a content-addressed image reference.
+pub fn validate_image_ref(image: &str) -> Result<(), String> {
+    let Some((name, digest)) = image.split_once("@sha256:") else {
+        return Err("redroid image must use an immutable @sha256 digest".into());
+    };
+    if name.is_empty()
+        || !name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-/:".contains(c))
+        || digest.len() != 64
+        || !digest.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err("redroid image digest is invalid".into());
+    }
+    Ok(())
 }
 
 /// Docker volume holding the instance's `/data` (survives container recreate).
@@ -71,7 +89,9 @@ pub fn validate_instance_name(name: &str) -> Result<(), String> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(format!("instance name {name:?} must be lowercase [a-z0-9-]"));
+        return Err(format!(
+            "instance name {name:?} must be lowercase [a-z0-9-]"
+        ));
     }
     if name.starts_with('-') || name.ends_with('-') {
         return Err("instance name must not start or end with '-'".into());
@@ -117,12 +137,20 @@ pub fn redroid_create_args(spec: &RedroidSpec) -> Vec<String> {
 }
 
 /// Guest-only bind mounts and cgroup settings for a prepared device profile.
-pub fn redroid_create_args_with_mounts(spec: &RedroidSpec, binds: &[String], cgroup_parent: Option<&str>) -> Vec<String> {
+pub fn redroid_create_args_with_mounts(
+    spec: &RedroidSpec,
+    binds: &[String],
+    cgroup_parent: Option<&str>,
+) -> Vec<String> {
     let mut args = redroid_create_args(spec);
     let image_index = args.len() - 5;
     let mut options = vec!["--restart".into(), "unless-stopped".into()];
-    for bind in binds { options.extend(["--volume".into(), bind.clone()]); }
-    if let Some(parent) = cgroup_parent { options.extend(["--cgroup-parent".into(), parent.into()]); }
+    for bind in binds {
+        options.extend(["--volume".into(), bind.clone()]);
+    }
+    if let Some(parent) = cgroup_parent {
+        options.extend(["--cgroup-parent".into(), parent.into()]);
+    }
     args.splice(image_index..image_index, options);
     args
 }
@@ -197,6 +225,90 @@ pub fn parse_redroid_stats_json(raw: &str) -> Result<Vec<RedroidRuntimeStats>, S
     serde_json::from_str(raw).map_err(|e| format!("parse redroid stats JSON failed: {e}"))
 }
 
+/// Minimum guest RAM target accepted by the explicit balloon reclaim action.
+pub const MIN_BALLOON_TARGET_MIB: u32 = 1536;
+const BALLOON_QUANTUM_MIB: u32 = 256;
+const BALLOON_BASE_RESERVE_MIB: u32 = 768;
+const BALLOON_PER_INSTANCE_RESERVE_MIB: u32 = 512;
+
+/// Safe result of the guest-memory reclaim planner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReclaimPlan {
+    Reclaim {
+        target_mib: u32,
+        used_mib: u32,
+        active_instances: u32,
+    },
+    Noop {
+        reason: &'static str,
+    },
+    UnknownMetrics {
+        instance: String,
+    },
+}
+
+fn reclaim_active_status(status: &str) -> bool {
+    let normalized = status.trim().to_ascii_lowercase();
+    normalized == "running" || normalized == "up" || normalized.starts_with("up ")
+}
+
+fn reclaim_inactive_status(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "exited" | "created" | "dead" | "paused"
+    ) || status.trim().to_ascii_lowercase().starts_with("exited ")
+}
+
+/// Compute a conservative balloon target from read-only guest cgroup stats.
+/// Unknown rows never become permission to reclaim memory.
+pub fn plan_memory_reclaim(node_mem_mib: u32, rows: &[RedroidRuntimeStats]) -> ReclaimPlan {
+    if node_mem_mib <= MIN_BALLOON_TARGET_MIB {
+        return ReclaimPlan::Noop {
+            reason: "node memory is already at the safe reclaim floor",
+        };
+    }
+
+    let mut used_mib = 0u32;
+    let mut active_instances = 0u32;
+    for row in rows {
+        if reclaim_active_status(&row.status) {
+            let Some(current_bytes) = row.memory_current_bytes else {
+                return ReclaimPlan::UnknownMetrics {
+                    instance: row.instance.clone(),
+                };
+            };
+            active_instances = active_instances.saturating_add(1);
+            let current_mib = current_bytes
+                .saturating_add(1_048_575)
+                .checked_div(1_048_576)
+                .unwrap_or(u64::MAX)
+                .min(u64::from(u32::MAX)) as u32;
+            used_mib = used_mib.saturating_add(current_mib);
+        } else if !reclaim_inactive_status(&row.status) {
+            return ReclaimPlan::UnknownMetrics {
+                instance: row.instance.clone(),
+            };
+        }
+    }
+
+    let reserve_mib = BALLOON_BASE_RESERVE_MIB
+        .max(active_instances.saturating_mul(BALLOON_PER_INSTANCE_RESERVE_MIB));
+    let raw_target = MIN_BALLOON_TARGET_MIB.max(used_mib.saturating_add(reserve_mib));
+    let aligned_target = raw_target.saturating_add(BALLOON_QUANTUM_MIB - 1) / BALLOON_QUANTUM_MIB
+        * BALLOON_QUANTUM_MIB;
+    let target_mib = aligned_target.min(node_mem_mib);
+    if target_mib > node_mem_mib.saturating_sub(BALLOON_QUANTUM_MIB) {
+        return ReclaimPlan::Noop {
+            reason: "current usage leaves less than one reclaim quantum",
+        };
+    }
+    ReclaimPlan::Reclaim {
+        target_mib,
+        used_mib,
+        active_instances,
+    }
+}
+
 /// Judge `docker exec … getprop sys.boot_completed` output.
 pub fn judge_boot_completed(stdout: &str) -> bool {
     stdout.trim() == "1"
@@ -235,6 +347,12 @@ pub enum ResourceProfile {
     Full,
 }
 
+/// A full profile includes GApps and Magisk/zygisk services. E-033 measured
+/// one at almost the entire 3072 MiB container ceiling on a 4096 MiB node,
+/// leaving the Windows host in critical pressure. Keep the boundary explicit
+/// and enforce it before Docker create; existing instances are not changed.
+pub const FULL_PROFILE_MIN_NODE_MEMORY_MIB: u32 = 6144;
+
 impl Default for ResourceProfile {
     fn default() -> Self {
         Self::Standard
@@ -268,13 +386,16 @@ impl ResourceProfile {
         let (cpus, memory_mib, install_gapps, install_magisk) = match self {
             Self::Lean => (
                 ((node_vcpus as u32) / 4).max(1),
-                (available / 2).clamp(1024, 4096),
+                (available / 2).clamp(if node_mem_mib >= 3072 { 1536 } else { 1024 }, 4096),
                 false,
                 false,
             ),
             Self::Standard => (
                 ((node_vcpus as u32) / 3).max(1),
-                (node_mem_mib / 4).clamp(1024, 8192),
+                available
+                    .max(1024)
+                    .min((node_mem_mib / 4).max(2048))
+                    .clamp(1024, 8192),
                 false,
                 false,
             ),
@@ -341,18 +462,63 @@ pub fn defaults_for_node(node_vcpus: u16, node_mem_mib: u32) -> InstanceDefaults
     defaults
 }
 
+/// Resolve optional CLI resource overrides against the selected profile.
+/// Explicit values win; omitted values use the same profile ladder exposed by
+/// the desktop form so `--profile lean` cannot silently become a standard-sized
+/// container.
+pub fn resolve_instance_resources(
+    profile: ResourceProfile,
+    node_vcpus: u16,
+    node_mem_mib: u32,
+    cpus_override: Option<f64>,
+    memory_override: Option<u32>,
+) -> Result<(f64, u32), String> {
+    if profile == ResourceProfile::Full && node_mem_mib < FULL_PROFILE_MIN_NODE_MEMORY_MIB {
+        return Err(format!(
+            "full profile requires a node with at least {} MiB; choose lean/standard or a larger node",
+            FULL_PROFILE_MIN_NODE_MEMORY_MIB
+        ));
+    }
+    let defaults = profile.container_defaults(node_vcpus, node_mem_mib);
+    let cpus = cpus_override.unwrap_or(defaults.cpus as f64);
+    if !cpus.is_finite() || cpus <= 0.0 {
+        return Err("cpus must be a finite positive number".into());
+    }
+    let memory_mib = memory_override.unwrap_or(defaults.memory_mib);
+    if memory_mib < 512 {
+        return Err("memory must be at least 512 MiB".into());
+    }
+    Ok((cpus, memory_mib))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const TEST_IMAGE: &str = "redroid/redroid@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     #[test]
     fn preset_mounts_are_options_before_image_and_auto_restart_is_enabled() {
-        let args = redroid_create_args_with_mounts(&spec(), &["/guest/cpuinfo:/proc/cpuinfo:ro".into()], Some("system.slice"));
-        let image = args.iter().position(|s| s == "redroid/redroid:14.0.0-latest").unwrap();
-        let bind = args.iter().position(|s| s == "/guest/cpuinfo:/proc/cpuinfo:ro").unwrap();
+        let args = redroid_create_args_with_mounts(
+            &spec(),
+            &["/guest/cpuinfo:/proc/cpuinfo:ro".into()],
+            Some("system.slice"),
+        );
+        let image = args
+            .iter()
+            .position(|s| s == TEST_IMAGE)
+            .unwrap();
+        let bind = args
+            .iter()
+            .position(|s| s == "/guest/cpuinfo:/proc/cpuinfo:ro")
+            .unwrap();
         assert!(bind < image);
-        assert!(args.windows(2).any(|a| a == ["--restart", "unless-stopped"]));
-        assert!(args.windows(2).any(|a| a == ["--cgroup-parent", "system.slice"]));
+        assert!(args
+            .windows(2)
+            .any(|a| a == ["--restart", "unless-stopped"]));
+        assert!(args
+            .windows(2)
+            .any(|a| a == ["--cgroup-parent", "system.slice"]));
     }
 
     fn spec() -> RedroidSpec {
@@ -365,7 +531,7 @@ mod tests {
             height: 1280,
             dpi: 320,
             gpu_mode: GpuMode::Guest,
-            image: crate::vm::default_redroid_image(),
+            image: TEST_IMAGE.into(),
         }
     }
 
@@ -388,7 +554,7 @@ mod tests {
                 "qc-r1-data:/data",
                 "-p",
                 "0.0.0.0:24500:5555",
-                "redroid/redroid:14.0.0-latest",
+                TEST_IMAGE,
                 "androidboot.redroid_width=720",
                 "androidboot.redroid_height=1280",
                 "androidboot.redroid_dpi=320",
@@ -409,12 +575,21 @@ mod tests {
     }
 
     #[test]
+    fn protected_image_reference_requires_a_sha256_digest() {
+        assert!(validate_image_ref(TEST_IMAGE).is_ok());
+        assert!(validate_image_ref("redroid/redroid:14.0.0-latest").is_err());
+        assert!(validate_image_ref("").is_err());
+    }
+
+    #[test]
     fn gpu_mode_switch() {
         let mut sp = spec();
         sp.gpu_mode = GpuMode::Host;
-        assert!(redroid_create_args(&sp)
-            .contains(&"androidboot.redroid_gpu_mode=host".to_string()));
-        assert_eq!(GpuMode::Guest.androidboot_value(), "androidboot.redroid_gpu_mode=guest");
+        assert!(redroid_create_args(&sp).contains(&"androidboot.redroid_gpu_mode=host".to_string()));
+        assert_eq!(
+            GpuMode::Guest.androidboot_value(),
+            "androidboot.redroid_gpu_mode=guest"
+        );
     }
 
     #[test]
@@ -520,6 +695,97 @@ mod tests {
         assert_eq!(rows[0].oom_kills, None);
     }
 
+    fn stats_row(instance: &str, status: &str, current_mib: Option<u64>) -> RedroidRuntimeStats {
+        RedroidRuntimeStats {
+            instance: instance.into(),
+            container: container_name(instance),
+            status: status.into(),
+            memory_limit_bytes: None,
+            memory_current_bytes: current_mib.map(|mib| mib * 1024 * 1024),
+            memory_peak_bytes: None,
+            oom_kills: None,
+            cpu_usage_percent: None,
+            boot_completed: None,
+        }
+    }
+
+    #[test]
+    fn memory_reclaim_plan_uses_a_floor_and_ignores_exited_rows() {
+        let plan = plan_memory_reclaim(
+            3072,
+            &[
+                stats_row("r1", "Exited (0)", Some(4096)),
+                stats_row("r2", "exited", None),
+            ],
+        );
+        assert_eq!(
+            plan,
+            ReclaimPlan::Reclaim {
+                target_mib: 1536,
+                used_mib: 0,
+                active_instances: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn memory_reclaim_plan_aligns_active_usage_and_reserves_headroom() {
+        let plan = plan_memory_reclaim(3072, &[stats_row("r1", "Up 2 hours", Some(1750))]);
+        assert_eq!(
+            plan,
+            ReclaimPlan::Reclaim {
+                target_mib: 2560,
+                used_mib: 1750,
+                active_instances: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn memory_reclaim_plan_allows_exactly_one_reclaim_quantum() {
+        let plan = plan_memory_reclaim(2048, &[stats_row("r1", "running", Some(900))]);
+        assert_eq!(
+            plan,
+            ReclaimPlan::Reclaim {
+                target_mib: 1792,
+                used_mib: 900,
+                active_instances: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn memory_reclaim_plan_fails_closed_for_unknown_active_metrics_or_status() {
+        assert_eq!(
+            plan_memory_reclaim(3072, &[stats_row("r1", "running", None)]),
+            ReclaimPlan::UnknownMetrics {
+                instance: "r1".into()
+            }
+        );
+        assert_eq!(
+            plan_memory_reclaim(3072, &[stats_row("r1", "unknown", Some(100))]),
+            ReclaimPlan::UnknownMetrics {
+                instance: "r1".into()
+            }
+        );
+    }
+
+    #[test]
+    fn memory_reclaim_plan_is_noop_when_node_has_no_safe_reclaim_space() {
+        assert_eq!(
+            plan_memory_reclaim(1536, &[]),
+            ReclaimPlan::Noop {
+                reason: "node memory is already at the safe reclaim floor"
+            }
+        );
+        assert_eq!(
+            plan_memory_reclaim(3072, &[stats_row("r1", "running", Some(2400))]),
+            ReclaimPlan::Noop {
+                reason: "current usage leaves less than one reclaim quantum"
+            }
+        );
+    }
+
     #[test]
     fn lean_profile_does_not_enable_optional_preloads() {
         let defaults = ResourceProfile::Lean.container_defaults(4, 4096);
@@ -529,11 +795,64 @@ mod tests {
     }
 
     #[test]
+    fn standard_profile_keeps_a_2_gib_starting_limit_on_a_4_gib_node() {
+        let defaults = ResourceProfile::Standard.container_defaults(4, 4096);
+        assert_eq!(defaults.memory_mib, 2048);
+        assert!(!defaults.install_gapps);
+        assert!(!defaults.install_magisk);
+    }
+
+    #[test]
+    fn standard_profile_keeps_two_gib_on_a_3_gib_node_with_headroom() {
+        let defaults = ResourceProfile::Standard.container_defaults(4, 3072);
+        assert_eq!(defaults.memory_mib, 2048);
+    }
+
+    #[test]
+    fn lean_profile_keeps_the_measured_floor_on_a_3_gib_node() {
+        let defaults = ResourceProfile::Lean.container_defaults(4, 3072);
+        assert_eq!(defaults.memory_mib, 1536);
+        assert!(!defaults.install_gapps);
+        assert!(!defaults.install_magisk);
+    }
+
+    #[test]
+    fn omitted_cli_resources_follow_the_selected_profile() {
+        assert_eq!(
+            resolve_instance_resources(ResourceProfile::Lean, 4, 3072, None, None).unwrap(),
+            (1.0, 1536)
+        );
+        assert_eq!(
+            resolve_instance_resources(ResourceProfile::Full, 4, 6144, None, None).unwrap(),
+            (2.0, 4608)
+        );
+        assert_eq!(
+            resolve_instance_resources(ResourceProfile::Lean, 4, 3072, Some(2.0), Some(1792))
+                .unwrap(),
+            (2.0, 1792)
+        );
+    }
+
+    #[test]
     fn budget_rejects_two_instances_that_leave_no_node_headroom() {
         let result = validate_resource_budget(4096, 2048, 2);
         assert!(matches!(
             result,
             Err(ResourceBudgetError::InsufficientHeadroom { .. })
         ));
+    }
+
+    #[test]
+    fn full_profile_is_rejected_on_a_four_gib_node() {
+        let error = resolve_instance_resources(ResourceProfile::Full, 4, 4096, None, None)
+            .expect_err("full profile must not be admitted on a 4 GiB node");
+        assert!(error.contains("6144 MiB"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn full_profile_is_admitted_at_the_six_gib_boundary() {
+        let resources = resolve_instance_resources(ResourceProfile::Full, 4, 6144, None, None)
+            .expect("full profile should be admitted at 6 GiB");
+        assert_eq!(resources.1, 4608);
     }
 }

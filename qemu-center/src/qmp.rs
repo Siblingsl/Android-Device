@@ -141,7 +141,9 @@ impl Client {
                 )))
             }
             ConnectOutcome::Failed(e) => {
-                return Err(QmpError::Transport(format!("connect 127.0.0.1:{port}: {e}")))
+                return Err(QmpError::Transport(format!(
+                    "connect 127.0.0.1:{port}: {e}"
+                )))
             }
         };
         stream
@@ -215,12 +217,16 @@ impl Client {
 pub fn device_for_disk(port: u16, disk: &Path, timeout: Duration) -> Result<String, QmpError> {
     let mut client = Client::connect(port, timeout)?;
     let reply = client.command(vm::qmp_query_block_frame())?;
-    Ok(vm::qmp_device_for_disk(&reply, disk)
-        .unwrap_or_else(|| vm::DISK_DEVICE_ID.to_string()))
+    Ok(vm::qmp_device_for_disk(&reply, disk).unwrap_or_else(|| vm::DISK_DEVICE_ID.to_string()))
 }
 
 /// Take an internal snapshot on a running VM.
-pub fn internal_snapshot(port: u16, device: &str, tag: &str, timeout: Duration) -> Result<(), QmpError> {
+pub fn internal_snapshot(
+    port: u16,
+    device: &str,
+    tag: &str,
+    timeout: Duration,
+) -> Result<(), QmpError> {
     let mut client = Client::connect(port, timeout)?;
     client.command(&vm::qmp_internal_snapshot_frame(device, tag))?;
     Ok(())
@@ -237,6 +243,26 @@ pub fn delete_internal_snapshot(
     let mut client = Client::connect(port, timeout)?;
     client.command(&vm::qmp_delete_internal_snapshot_frame(device, tag))?;
     Ok(())
+}
+
+/// Reclaim guest pages through the virtio-balloon device and return QEMU's
+/// verified post-request `actual` byte count. A missing/non-positive value is
+/// treated as unverifiable rather than reported as success.
+pub fn reclaim_memory(port: u16, target_mib: u32, timeout: Duration) -> Result<u64, QmpError> {
+    let target_bytes = u64::from(target_mib)
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| QmpError::Transport("balloon target overflows byte count".into()))?;
+    let mut client = Client::connect(port, timeout)?;
+    client.command(&vm::qmp_balloon_frame(target_bytes))?;
+    let reply = client.command(vm::qmp_query_balloon_frame())?;
+    let actual = serde_json::from_str::<serde_json::Value>(reply.trim())
+        .ok()
+        .and_then(|value| value.pointer("/return/actual")?.as_u64())
+        .filter(|actual| *actual > 0)
+        .ok_or_else(|| {
+            QmpError::Transport("query-balloon reply has no positive actual byte count".into())
+        })?;
+    Ok(actual)
 }
 
 #[cfg(test)]
@@ -333,7 +359,10 @@ mod tests {
                 let _ = s.write_all(b"not qmp at all\n");
             }
         });
-        assert_eq!(probe(port, Duration::from_millis(500)), vm::QmpProbe::TimedOut);
+        assert_eq!(
+            probe(port, Duration::from_millis(500)),
+            vm::QmpProbe::TimedOut
+        );
         assert_eq!(
             vm::snapshot_plan(vm::vm_liveness_from_qmp_probe(vm::QmpProbe::TimedOut), true),
             vm::SnapshotPlan::Skip(
@@ -371,7 +400,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::thread::spawn(move || {
-            let Ok((stream, _)) = listener.accept() else { return };
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut writer = stream;
             let _ = writer.write_all(b"{\"QMP\": {\"version\": {}}}\n");
@@ -398,7 +429,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::thread::spawn(move || {
-            let Ok((stream, _)) = listener.accept() else { return };
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
             let mut reader = BufReader::new(stream.try_clone().expect("clone"));
             let mut writer = stream;
             let _ = writer.write_all(b"{\"QMP\": {\"version\": {}}}\n");
@@ -407,11 +440,78 @@ mod tests {
             let _ = writer.write_all(b"{\"return\": {}}\n");
             let _ = reader.read_line(&mut line);
             // A RESET event arrives before the command's reply.
-            let _ = writer
-                .write_all(b"{\"event\": \"RESET\", \"data\": {\"guest\": false}}\n");
+            let _ = writer.write_all(b"{\"event\": \"RESET\", \"data\": {\"guest\": false}}\n");
             let _ = writer.write_all(b"{\"return\": {}}\n");
         });
         let mut client = Client::connect(port, Duration::from_secs(5)).expect("connect");
         assert!(client.command(vm::qmp_query_block_frame()).is_ok());
+    }
+
+    #[test]
+    fn reclaim_memory_sets_target_and_returns_verified_actual_bytes() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut writer = stream;
+            writer
+                .write_all(b"{\"QMP\":{\"version\":{},\"capabilities\":[]}}\n")
+                .expect("greeting");
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("capabilities");
+            writer.write_all(b"{\"return\":{}}\n").expect("cap reply");
+            line.clear();
+            reader.read_line(&mut line).expect("balloon");
+            let balloon: serde_json::Value = serde_json::from_str(line.trim()).expect("json");
+            assert_eq!(balloon["execute"], "balloon");
+            assert_eq!(balloon["arguments"]["value"], 2 * 1024 * 1024 * 1024u64);
+            writer
+                .write_all(b"{\"return\":{}}\n")
+                .expect("balloon reply");
+            line.clear();
+            reader.read_line(&mut line).expect("query balloon");
+            assert_eq!(line.trim(), vm::qmp_query_balloon_frame());
+            writer
+                .write_all(b"{\"return\":{\"actual\":2147483648}}\n")
+                .expect("query reply");
+        });
+
+        assert_eq!(
+            reclaim_memory(port, 2048, Duration::from_secs(5)).expect("reclaim"),
+            2 * 1024 * 1024 * 1024u64
+        );
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn reclaim_memory_rejects_an_unverifiable_balloon_reply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut writer = stream;
+            writer
+                .write_all(b"{\"QMP\":{\"version\":{},\"capabilities\":[]}}\n")
+                .expect("greeting");
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("capabilities");
+            writer.write_all(b"{\"return\":{}}\n").expect("cap reply");
+            line.clear();
+            reader.read_line(&mut line).expect("balloon");
+            writer
+                .write_all(b"{\"return\":{}}\n")
+                .expect("balloon reply");
+            line.clear();
+            reader.read_line(&mut line).expect("query balloon");
+            writer
+                .write_all(b"{\"return\":{\"actual\":\"unknown\"}}\n")
+                .expect("query reply");
+        });
+
+        let result = reclaim_memory(port, 2048, Duration::from_secs(5));
+        assert!(matches!(result, Err(QmpError::Transport(message)) if message.contains("actual")));
+        server.join().expect("server");
     }
 }

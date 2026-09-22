@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -54,7 +57,12 @@ fn tracked_transfer(
     TRANSFER_CANCELLATIONS
         .lock()
         .insert(operation_id.to_string(), Arc::clone(&cancel));
-    emit(transfer_event(operation_id, direction, "queued", "等待开始"));
+    emit(transfer_event(
+        operation_id,
+        direction,
+        "queued",
+        "等待开始",
+    ));
     emit(transfer_event(operation_id, direction, "running", "传输中"));
     let emit: Arc<dyn Fn(FileTransferProgress) + Send + Sync> = Arc::new(emit);
     let on_output = {
@@ -74,7 +82,11 @@ fn tracked_transfer(
             emit(transfer_event(
                 operation_id,
                 direction,
-                if result.success { "completed" } else { "failed" },
+                if result.success {
+                    "completed"
+                } else {
+                    "failed"
+                },
                 if result.success {
                     "传输完成"
                 } else {
@@ -84,11 +96,21 @@ fn tracked_transfer(
             result
         }
         CancellableCommandResult::Cancelled(result) => {
-            emit(transfer_event(operation_id, direction, "cancelled", "传输已取消"));
+            emit(transfer_event(
+                operation_id,
+                direction,
+                "cancelled",
+                "传输已取消",
+            ));
             result
         }
         CancellableCommandResult::TimedOut(result) => {
-            emit(transfer_event(operation_id, direction, "failed", "传输超时"));
+            emit(transfer_event(
+                operation_id,
+                direction,
+                "failed",
+                "传输超时",
+            ));
             result
         }
     }

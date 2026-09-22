@@ -8,6 +8,12 @@ interface DeviceBroadcastInputProps {
   busy?: string | null;
   onText: (text: string) => Promise<boolean>;
   onKey: (code: number) => Promise<boolean>;
+  /**
+   * "details" (default) renders the self-contained disclosure used on its own.
+   * "panel" renders only the field body so a page can host it inside a shared
+   * toolbar panel row and own the expand/collapse toggle itself.
+   */
+  variant?: "details" | "panel";
 }
 
 const broadcastKeys = [
@@ -21,6 +27,7 @@ export function DeviceBroadcastInput({
   busy = null,
   onText,
   onKey,
+  variant = "details",
 }: DeviceBroadcastInputProps) {
   const { t } = useI18n();
   const [text, setText] = useState("");
@@ -47,6 +54,50 @@ export function DeviceBroadcastInput({
       setLocalBusy(null);
     }
   };
+
+  if (variant === "panel") {
+    return (
+      <div className="batch-broadcast-panel is-hosted">
+        <div className="batch-broadcast-text">
+          <input
+            aria-label={t("devices.broadcast.textLabel")}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void sendText();
+            }}
+            placeholder={t("devices.broadcast.placeholder")}
+            disabled={blocked}
+          />
+          <Button
+            size="sm"
+            icon={<Send size={12} />}
+            loading={localBusy === "text"}
+            disabled={blocked || !text.trim()}
+            onClick={() => void sendText()}
+          >
+            {t("devices.broadcast.sendText")}
+          </Button>
+        </div>
+        <div className="batch-broadcast-keys">
+          <span className="muted">{t("devices.broadcast.keyLabel")}</span>
+          {broadcastKeys.map((key) => (
+            <Button
+              key={key.key}
+              size="sm"
+              variant="ghost"
+              icon={key.key === "home" ? <Home size={12} /> : undefined}
+              loading={localBusy === key.key}
+              disabled={blocked}
+              onClick={() => void sendKey(key)}
+            >
+              {t(key.label)}
+            </Button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <details className="batch-broadcast-details">

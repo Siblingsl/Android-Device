@@ -81,14 +81,21 @@ pub fn get_tags() -> BTreeMap<String, Vec<String>> {
 }
 
 /// Persist one device's tags through the regular settings save path.
-pub fn set_tags(device_id: &str, tags: Vec<String>) -> Result<BTreeMap<String, Vec<String>>, String> {
+pub fn set_tags(
+    device_id: &str,
+    tags: Vec<String>,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
     let id = device_id.trim();
     if id.is_empty() {
         return Err("设备标识不能为空".into());
     }
     let mut current = settings::get();
     let merged = merge_tag_record(current.device_tags.as_ref(), id, &tags);
-    current.device_tags = if merged.is_empty() { None } else { Some(merged.clone()) };
+    current.device_tags = if merged.is_empty() {
+        None
+    } else {
+        Some(merged.clone())
+    };
     settings::update(current)?;
     Ok(merged)
 }
@@ -115,12 +122,7 @@ mod tests {
 
     #[test]
     fn normalize_tags_dedupes_and_keeps_order() {
-        let out = normalize_tags(&[
-            "beta".into(),
-            " alpha ".into(),
-            "beta".into(),
-            "  ".into(),
-        ]);
+        let out = normalize_tags(&["beta".into(), " alpha ".into(), "beta".into(), "  ".into()]);
         assert_eq!(out, vec!["beta".to_string(), "alpha".to_string()]);
     }
 

@@ -97,4 +97,20 @@ describe("AdbPage refresh ordering", () => {
     expect(screen.queryByText("旧 ADB")).toBeNull();
     expect(screen.getByText("新 ADB")).toBeTruthy();
   });
+
+  it("does not reserve page space for global tool statuses", async () => {
+    vi.mocked(DeviceService.getAdbInfo).mockResolvedValue(adbInfo("ADB"));
+
+    render(
+      <MemoryRouter>
+        <AdbPage />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(document.querySelectorAll(".tool-status")).toHaveLength(0);
+  });
 });

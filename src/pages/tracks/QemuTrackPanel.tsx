@@ -21,7 +21,8 @@ import { useAppStore } from "../../stores/appStore";
 import { askConfirm } from "../../lib/dialogs";
 import { copyText } from "../../lib/clipboard";
 import { createRequestSequence } from "../../lib/requestSequence";
-import { runtimeProfileDefaults } from "../../lib/runtimeProfile";
+import { runningInstanceNames } from "../../lib/runtimeIdleRelease";
+import { runtimeMemoryPressure, runtimeProfileAvailable, runtimeProfileDefaults } from "../../lib/runtimeProfile";
 import type { TrackTaskInfo } from "../../lib/runtimeTrack";
 import { tStatic, useI18n } from "../../i18n";
 import type {
@@ -31,7 +32,10 @@ import type {
   QemuVerifyReport,
   QemuVmEntry,
   QemuRedroidCreateRequest,
+  QemuRedroidRuntimeStats,
+  AuthorizationRuntimeStatus,
   ResourceProfile,
+  RuntimeResourceSnapshot,
   MagiskAssets,
   SpoofProfileSummary,
 } from "../../types";
@@ -87,7 +91,7 @@ type InstanceForm = {
 const initialNodeForm: NodeForm = {
   name: "node1",
   cpus: "4",
-  memMib: "4096",
+  memMib: "3072",
   diskGib: "40",
   adbPortCount: "32",
   autoSetup: true,
@@ -143,6 +147,25 @@ function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatMemory(bytes: number | null): string {
+  if (bytes == null) return "n/a";
+  return `${(bytes / 1_048_576).toFixed(0)} MiB`;
+}
+
+function memoryPressure(bytes: number | null): "normal" | "caution" | "critical" | "unknown" {
+  if (bytes == null) return "unknown";
+  if (bytes < 1 * 1024 * 1024 * 1024) return "critical";
+  if (bytes < 2 * 1024 * 1024 * 1024) return "caution";
+  return "normal";
+}
+
+function memoryPressureBadgeClass(pressure: ReturnType<typeof runtimeMemoryPressure>): string {
+  if (pressure === "normal") return "success";
+  if (pressure === "caution") return "warn";
+  if (pressure === "critical") return "danger";
+  return "";
+}
+
 /** `ok` / `fail` / other tally of a doctor report (merge spec §6.8 badge). */
 function checkTally(checks: QemuDoctorCheck[]) {
   let ok = 0;
@@ -178,10 +201,9 @@ export type QemuTrackPanelProps = {
   /**
    * Merged-page header dedup (P5): `false` drops this panel's own page header —
    * only the title/subtitle block — because the shell already renders the page
-   * title once. The header's actions (刷新 / 重新体检) are *not* dropped: they
-   * stay as the panel's top action row, so the explicit re-check stays reachable
-   * (and is still the only thing that runs a fresh doctor here). Defaults to
-   * `true`; the standalone `/qemu` route is unchanged.
+   * title once. The merged page uses the source badge for refresh and the
+   * environment card for the explicit doctor re-check. Defaults to `true`; the
+   * standalone `/qemu` route keeps its page-header refresh action.
    */
   showHeader?: boolean;
   /**
@@ -238,6 +260,7 @@ export default function QemuTrackPanel({
   const [statusText, setStatusText] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [logOpen, setLogOpen] = useState(true);
+  const [environmentExpanded, setEnvironmentExpanded] = useState(false);
   const [showNodeForm, setShowNodeForm] = useState(false);
   const [showInstanceForm, setShowInstanceForm] = useState(false);
   const [nodeForm, setNodeForm] = useState<NodeForm>(initialNodeForm);
@@ -251,6 +274,10 @@ export default function QemuTrackPanel({
   const [waitingVm, setWaitingVm] = useState("");
   const [waitRemaining, setWaitRemaining] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [resourceSnapshot, setResourceSnapshot] = useState<RuntimeResourceSnapshot | null>(null);
+  const [resourceInstanceStats, setResourceInstanceStats] = useState<QemuRedroidRuntimeStats[]>([]);
+  const [resourceExpanded, setResourceExpanded] = useState(false);
+  const [authorizationStatus, setAuthorizationStatus] = useState<AuthorizationRuntimeStatus | null>(null);
   const waitCancelRef = useRef(false);
   /** True while this mount is alive; gates every post-await local setState. */
   const mountedRef = useRef(true);
@@ -271,6 +298,8 @@ export default function QemuTrackPanel({
   const setupLocked = Boolean(qemuSetup?.running);
   const setupBusyKey = qemuSetup?.running ? `setup-${qemuSetup.step}` : null;
   const busyKey = busy ?? setupBusyKey;
+  const selectedNode = vms.find((vm) => vm.name === selectedVm);
+  const fullProfileAvailable = runtimeProfileAvailable("full", selectedNode?.memMib ?? 0);
 
   const appendLog = useCallback((lines: string[]) => {
     if (!lines.length) return;
@@ -380,6 +409,74 @@ export default function QemuTrackPanel({
     },
     [appendLog],
   );
+
+  const loadResourceSnapshot = useCallback(async (vm: string) => {
+    const read = DeviceService.readRuntimeResourceSnapshot;
+    if (!vm || typeof read !== "function") return;
+    try {
+      const statsRead = QemuService.redroidStats;
+      const [snapshot, stats] = await Promise.all([
+        read(vm),
+        typeof statsRead === "function" ? statsRead(vm).catch(() => []) : Promise.resolve([]),
+      ]);
+      if (!mountedRef.current) return;
+      setResourceSnapshot(snapshot);
+      setResourceInstanceStats(stats);
+    } catch {
+      // Keep the last successful sample; an unavailable sample is not zero.
+    }
+  }, []);
+
+  const loadAuthorizationStatus = useCallback(async () => {
+    const read = DeviceService.authorizationStatus;
+    if (typeof read !== "function") return;
+    try {
+      const status = await read();
+      if (mountedRef.current) setAuthorizationStatus(status);
+    } catch {
+      // Keep the last status; protected commands still fail closed in Rust.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active || !selectedVm) return;
+    void loadResourceSnapshot(selectedVm);
+    const timer = window.setInterval(() => void loadResourceSnapshot(selectedVm), 15_000);
+    return () => window.clearInterval(timer);
+  }, [active, loadResourceSnapshot, selectedVm]);
+
+  useEffect(() => {
+    if (!selectedVm) {
+      setResourceSnapshot(null);
+      setResourceInstanceStats([]);
+    }
+  }, [selectedVm]);
+
+  useEffect(() => {
+    setResourceExpanded(false);
+  }, [selectedVm]);
+
+  useEffect(() => {
+    if (!active) return;
+    void loadAuthorizationStatus();
+    const timer = window.setInterval(() => void loadAuthorizationStatus(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [active, loadAuthorizationStatus]);
+
+  const registerAuthorization = useCallback(async () => {
+    const register = DeviceService.authorizationRegister;
+    if (typeof register !== "function" || busyKey) return;
+    setBusy("authorization-register");
+    try {
+      const result = await register();
+      setStatusText(result.status === "approved" ? tStatic("qemu.authorization.status.ready") : tStatic("qemu.authorization.status.authentication_required"));
+      await loadAuthorizationStatus();
+    } catch (error) {
+      setStatusText(errText(error));
+    } finally {
+      if (mountedRef.current) setBusy(null);
+    }
+  }, [busyKey, loadAuthorizationStatus]);
 
   useEffect(() => {
     void loadDoctor();
@@ -771,6 +868,56 @@ export default function QemuTrackPanel({
     }
   };
 
+  const setNodeMemory = async (vm: QemuVmEntry) => {
+    const raw = window.prompt(t("qemu.nodes.memoryPrompt", { name: vm.name }), String(vm.memMib));
+    if (raw == null) return;
+    const memoryMib = Number(raw.trim());
+    if (!Number.isInteger(memoryMib) || memoryMib < 1536 || memoryMib > 16384) {
+      setStatusText(t("qemu.nodes.memoryInvalid"));
+      return;
+    }
+    setBusy(`memory-${vm.name}`);
+    logCommand(["vm", "set-memory", vm.name, String(memoryMib)]);
+    try {
+      const result = await QemuService.vmSetMemory(vm.name, memoryMib);
+      logOutput(result.stdout, result.stderr, result.success);
+      setStatusText(
+        result.success
+          ? t("qemu.nodes.memoryDone", { name: vm.name, memory: memoryMib })
+          : result.stderr.trim() || result.stdout.trim() || t("qemu.nodes.memoryFailed"),
+      );
+      if (result.success) await loadVms(true, true);
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reclaimNodeMemory = async (vm: QemuVmEntry) => {
+    setBusy(`reclaim-${vm.name}`);
+    logCommand(["vm", "memory-reclaim", vm.name]);
+    try {
+      const result = await QemuService.vmMemoryReclaim(vm.name);
+      logOutput(result.stdout, result.stderr, result.success);
+      setStatusText(
+        result.success
+          ? t("qemu.nodes.memoryReclaimDone", { details: result.stdout.trim() })
+          : result.stderr.trim() || result.stdout.trim() || t("qemu.nodes.memoryReclaimFailed"),
+      );
+      if (result.success) {
+        await loadVms(true, true);
+        await loadResourceSnapshot(vm.name);
+      }
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   /** Sanitize a snapshot tag exactly like the CLI's validate_snapshot_tag. */
   const cleanTag = (raw: string): string =>
     raw.trim().replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 32);
@@ -838,6 +985,10 @@ export default function QemuTrackPanel({
   const createInstance = async () => {
     const vm = selectedVm;
     if (!vm || busyKey || presetBusyRef.current) return;
+    if (instanceForm.profile === "full" && !fullProfileAvailable) {
+      setStatusText(t("qemu.instances.form.profileFullRequiresMemory"));
+      return;
+    }
     const name = instanceForm.name.trim();
     if (!NAME_PATTERN.test(name)) {
       setStatusText(t("qemu.instances.form.nameInvalid"));
@@ -1052,6 +1203,75 @@ export default function QemuTrackPanel({
     }
   };
 
+  const releaseAllIdleInstances = async () => {
+    if (!selectedVm || busyKey) return;
+    const candidates = runningInstanceNames(instances);
+    if (!candidates.length) {
+      setStatusText(t("qemu.instances.releaseBatchNone"));
+      return;
+    }
+    if (!(await askConfirm(t("qemu.instances.releaseBatchConfirm", { count: candidates.length })))) return;
+    const release = QemuService.runtimeReleaseIdle;
+    if (typeof release !== "function") {
+      setStatusText(t("qemu.instances.releaseUnavailable"));
+      return;
+    }
+    setBusy("instance-release-all");
+    let released = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+    try {
+      for (const instance of candidates) {
+        try {
+          const result = await release(selectedVm, instance);
+          if (result.released) released += 1;
+          else skipped += 1;
+        } catch (error) {
+          errors.push(`${instance}: ${errText(error)}`);
+        }
+      }
+      if (errors.length) appendLog(errors);
+      if (released > 0) {
+        await loadInstances(selectedVm, true);
+        await loadResourceSnapshot(selectedVm);
+      }
+      setStatusText(t("qemu.instances.releaseBatchDone", { released, skipped, errors: errors.length }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const hibernateApp = async (instance: QemuRedroidInstance) => {
+    if (!selectedVm || busyKey) return;
+    const packageName = window
+      .prompt(t("qemu.instances.hibernateAppPackagePrompt"), "com.xingin.xhs")
+      ?.trim();
+    if (!packageName) return;
+    if (!(await askConfirm(t("qemu.instances.hibernateAppConfirm", { package: packageName })))) {
+      return;
+    }
+    setBusy(`instance-hibernate-app-${instance.instance}`);
+    try {
+      const hibernate = QemuService.runtimeHibernateApp;
+      if (typeof hibernate !== "function") {
+        setStatusText(t("qemu.instances.hibernateAppUnavailable"));
+        return;
+      }
+      const result = await hibernate(selectedVm, instance.instance, instance.serial, packageName);
+      setStatusText(
+        result.released
+          ? t("qemu.instances.hibernateAppDone", { package: packageName })
+          : t("qemu.instances.hibernateAppNotReleased", { reason: result.reason }),
+      );
+      if (result.released) await loadResourceSnapshot(selectedVm);
+    } catch (error) {
+      appendLog([errText(error)]);
+      setStatusText(errText(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const optimizeArt = async (instance: QemuRedroidInstance) => {
     const packageName = window.prompt(t("qemu.instances.artPackagePrompt"), "com.xingin.xhs")?.trim();
     if (!packageName) return;
@@ -1092,29 +1312,25 @@ export default function QemuTrackPanel({
   const waitLabel = waitingVm
     ? `${t("qemu.nodes.wait.title")} · ${t("qemu.nodes.wait.remaining", { secs: waitRemaining })}`
     : "";
+  const resourcePressure = resourceSnapshot ? memoryPressure(resourceSnapshot.hostAvailableBytes) : "unknown";
+  const resourceBadgeClass =
+    resourcePressure === "normal"
+      ? "success"
+      : resourcePressure === "caution"
+        ? "warn"
+        : resourcePressure === "critical"
+          ? "danger"
+          : "";
 
-  /**
-   * Header actions, kept out of the title block so `showHeader={false}` (merged
-   * page) can drop only the title/subtitle and still render every capability:
-   * 刷新 (`vm list`) and 重新体检 (`doctor` — the explicit re-check, and the only
-   * thing in this panel that runs a fresh host check outside its mount load).
-   * Pure move — same buttons, same handlers, same order; the wrapping class
-   * gained `runtime-panel-actions` for the collapsed layout.
-   */
-  const headerActions = (
+  /** Standalone `/qemu` keeps a page-level refresh; the merged page uses the
+   * QEMU source badge so the action does not float between the tabs and data. */
+  const headerActions = showHeader ? (
     <div className="row runtime-panel-actions">
       <Button icon={<RefreshCw size={15} />} onClick={() => void loadVms(true)}>
         {t("common.refresh")}
       </Button>
-      <Button
-        icon={<Server size={15} />}
-        loading={doctorLoading}
-        onClick={() => void loadDoctor()}
-      >
-        {t("qemu.env.refresh")}
-      </Button>
     </div>
-  );
+  ) : null;
 
   return (
     <div
@@ -1130,13 +1346,22 @@ export default function QemuTrackPanel({
             <h1 className="page-title">
               <Server size={16} strokeWidth={2} /> {t("qemu.title")}
             </h1>
-            <div className="page-subtitle">{t("qemu.subtitle")}</div>
+            <div className="page-subtitle">
+              {t("qemu.subtitle")}
+              <span className="qemu-experimental-inline" role="note" title={t("qemu.experimental")}>
+                {t("qemu.experimentalLabel")}
+              </span>
+            </div>
           </div>
           {headerActions}
         </div>
-      ) : (
-        headerActions
-      )}
+      ) : null}
+
+      {!showHeader ? (
+        <div className="qemu-experimental-compact" role="note" title={t("qemu.experimental")}>
+          {t("qemu.experimentalLabel")}
+        </div>
+      ) : null}
 
       {/* Pending-setup banner: the Rust CLI keeps running across page
           switches; this restores the loading truth after coming back. */}
@@ -1158,10 +1383,6 @@ export default function QemuTrackPanel({
         </div>
       ) : null}
 
-      <div className="notice qemu-experimental" role="status">
-        {t("qemu.experimental")}
-      </div>
-
       {doctorError ? (
         <div className="notice qemu-cli-missing" role="alert">
           {t("qemu.cliMissing")}
@@ -1173,9 +1394,36 @@ export default function QemuTrackPanel({
 
       {/* ---------------- Environment readiness ---------------- */}
       <Card
+        className={`qemu-env-card ${environmentExpanded ? "is-expanded" : "is-collapsed"}`}
         title={t("qemu.env.title")}
         action={
           <div className="row qemu-card-actions">
+            {active && authorizationStatus ? (
+              <span className="qemu-authorization-summary" title={authorizationStatus.detail || undefined}>
+                <span className="muted">{t("qemu.authorization.shortTitle")}</span>
+                <span className={`badge ${authorizationStatus.status === "ready" ? "success" : "warn"}`}>
+                  {t(`qemu.authorization.status.${authorizationStatus.status}`)}
+                </span>
+              </span>
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={environmentExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              aria-expanded={environmentExpanded}
+              title={environmentExpanded ? t("qemu.env.collapse") : t("qemu.env.expand")}
+              onClick={() => setEnvironmentExpanded((expanded) => !expanded)}
+            >
+              {environmentExpanded ? t("qemu.env.collapse") : t("qemu.env.expand")}
+            </Button>
+            <Button
+              size="sm"
+              icon={<Server size={13} />}
+              loading={doctorLoading}
+              onClick={() => void loadDoctor()}
+            >
+              {t("qemu.env.refresh")}
+            </Button>
             <Button
               size="sm"
               disabled={setupLocked}
@@ -1215,49 +1463,88 @@ export default function QemuTrackPanel({
           </div>
         }
       >
-        {doctorLoading && !doctor ? (
-          <Skeleton height={90} />
-        ) : doctor ? (
-          <div className="stack qemu-check-list">
-            {doctor.checks.map((check) => (
-              <div key={check.id} className="qemu-check-row">
-                <span className={doctorBadgeClass(check.status)}>
-                  {t(`qemu.env.status.${check.status === "ok" ? "ok" : check.status === "fail" ? "fail" : "unknown"}`)}
-                </span>
-                <span className="qemu-check-title">
-                  {check.title} <span className="mono muted">{check.id}</span>
-                </span>
-                {check.detail ? (
-                  <span className="muted qemu-check-detail" title={check.detail}>
-                    {check.detail}
+        {!environmentExpanded ? null : (
+          <>
+            {active && authorizationStatus ? (
+              <div className="qemu-env-authorization" role="status">
+                <div className="row qemu-env-authorization-summary">
+                  <strong>{t("qemu.authorization.title")}</strong>
+                  <span className={`badge ${authorizationStatus.status === "ready" ? "success" : "warn"}`}>
+                    {t(`qemu.authorization.status.${authorizationStatus.status}`)}
                   </span>
-                ) : null}
-                {check.status !== "ok" && check.fix ? (
-                  <div className="qemu-check-fix">
-                    {t("qemu.env.fixLabel")}: <span className="mono">{check.fix}</span>
-                  </div>
-                ) : null}
+                  {authorizationStatus.deviceId ? <span className="mono muted">{authorizationStatus.deviceId}</span> : null}
+                  {authorizationStatus.detail ? <span className="muted">{authorizationStatus.detail}</span> : null}
+                  {authorizationStatus.status === "not_registered" ? (
+                    <Button size="sm" variant="ghost" loading={busyKey === "authorization-register"} disabled={Boolean(busyKey)} onClick={() => void registerAuthorization()}>
+                      {t("qemu.authorization.register")}
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="muted qemu-env-authorization-hint" role="note">{t("qemu.authorization.hint")}</div>
               </div>
-            ))}
-            <div className="muted qemu-state-dir-row">
-              <span className="qemu-state-dir-label">{t("qemu.env.stateDir")}</span>
-              <span className="mono qemu-state-dir-path" title={doctor.stateDir || undefined}>
-                {doctor.stateDir || "-"}
-              </span>
-              <span className="badge success">{t("qemu.env.portableBadge")}</span>
-            </div>
-            <div className="muted qemu-portable-note">{t("qemu.env.portableNote")}</div>
-          </div>
-        ) : (
-          <div className="empty-state">{t("qemu.env.loading")}</div>
+            ) : null}
+            {doctorLoading && !doctor ? (
+              <Skeleton height={90} />
+            ) : doctor ? (
+              <div className="stack qemu-check-list">
+                {doctor.checks.map((check) => (
+                  <div key={check.id} className="qemu-check-row">
+                    <span className={doctorBadgeClass(check.status)}>
+                      {t(`qemu.env.status.${check.status === "ok" ? "ok" : check.status === "fail" ? "fail" : "unknown"}`)}
+                    </span>
+                    <span className="qemu-check-title">
+                      {check.title} <span className="mono muted">{check.id}</span>
+                    </span>
+                    {check.detail ? (
+                      <span className="muted qemu-check-detail" title={check.detail}>
+                        {check.detail}
+                      </span>
+                    ) : null}
+                    {check.status !== "ok" && check.fix ? (
+                      <div className="qemu-check-fix">
+                        {t("qemu.env.fixLabel")}: <span className="mono">{check.fix}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+                <div className="muted qemu-state-dir-row">
+                  <span className="qemu-state-dir-label">{t("qemu.env.stateDir")}</span>
+                  <span className="mono qemu-state-dir-path" title={doctor.stateDir || undefined}>
+                    {doctor.stateDir || "-"}
+                  </span>
+                  <span className="badge success">{t("qemu.env.portableBadge")}</span>
+                </div>
+                <div className="muted qemu-portable-note">{t("qemu.env.portableNote")}</div>
+              </div>
+            ) : (
+              <div className="empty-state">{t("qemu.env.loading")}</div>
+            )}
+          </>
         )}
       </Card>
 
       {/* ---------------- Nodes ---------------- */}
       <Card
+        className="qemu-table-card"
         title={t("qemu.nodes.title")}
         action={
           <div className="row qemu-card-actions">
+            {resourceSnapshot ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="qemu-resource-summary"
+                icon={resourceExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                aria-expanded={resourceExpanded}
+                title={resourceExpanded ? t("qemu.resources.collapse") : t("qemu.resources.expand")}
+                onClick={() => setResourceExpanded((expanded) => !expanded)}
+              >
+                <span className={`badge ${resourceBadgeClass}`}>
+                  {t(`qemu.resources.pressure.${resourcePressure}`)}
+                </span>
+                <span>{t("qemu.resources.hostAvailable", { value: formatMemory(resourceSnapshot.hostAvailableBytes) })}</span>
+              </Button>
+            ) : null}
             {waitingVm ? (
               <span className="qemu-wait-strip">
                 <LoaderCircle size={12} className="create-spinner" />
@@ -1295,6 +1582,52 @@ export default function QemuTrackPanel({
           </div>
         }
       >
+        {resourceSnapshot && resourceExpanded ? (
+          <div className="qemu-resource-details" role="status">
+            <div className="row qemu-resource-detail-row">
+              <strong>{t("qemu.resources.title")}</strong>
+              <span>{t("qemu.resources.qemuPrivate", { value: formatMemory(resourceSnapshot.qemuPrivateBytes) })}</span>
+              <span>{t("qemu.resources.qemuWorkingSet", { value: formatMemory(resourceSnapshot.qemuWorkingSetBytes) })}</span>
+              <span>{t("qemu.resources.wslPrivate", { value: formatMemory(resourceSnapshot.wslPrivateBytes) })}</span>
+              <span className="muted">
+                {t("qemu.resources.sampledAt", {
+                  at: new Date(resourceSnapshot.capturedAt).toLocaleTimeString(),
+                })}
+              </span>
+            </div>
+            <div className="muted qemu-resource-detail-note" role="note">
+              {t("qemu.resources.memoryModelHint")}
+            </div>
+            {resourceInstanceStats.length ? (
+              <div className="row muted qemu-resource-instance-row">
+                <span>{t("qemu.resources.instanceCount", { count: resourceInstanceStats.length })}</span>
+                {resourceInstanceStats.map((stats) => (
+                  <span key={stats.instance} className="mono">
+                    {(() => {
+                      const pressure = runtimeMemoryPressure(stats.memoryCurrentBytes, stats.memoryLimitBytes);
+                      return (
+                        <>
+                          {stats.instance}: {formatMemory(stats.memoryCurrentBytes)} / {formatMemory(stats.memoryLimitBytes)} · {t("qemu.resources.oom", { count: stats.oomKills ?? "n/a" })}{" "}
+                          <span className={`badge ${memoryPressureBadgeClass(pressure)}`}>
+                            {t(`qemu.resources.instancePressure.${pressure}`)}
+                          </span>
+                        </>
+                      );
+                    })()}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {resourceInstanceStats.some((stats) => {
+              const pressure = runtimeMemoryPressure(stats.memoryCurrentBytes, stats.memoryLimitBytes);
+              return pressure === "caution" || pressure === "critical";
+            }) ? (
+              <div className="muted qemu-resource-saturation-hint" role="status">
+                {t("qemu.resources.instanceSaturationHint")}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {showNodeForm ? (
           <div className="qemu-form-grid">
             <div className="field">
@@ -1318,6 +1651,7 @@ export default function QemuTrackPanel({
                 value={nodeForm.memMib}
                 onChange={(e) => setNodeForm({ ...nodeForm, memMib: e.target.value })}
               />
+              <small className="muted">{t("qemu.nodes.form.memHint")}</small>
             </div>
             <div className="field">
               <label>{t("qemu.nodes.form.disk")}</label>
@@ -1412,6 +1746,31 @@ export default function QemuTrackPanel({
                         </Button>
                         <Button
                           size="sm"
+                          loading={busy === `memory-${vm.name}`}
+                          disabled={Boolean(busyKey)}
+                          title={t("qemu.nodes.memoryHint")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void setNodeMemory(vm);
+                          }}
+                        >
+                          {t("qemu.nodes.memory")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={busy === `reclaim-${vm.name}`}
+                          disabled={Boolean(busyKey)}
+                          title={t("qemu.nodes.memoryReclaimHint")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void reclaimNodeMemory(vm);
+                          }}
+                        >
+                          {t("qemu.nodes.memoryReclaim")}
+                        </Button>
+                        <Button
+                          size="sm"
                           variant="danger"
                           icon={<Trash2 size={12} />}
                           loading={busy === `delete-${vm.name}`}
@@ -1472,6 +1831,7 @@ export default function QemuTrackPanel({
 
       {/* ---------------- Instances ---------------- */}
       <Card
+        className="qemu-table-card"
         title={t("qemu.instances.title")}
         action={
           <div className="row qemu-card-actions">
@@ -1488,6 +1848,17 @@ export default function QemuTrackPanel({
                 </Button>
               </span>
             ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<Square size={12} />}
+              disabled={!selectedVm || !runningInstanceNames(instances).length || Boolean(busyKey)}
+              loading={busy === "instance-release-all"}
+              title={t("qemu.instances.releaseBatchHint")}
+              onClick={() => void releaseAllIdleInstances()}
+            >
+              {t("qemu.instances.releaseBatch")}
+            </Button>
             <Button
               size="sm"
               icon={<Plus size={13} />}
@@ -1530,8 +1901,9 @@ export default function QemuTrackPanel({
                   >
                     <option value="lean">{t("qemu.instances.form.profileLean")}</option>
                     <option value="standard">{t("qemu.instances.form.profileStandard")}</option>
-                    <option value="full">{t("qemu.instances.form.profileFull")}</option>
+                    <option value="full" disabled={!fullProfileAvailable}>{t("qemu.instances.form.profileFull")}</option>
                   </select>
+                  {!fullProfileAvailable && <p className="muted">{t("qemu.instances.form.profileFullRequiresMemory")}</p>}
                 </div>
                 <div className="field">
                   <label>{t("qemu.instances.form.cpus")}</label>
@@ -1629,43 +2001,61 @@ export default function QemuTrackPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {instances.map((instance) => (
+                    {instances.map((instance) => {
+                      const stats = resourceInstanceStats.find((row) => row.instance === instance.instance);
+                      return (
                       <tr key={instance.instance}>
                         <td className="mono">{instance.instance}</td>
                         <td className="mono muted">{instance.container}</td>
                         <td className="mono">{instance.port}</td>
                         <td className="mono">{instance.serial}</td>
-                        <td>{instance.status}</td>
                         <td>
-                          <Button size="sm" disabled={Boolean(busyKey)} onClick={() => {
-                            markRuntimeActivity(instance.instance, "user_window");
-                            setUpgradeTarget(instance);
-                            setInstanceForm({ ...initialInstanceForm, name: instance.instance, profile: instance.profile || "standard", androidVersion: instance.androidVersion || "", image: instance.image || "" });
-                            setShowInstanceForm(true);
-                          }}>{t("qemu.presets.upgrade")}</Button>
-                          {!/up|running/i.test(instance.status) ? (
-                            <Button size="sm" icon={<Play size={12} />} disabled={Boolean(busyKey)} loading={busy === `instance-start-${instance.instance}`} onClick={() => void startInstance(instance)}>
-                              {t("qemu.instances.start")}
-                            </Button>
+                          {instance.status}
+                          {stats ? (
+                            <div className="muted mono" style={{ fontSize: 10, marginTop: 3 }}>
+                              {formatMemory(stats.memoryCurrentBytes)} / {formatMemory(stats.memoryLimitBytes)} · {t("qemu.resources.oom", { count: stats.oomKills ?? "n/a" })}{" "}
+                              <span className={`badge ${memoryPressureBadgeClass(runtimeMemoryPressure(stats.memoryCurrentBytes, stats.memoryLimitBytes))}`}>
+                                {t(`qemu.resources.instancePressure.${runtimeMemoryPressure(stats.memoryCurrentBytes, stats.memoryLimitBytes)}`)}
+                              </span>
+                            </div>
                           ) : null}
-                          <Button size="sm" disabled={!instance.rollbackAvailable || Boolean(busyKey)} loading={busy === `instance-restore-${instance.instance}`} onClick={() => void restoreInstance(instance)}>{t("qemu.presets.restore")}</Button>
-                          <Button size="sm" variant="ghost" icon={<Square size={12} />} disabled={Boolean(busyKey)} loading={busy === `instance-release-${instance.instance}`} onClick={() => void releaseIdleInstance(instance)}>
-                            {t("qemu.instances.releaseIdle")}
-                          </Button>
-                          <Button size="sm" variant="ghost" disabled={Boolean(busyKey)} loading={busy === `instance-art-${instance.instance}`} onClick={() => void optimizeArt(instance)}>
-                            {t("qemu.instances.art")}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            icon={<Copy size={12} />}
-                            onClick={() => void copySerial(instance.serial)}
-                          >
-                            {t("qemu.instances.copySerial")}
-                          </Button>
+                        </td>
+                        <td>
+                          <div className="row qemu-row-actions">
+                            <Button size="sm" disabled={Boolean(busyKey)} onClick={() => {
+                              markRuntimeActivity(instance.instance, "user_window");
+                              setUpgradeTarget(instance);
+                              setInstanceForm({ ...initialInstanceForm, name: instance.instance, profile: instance.profile || "standard", androidVersion: instance.androidVersion || "", image: instance.image || "" });
+                              setShowInstanceForm(true);
+                            }}>{t("qemu.presets.upgrade")}</Button>
+                            {!/up|running/i.test(instance.status) ? (
+                              <Button size="sm" icon={<Play size={12} />} disabled={Boolean(busyKey)} loading={busy === `instance-start-${instance.instance}`} onClick={() => void startInstance(instance)}>
+                                {t("qemu.instances.start")}
+                              </Button>
+                            ) : null}
+                            <Button size="sm" disabled={!instance.rollbackAvailable || Boolean(busyKey)} loading={busy === `instance-restore-${instance.instance}`} onClick={() => void restoreInstance(instance)}>{t("qemu.presets.restore")}</Button>
+                            <Button size="sm" variant="ghost" icon={<Square size={12} />} disabled={Boolean(busyKey)} loading={busy === `instance-release-${instance.instance}`} onClick={() => void releaseIdleInstance(instance)}>
+                              {t("qemu.instances.releaseIdle")}
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={Boolean(busyKey)} loading={busy === `instance-hibernate-app-${instance.instance}`} onClick={() => void hibernateApp(instance)}>
+                              {t("qemu.instances.hibernateApp")}
+                            </Button>
+                            <Button size="sm" variant="ghost" disabled={Boolean(busyKey)} loading={busy === `instance-art-${instance.instance}`} onClick={() => void optimizeArt(instance)}>
+                              {t("qemu.instances.art")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={<Copy size={12} />}
+                              onClick={() => void copySerial(instance.serial)}
+                            >
+                              {t("qemu.instances.copySerial")}
+                            </Button>
+                          </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

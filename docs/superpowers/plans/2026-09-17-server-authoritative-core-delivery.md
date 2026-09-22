@@ -21,6 +21,59 @@
 - Every production code change follows TDD and the project four-suite validation gate; server-only tests add the server's own unit/integration commands.
 - Backend changes in `src-tauri` and `qemu-center` require the user's explicit authorization before implementation starts.
 
+## Implementation status (2026-09-17)
+
+- Tasks 1–5 are implemented in the Tauri Rust client, including DPAPI-backed
+  device identity, signed short-lived leases, Rust-side protected preset
+  enforcement, structured UI status, and fail-closed release behavior.
+- Task 6 is implemented as signed manifest plus X25519/HKDF/ChaCha20-Poly1305
+  256 KiB chunk delivery. The QEMU preset path consumes the server-delivered
+  runner and removes the local temporary plaintext after upload.
+- Task 7 remains for account authentication, production service integration, and
+  manual tamper/real-device acceptance. The client-side public-key rotation
+  window is now implemented as a build-time key ring; deployment still needs
+  an operator-run rotation rehearsal.
+- Task 8 closes the release-only metadata path: version-independent guest
+  details and restore actions use a server-delivered universal core artifact;
+  an unavailable authorization service may return only basic read-only list
+  rows and must never fall back to an embedded release script.
+- Task 10 hardens lease timing: a stale or manipulated unsigned `serverTime`
+  response field must not extend a signed lease, and an in-process wall-clock
+  rollback must not extend the active session. The client validates a newly
+  received lease against the later of local wall time and the reported server
+  time, then tracks expiry from a monotonic process clock.
+- Task 11 closes the protected-download handoff: the client that performs an
+  artifact download now adopts the session returned by the shared runtime
+  authorization check before requesting the manifest.
+
+### Task 10: Make client lease expiry resistant to stale server time and clock rollback
+
+**Files:**
+- Modify: `src-tauri/src/services/authorization_client.rs`
+- Test: `src-tauri/src/services/authorization_client.rs`
+- Modify: `docs/superpowers/specs/2026-09-17-server-authoritative-core-delivery-design.md`
+
+**Acceptance:**
+- [x] A signed lease already expired according to local time is rejected even when
+  the response supplies an older `serverTime`.
+- [x] Once accepted, lease checks use monotonic elapsed time instead of repeatedly
+  trusting the wall clock, so moving the local clock backward cannot extend the
+  active session.
+- [x] The full project validation gate remains green.
+
+### Task 11: Preserve the active session across protected artifact downloads
+
+**Files:**
+- Modify: `src-tauri/src/services/authorization_client.rs`
+- Test: `src-tauri/src/services/authorization_client.rs`
+- Modify: `docs/superpowers/specs/2026-09-17-server-authoritative-core-delivery-design.md`
+
+**Acceptance:**
+- [x] A runtime download client adopts the session already validated by the
+  shared runtime authorization state before preparing an artifact.
+- [x] The handoff is covered by a fake-transport regression test.
+- [x] The full project validation gate remains green.
+
 ---
 
 ### Task 1: Add protocol types and protected-capability policy
@@ -37,7 +90,7 @@
 - Produces `ProtectedCapability::{ProtectedPreset, ProtectedArtifact, ProtectedAlgorithm}`.
 - Produces `AuthorizationStatus::{NotRegistered, AuthenticationRequired, LeaseExpired, ServerUnreachable, ClientOutdated, BindingMismatch, ArtifactIntegrityFailed, Revoked, Ready}`.
 - Produces `LeaseClaims { iss, aud, sub, client_id, device_id, session_id, capabilities, client_version, iat, exp, jti, nonce }`.
-- Produces `ArtifactManifest { artifact_id, version, target_abi, target_android, session_id, device_id, size_bytes, sha256, expires_at, key_id }`.
+- Produces `ArtifactManifest { artifact_id, version, target_abi, target_android, session_id, device_id, size_bytes, sha256, expires_at, key_id, transfer_id, server_ephemeral_public_key, chunk_size_bytes, chunk_count, nonce_prefix }`.
 - Test fixtures define `test_claims_with_expiry`, `test_claims_for_device`, and `test_manifest` in the same test module; they construct valid signed values and are not production APIs.
 
 - [ ] **Step 1: Write failing claim-validation tests**
@@ -386,6 +439,11 @@ Commit: `feat: deliver session-bound encrypted core artifacts`
 - Produces evidence for invalid signature, expired lease, wrong device, replayed nonce/JTI, clock rollback, revoked session, key rotation, corrupt chunk, partial download, copied installation, and patched frontend attempts.
 - Integration fixtures define `provision_authorized_client`, `revoke_client`, `request_artifact`, `rotate_server_key`, and `request_with_key_id`; all use an isolated test database and generated keys.
 
+Current progress: `authorization-service/tests/protocol.rs` now covers the
+real router path for revoked artifact transfers and a restarted service using
+a new signing `keyId`; deployment rotation and live tamper/copy acceptance
+remain manual.
+
 - [ ] **Step 1: Write failing protocol integration cases**
 
 ```rust
@@ -429,3 +487,199 @@ Record that local runtime plaintext can be observed by an administrator/root/deb
 Run: `cargo test --manifest-path authorization-service/Cargo.toml`; `npx tsc --noEmit`; `npx vitest run`; `cargo test --manifest-path src-tauri/Cargo.toml`; `cargo test --manifest-path qemu-center/Cargo.toml`.
 
 Commit: `docs: record authorization acceptance and threat limits`
+
+---
+
+### Task 8: Protect release metadata enrichment without breaking diagnostics
+
+**Files:**
+- Modify: `src-tauri/src/services/authorization_client.rs`
+- Modify: `src-tauri/src/services/qemu_presets.rs`
+- Modify: `src-tauri/src/services/qemu.rs`
+- Modify: `src-tauri/src/commands/mod.rs`
+- Modify: `authorization-service/README.md`
+- Test: the corresponding Rust unit tests
+
+**Acceptance:**
+
+- [x] Version-independent details and restore use one explicit
+  `targetAndroid=any` artifact.
+- [x] Release builds obtain the details runner from the authorization service;
+  if authorization is unavailable, only basic list rows are returned.
+- [x] Details runner plaintext is removed from local staging and the guest on
+  success and failure.
+- [x] The downloaded plaintext artifact itself is worker-owned and removed
+  after create, upgrade, restore, and metadata-enrichment operations, including
+  error paths.
+- [x] No release binary contains the embedded runner body.
+- [x] Run the project validation gate and record the result.
+
+### Task 9: Make the signing-key rotation window real in release configuration
+
+**Files:**
+- Modify: `src-tauri/src/services/authorization_client.rs`
+- Modify: `authorization-service/README.md`
+- Modify: `docs/2026-09-17-server-authoritative-core-delivery-design.md`
+- Test: `src-tauri/src/services/authorization_client.rs`
+
+**Acceptance:**
+
+- [x] The client accepts a build-time `RDC_AUTH_PUBLIC_KEYS` ring containing
+  the old and next public keys, selected by signed response `keyId`.
+- [x] Duplicate IDs, empty entries, and malformed public keys fail closed.
+- [x] The single-key environment variables remain a compatibility fallback.
+- [ ] A production operator rehearsal rotates the server key in the documented
+  order and confirms old/new client behavior.
+
+### Task 10: Make release authorization configuration fail closed
+
+**Files:**
+- Modify: `src-tauri/src/services/authorization_client.rs`
+- Modify: `docs/2026-09-17-runtime-memory-authorization-acceptance.md`
+- Modify: `docs/AI-HANDOFF-NEXT-STEPS.md`
+- Test: `src-tauri/src/services/authorization_client.rs`
+
+**Acceptance:**
+
+- [x] A pure configuration resolver rejects a missing service URL or missing public-key ring.
+- [x] Malformed/duplicate public-key entries remain rejected before a transport or secure-store
+  client is constructed.
+- [x] A non-loopback HTTP service URL remains rejected; loopback HTTP remains a development-only
+  exception.
+- [x] The focused test and full required gate pass; production deployment rehearsal remains a
+  separate manual item.
+
+### Task 12: Make the release core-body scan repeatable
+
+- [x] Add `scripts/verify-release-core.ps1` with explicit runner-body markers.
+- [x] Run it against the current release executable and library.
+- [x] Add it as a blocking step in `.github/workflows/windows-release.yml` after Tauri packaging.
+
+### Task 11: Expand protocol tamper-boundary coverage
+
+The registration/approval/lease/artifact happy path is covered by
+`E-031-registration-and-artifact-protocol.md`. Add route-level negative assertions for the
+same transfer so the automated evidence also covers wrong device binding, invalid chunk index,
+wrong bearer/session, and client-side ciphertext tampering. Copying a live installation and
+production offline/TLS/key-rotation rehearsals remain manual because they require separate
+devices or deployment state.
+
+- [x] **Step 1: Add focused negative assertions to the protocol fixture**
+- [x] **Step 2: Run the protocol test and record the evidence**
+
+---
+
+### Task 13: Bind guest execution to a short-lived signed operation grant
+
+The current implementation authorizes registration, leases and encrypted
+artifact transfer, but a copied plaintext runner could still be invoked with a
+hand-written request after a legitimate download. Close that boundary without
+claiming absolute anti-reverse protection.
+
+Implementation progress: the signed payload envelope, `/v1/execution-grants`
+endpoint, Rust binding verifier, host request propagation, guest fail-closed
+verifier, `publish-runner` key rendering path, and the server-side grant
+consume boundary are implemented. The remaining acceptance work is
+deployment/copy testing with the rendered artifact and a reachable real
+authorization service.
+
+- [x] **Step 1: Complete failing protocol and runner tests**
+
+  Cover missing, expired, wrong-device, wrong-artifact, wrong-action and
+  replayed execution grants. The runner must reject a request whose trusted
+  signature does not verify; a public key supplied by the request is not trusted.
+  Added regression coverage for missing/expired grants, signature tampering,
+  wrong device, wrong action, wrong core artifact, request-nonce replay and
+  one-time grant consume/replay rejection; the service and runner focused
+  suites pass.
+
+- [x] **Step 2: Add the server grant endpoint and signed claims**
+
+  Issue a short-lived grant only for a live session with the required
+  entitlement, bind it to the verified manifest hash and operation context,
+  and consume its request nonce transactionally.
+
+- [x] **Step 3: Enforce the grant in Rust and in the guest execution path**
+
+  Request the grant immediately before upload, include only the signed envelope
+  in the runner request, and make the guest verifier fail closed when the grant
+  is absent or invalid. Prefer an existing guest crypto primitive; if the
+  target image cannot verify the signature reliably, move the sensitive action
+  behind a server-side execution API rather than adding an unauthenticated
+  boolean check.
+
+- [x] **Step 3a: Consume the grant before guest-side Docker work**
+
+  POST the signed grant to a rendered server consume URL after local
+  verification. The service must atomically reserve the grant JTI and return
+  conflict on replay; transport errors and non-success responses must stop the
+  operation before Docker work.
+
+- [ ] **Step 4: Run tamper, copy and failure-cleanup acceptance**
+
+  Verify that copying the runner without a fresh grant, changing its action or
+  target, replaying a grant, and interrupting upload all fail before protected
+  work. Keep administrator/root/debugger plaintext extraction documented as an
+  unavoidable runtime limitation.
+
+---
+
+### Task 14: Make the production desktop release carry the authorization endpoint
+
+The release workflow currently runs the Tauri build without
+`RDC_AUTH_BASE_URL` or `RDC_AUTH_PUBLIC_KEYS`. That produces a binary with no
+embedded runner, but it also prevents an authorized customer from downloading
+the protected core. Treat the public endpoint and verifier key ring as required
+non-secret release configuration, while keeping the server signing secret out
+of the desktop job.
+
+- [x] **Step 1: Document the release configuration contract**
+
+  Use GitHub Actions repository variables for the public endpoint and verifier
+  key ring; document that the release job must fail before compilation when
+  either value is missing.
+
+- [x] **Step 2: Add the release preflight and inherited build environment**
+
+  Inject `RDC_AUTH_BASE_URL` and `RDC_AUTH_PUBLIC_KEYS` into the Windows release
+  job and validate both before tests/build. Reject an accidentally present
+  desktop signing secret in the same preflight.
+
+- [x] **Step 3: Run the required project gate and review the workflow diff**
+
+  Run the four project suites, `cargo fmt --check`, `git diff --check`, and
+  verify that the workflow only references public repository variables and
+  never a server signing secret. All required gates passed; the diff check
+  reports only the repository's existing LF/CRLF normalization warnings.
+
+---
+
+### Task 15: Bind execution grants to the server-approved artifact workflow
+
+The execution grant currently binds the artifact hash and operation context, but
+the service does not independently constrain which published artifact may be
+used for each protected workflow. A reversed client must not be able to ask the
+service to sign an arbitrary published artifact for `preset_apply`,
+`preset_restore`, or `preset_details`. Keep the policy server-authoritative and
+also enforce it again at grant consumption.
+
+- [x] **Step 1: Add a failing route-level policy test**
+
+  A targeted runner artifact may be used only for `preset_apply`; the
+  universal runner may be used only for `preset_restore` and `preset_details`.
+  A generic or mismatched artifact must receive 403 and must not consume the
+  request nonce.
+
+- [x] **Step 2: Implement the smallest server-side policy**
+
+  Validate the artifact/workflow pair during grant issuance and consumption.
+  Keep artifact download behavior unchanged; this policy protects executable
+  authorization and fails closed for unknown artifact IDs.
+
+- [x] **Step 3: Re-run focused and full gates and record the evidence**
+
+  Include the negative route test, Tauri/qemu tests, and a release-body scan.
+  The focused and full gates passed, and the PowerShell release-body scanner
+  returned clean for both release binaries after a compatibility fix. Production
+  deployment, copy/tamper, and real service key rotation remain manual
+  acceptance items.

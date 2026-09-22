@@ -382,7 +382,10 @@ mod tests {
         let blocks = text.matches("processor\t:").count();
         assert_eq!(blocks, 8, "expected 1 super + 4 big + 3 little cores");
         for i in 0..8 {
-            assert!(text.contains(&format!("processor\t: {i}\n")), "missing core {i}");
+            assert!(
+                text.contains(&format!("processor\t: {i}\n")),
+                "missing core {i}"
+            );
         }
     }
 
@@ -479,7 +482,10 @@ mod tests {
         assert_eq!(regenerated.cpuinfo, initial.cpuinfo);
         assert_eq!(regenerated.version, initial.version);
         let cpuinfo = std::fs::read_to_string(&regenerated.cpuinfo).unwrap();
-        assert!(cpuinfo.contains("Google Tensor G3"), "content must switch profile");
+        assert!(
+            cpuinfo.contains("Google Tensor G3"),
+            "content must switch profile"
+        );
         assert!(!cpuinfo.contains("SM8550"));
 
         // Re-running with the same profile is byte-stable (deterministic generation).
@@ -505,9 +511,10 @@ mod tests {
         let mut stamps = 0;
         for part in a.split(';') {
             let part = part.trim();
-            let Some(stamp) = part.strip_prefix("touch -t ").and_then(|rest| {
-                rest.split_whitespace().next()
-            }) else {
+            let Some(stamp) = part
+                .strip_prefix("touch -t ")
+                .and_then(|rest| rest.split_whitespace().next())
+            else {
                 continue;
             };
             assert_eq!(stamp.len(), 12, "touch -t expects YYYYMMDDhhmm: {stamp}");
@@ -520,7 +527,10 @@ mod tests {
             );
             stamps += 1;
         }
-        assert!(stamps >= 10, "expected a stamp per standard dir, got {stamps}");
+        assert!(
+            stamps >= 10,
+            "expected a stamp per standard dir, got {stamps}"
+        );
 
         // Different seeds must not produce identical commands (per-instance spread).
         let c = touch_timestamp_commands(now, "rdc-beta");

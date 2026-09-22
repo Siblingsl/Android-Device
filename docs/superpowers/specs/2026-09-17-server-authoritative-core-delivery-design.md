@@ -1,7 +1,7 @@
 # 服务端权威授权与核心能力交付设计
 
 **日期**：2026-09-17  
-**状态**：设计阶段，待用户评审  
+**状态**：实施中；授权闸门与加密分块交付已落地，需部署配置和人工验收
 **默认部署**：项目维护者控制的公网授权服务  
 **范围**：Windows Tauri 客户端、`qemu-center` 受保护能力、授权服务、核心文件/能力交付
 
@@ -47,7 +47,7 @@ Tauri UI
 Rust authorization client ── TLS 1.3 ── Authorization/API service
    │                                  │
    │ signed short-lived lease          ├─ account/entitlement/revocation
-   │ encrypted session artifact        ├─ version/device/concurrency policy
+    │ encrypted session artifact        ├─ version/device/concurrency policy
    ▼                                  └─ audit and key rotation
 qemu-center / local runtime
 ```
@@ -60,7 +60,12 @@ qemu-center / local runtime
 
 - 服务端使用 Ed25519 签发授权租约、能力清单和文件 manifest。
 - 私钥只存在服务端密钥管理系统或受保护的部署 secret 中，不进入仓库、安装包、日志和客户端配置。
-- 客户端只内置当前和下一代公钥及 `keyId`；验签支持轮换窗口。
+- 客户端只内置当前和下一代公钥及 `keyId`；验签支持轮换窗口。发布配置使用
+  `RDC_AUTH_PUBLIC_KEYS=id=base64url-public-key,id=base64url-public-key`，并拒绝空值、重复
+  `keyId` 和格式错误的公钥；未设置时兼容单组 `RDC_AUTH_PUBLIC_KEY_ID` /
+  `RDC_AUTH_PUBLIC_KEY`。
+- 轮换顺序固定为：先发布同时信任旧/新公钥的客户端，再把服务端切到新私钥，确认旧版本
+  已退出后再发布只信任新公钥的客户端。服务端不通过未签名远程配置下发新的信任根。
 - 公钥更新必须由旧的可信公钥签名，避免远程配置把信任根替换成攻击者的 key。
 
 ### 4.2 客户端设备密钥
@@ -128,6 +133,8 @@ qemu-center / local runtime
 
 授权服务不可达时，受保护能力默认不允许建立新会话；已建立会话最多按租约剩余时间运行，不能通过改本机时钟延长。若产品需要网络抖动容错，宽限期也不得超过租约过期时间且不能用于首次授权。
 
+客户端收到租约时，必须使用 `max(localWallClock, serverTime)` 做首次验签和过期判断，避免旧的或被篡改的未签名 `serverTime` 把已过期租约重新变成可用。租约一旦接受，后续进程内的过期判断以“验签时的有效时间 + 单调时钟经过时间”为准，不反复信任系统墙上时钟；进程重启后必须重新取得租约。
+
 ## 6. 核心能力与文件交付
 
 ### 6.1 服务端执行优先
@@ -146,15 +153,27 @@ qemu-center / local runtime
 
 1. 客户端先向服务端请求 artifact manifest，包含版本、文件哈希、大小、目标 ABI、目标 Android 版本、设备/会话绑定和过期时间。
 2. 客户端提交本次会话的临时 X25519 公钥。
-3. 服务端返回签名 manifest 和分块 AEAD 密文；解密密钥只包装给该临时公钥。
+3. 服务端返回签名 manifest 和每次请求的临时 X25519 公钥；客户端与服务端各自派生会话密钥，分块 AEAD 密文只对该临时密钥可解。
 4. 客户端在受保护的短期目录中完成完整性校验，写入 guest 后立即删除传输缓存和临时密钥材料。
 5. guest 使用的授权句柄与 session、实例、版本和文件哈希绑定；停止实例或租约到期后不得继续获取新句柄。
+
+客户端用于下载 artifact 的工作实例必须继承刚刚验证通过的当前 session；不能因为重新创建
+HTTP/secure-store 客户端而丢失内存中的 lease，导致“已授权但下载端未注册”的错误路径。
+
+对不依赖具体 Android 版本的 guest runner 动作（例如恢复升级前状态），使用单独
+的通用 artifact 标识和显式 `targetAndroid=any`；不能为了选择 artifact 而先执行
+未授权的详情 runner。通用 artifact 仍必须经过同一 capability、设备、会话、版本、
+签名 manifest、加密分块和过期校验。
+
+实例列表的增强详情读取（Android 版本、镜像、资源档案和回滚标记）同样使用该通用
+artifact，不在 release 包中保留本地详情脚本。授权服务不可用时仍可返回容器名称、
+端口和状态等基础只读信息，但不得以本地脚本回退来恢复受保护的详情能力。
 
 不把授权 token 放进进程命令行，不把明文写入普通日志，不把长期解密密钥挂载到共享目录。大文件下载必须支持分块校验、失败重试和中断清理，不能因为断点缓存而留下可直接使用的未加密核心包。
 
 ### 6.3 本地运行时的信任边界
 
-`qemu-center` 可以校验签名 lease、manifest、哈希、版本、设备和过期时间，但这只是纵深防御。对真正敏感的能力，运行时必须在服务端完成一次在线授权或取得一次性响应；否则攻击者 patch 掉本地 `if authorized` 仍可能绕过。
+`qemu-center` 可以校验发布时嵌入公钥环验证的执行 grant、manifest、哈希、版本、VM/实例绑定和过期时间，但这只是纵深防御。当前 Tauri 的 QEMU 预设命令在 Rust 层先取得 `protected-preset` 与 `protected-artifact` 双能力，并在发布版不嵌入本地 `qemu_guest.py`；否则攻击者 patch 掉本地 `if authorized` 仍可能绕过。guest 在运行时仍会看到可执行明文，这不是客户端加密能够消除的限制。
 
 ## 7. 客户端状态与用户体验
 
@@ -205,3 +224,37 @@ qemu-center / local runtime
 
 后续实施计划预计涉及 `src-tauri` 授权服务、`qemu-center` lease 校验、前端授权状态、服务端独立目录/服务和发布配置。服务端私钥、账号 token、生产 URL 证书和第三方资产凭据不进入仓库。
 
+## 10. 发布配置的 fail-closed 策略
+
+发布版授权客户端的构造必须要求服务地址和至少一组有效的服务端公钥同时存在；
+缺少任一项、空值、重复 key ID、非法公钥或非 HTTPS 的非回环地址都必须在执行
+受保护动作前失败。该策略抽成无副作用的配置解析函数并单测，避免只能依赖某个
+构建环境的 `option_env!` 结果来推断安全边界。回环 HTTP 仅作为本地开发服务例外，
+不改变 release 的服务端授权要求。
+
+## 11. Per-operation execution authorization
+
+Artifact acquisition and artifact execution are separate trust boundaries. The
+protected runner path now obtains a short-lived, signed execution grant after
+the manifest is verified and before the runner is uploaded. The grant must bind
+at least the session, device, artifact hash, action, VM/instance, client
+version, expiry and the request nonce. Rust rejects a missing, expired or
+mismatched grant before guest transfer, and the service consumes the request
+nonce transactionally. The guest additionally enforces
+the signed grant's expiry and operation context.
+
+The guest-side runner must also fail closed without a verifiable grant (or the
+operation must move to a server-side execution API). A plain non-empty field in
+`request.json` is not sufficient: the verifier must use a trusted public key
+and a signed payload, and the trusted key must not be taken from the request
+itself. This reduces the value of copying a downloaded runner and makes the
+execution boundary explicit. The rendered runner now also contains a
+server-side consume URL and submits the signed grant immediately after local
+verification and before any Docker operation. The service atomically consumes
+the grant JTI; a second submission or an unavailable service fails closed.
+The consume endpoint does not mint a new grant and accepts no client private
+key or bearer credential. Local QEMU development needs a reachable gateway or
+HTTPS deployment because the authorization service's loopback-only listener is
+not reachable from the guest by itself. An attacker with
+administrator/root/debugger access during a legitimate operation may still
+observe plaintext or patch the runner.

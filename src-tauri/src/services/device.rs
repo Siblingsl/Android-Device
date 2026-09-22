@@ -420,14 +420,8 @@ pub fn set_rotation_mode(serial: &str, mode: &str) -> ShellResult {
     match mode {
         "portrait" => rotate(serial, false),
         "landscape" => rotate(serial, true),
-        "auto" => adb::shell(
-            serial,
-            "settings put system accelerometer_rotation 1",
-        ),
-        "lock" => adb::shell(
-            serial,
-            "settings put system accelerometer_rotation 0",
-        ),
+        "auto" => adb::shell(serial, "settings put system accelerometer_rotation 1"),
+        "lock" => adb::shell(serial, "settings put system accelerometer_rotation 0"),
         _ => ShellResult {
             success: false,
             stderr: "旋转模式只能是 portrait、landscape、auto 或 lock".into(),

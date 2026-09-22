@@ -242,8 +242,10 @@ mod tests {
 
     #[test]
     fn serials_get_staggered_phase_offsets() {
-        let offsets: Vec<u64> =
-            ["alpha", "beta", "gamma"].iter().map(|s| cycle_offset_for(s)).collect();
+        let offsets: Vec<u64> = ["alpha", "beta", "gamma"]
+            .iter()
+            .map(|s| cycle_offset_for(s))
+            .collect();
         assert!(offsets.iter().all(|offset| *offset < CYCLE_SECS));
         // Different serials must not all line up (a collision between two of
         // the three is astronomically unlikely but would still be a bug).

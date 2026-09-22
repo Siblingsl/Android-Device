@@ -15,6 +15,8 @@ import {
   Check,
   X,
   History,
+  Keyboard,
+  SlidersHorizontal,
   Trash2,
   RotateCcw,
   Shield,
@@ -46,7 +48,6 @@ import { Button } from "../components/ui/Button";
 import { DeviceBroadcastInput } from "../components/device/DeviceBroadcastInput";
 import { DeviceHoverCard } from "../components/device/DeviceHoverCard";
 import { QuickAppLauncher } from "../components/device/QuickAppLauncher";
-import { ArrangementDialog } from "../components/layout/ArrangementDialog";
 import { Skeleton } from "../components/ui/Skeleton";
 import { StatusDot } from "../components/ui/StatusDot";
 import { DeviceService } from "../services/deviceService";
@@ -366,18 +367,20 @@ export function Devices() {
   } | null>(null);
   const [spoofProfiles, setSpoofProfiles] = useState<SpoofProfileSummary[]>([]);
   const [spoofUsage, setSpoofUsage] = useState<SpoofProfileUsage[]>([]);
-  const [batchSpoofOpen, setBatchSpoofOpen] = useState(false);
+  /** Which toolbar sub-panel is open. Mutually exclusive: the three optional
+   * panels (broadcast input, mirror layout, batch spoof) share one full-width
+   * row under the action rail, so opening one never reflows the buttons. */
+  const [toolbarPanel, setToolbarPanel] = useState<null | "broadcast" | "layout" | "spoof">(null);
   const [spoofProfileId, setSpoofProfileId] = useState("");
   const [rotateSpoof, setRotateSpoof] = useState(false);
   /** Tag editor target (row "更多" → 设置标签): id + display name, null = closed. */
   const [tagEditor, setTagEditor] = useState<{ id: string; name: string } | null>(null);
   const [tagDraft, setTagDraft] = useState<string[]>([]);
   const [tagNew, setTagNew] = useState("");
-  const [arrangementOpen, setArrangementOpen] = useState(false);
   const navigate = useNavigate();
   const setSelected = useAppStore((s) => s.setSelectedDeviceId);
+  const setStoreDevices = useAppStore((s) => s.setDevices);
   const setStatusText = useAppStore((s) => s.setStatusText);
-  const refreshDevices = useAppStore((s) => s.refreshDevices);
   const screenshotDir = useAppStore((s) => s.settings?.screenshotPath);
   const deviceTagsRecord = useAppStore((s) => s.settings?.deviceTags);
   const loadSettings = useAppStore((s) => s.loadSettings);
@@ -414,12 +417,12 @@ export function Devices() {
       const list = await DeviceService.listDevicesUnified();
       if (!loadSequence.isCurrent(token)) return;
       setDevices(list);
+      setStoreDevices(list);
       const nextOfflineHistory = rememberDevices(readOfflineDeviceHistory(), list);
       setOfflineHistory(nextOfflineHistory);
       persistOfflineDeviceHistory(nextOfflineHistory);
       const ids = new Set(list.map((d) => d.id));
       setPicked((prev) => prev.filter((id) => ids.has(id)));
-      await refreshDevices();
     } catch (e) {
       if (!loadSequence.isCurrent(token)) return;
       const msg = e instanceof Error ? e.message : String(e);
@@ -565,14 +568,17 @@ export function Devices() {
   const tagsOf = (d: DeviceInfo): string[] =>
     deviceTagsRecord?.[d.id] ?? deviceTagsRecord?.[d.serial] ?? [];
   const allTags: string[] = [...new Set(Object.values(deviceTagsRecord ?? {}).flat())].sort();
-  // Cloud instances carry a container id; QEMU-track instances are cloud-class
-  // too (they live inside a VM node) even though no local container exists.
-  // Real / LAN devices never do either.
-  const isCloud = (d: DeviceInfo) => Boolean(d.containerId) || d.source === "qemu";
-  // Origin badge for the unified list: QEMU / cloud instance / real device.
+  // Virtual sources are cloud-class for the existing two-way filter. Unknown
+  // ADB rows stay outside that bucket without being called physical hardware.
+  const isCloud = (d: DeviceInfo) =>
+    Boolean(d.containerId) || ["qemu", "docker", "emulator", "redroid"].includes(d.source ?? "");
+  // Origin badge for the unified list: track/device type, never a guessed
+  // physical-vs-virtual claim for an unclassified ADB row.
   const sourceBadge = (d: DeviceInfo): { label: string; cls: string } | null => {
     if (d.source === "qemu") return { label: t("devices.source.qemu"), cls: "badge info" };
     if (d.source === "docker") return { label: t("devices.source.docker"), cls: "badge" };
+    if (d.source === "emulator") return { label: t("devices.source.emulator"), cls: "badge warn" };
+    if (d.source === "redroid") return { label: t("devices.source.redroid"), cls: "badge info" };
     if (d.source === "adb") return { label: t("devices.source.adb"), cls: "badge" };
     return null;
   };
@@ -868,7 +874,7 @@ export function Devices() {
       }
       selectedDevices.forEach((d) => assignments.set(d.serial, spoofProfileId));
     }
-    setBatchSpoofOpen(false);
+    setToolbarPanel(null);
     setSpoofProfileId("");
     setRotateSpoof(false);
     void batch(
@@ -987,13 +993,6 @@ export function Devices() {
           <div className="page-subtitle">{t("devices.page.subtitle")}</div>
         </div>
         <div className="row devices-header-actions">
-          <Button
-            variant="ghost"
-            icon={<LayoutGrid size={15} />}
-            onClick={() => setArrangementOpen(true)}
-          >
-            窗口编排
-          </Button>
           {historicalOffline.length > 0 && (
             <Button
               variant="ghost"
@@ -1251,126 +1250,10 @@ export function Devices() {
             </span>
           </div>
           </div>
-          <div className="devices-toolbar-advanced">
-          <details className="batch-layout-details">
-            <summary>{t("devices.layout.title")}</summary>
-            <div className="batch-layout-fields">
-              <label>
-                {t("devices.layout.columns")}
-                <input
-                  aria-label={t("devices.layout.columns")}
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={scrcpyLayout.columns}
-                  onChange={(event) => updateScrcpyLayout("columns", event.target.value)}
-                  disabled={busy === "batch"}
-                />
-              </label>
-              <label>
-                {t("devices.layout.width")}
-                <input
-                  aria-label={t("devices.layout.width")}
-                  type="number"
-                  min={240}
-                  max={1600}
-                  value={scrcpyLayout.width}
-                  onChange={(event) => updateScrcpyLayout("width", event.target.value)}
-                  disabled={busy === "batch"}
-                />
-              </label>
-              <label>
-                {t("devices.layout.height")}
-                <input
-                  aria-label={t("devices.layout.height")}
-                  type="number"
-                  min={240}
-                  max={1600}
-                  value={scrcpyLayout.height}
-                  onChange={(event) => updateScrcpyLayout("height", event.target.value)}
-                  disabled={busy === "batch"}
-                />
-              </label>
-              <label>
-                {t("devices.layout.gap")}
-                <input
-                  aria-label={t("devices.layout.gap")}
-                  type="number"
-                  min={0}
-                  max={120}
-                  value={scrcpyLayout.gap}
-                  onChange={(event) => updateScrcpyLayout("gap", event.target.value)}
-                  disabled={busy === "batch"}
-                />
-              </label>
-              <label>
-                {t("devices.layout.originX")}
-                <input
-                  aria-label={t("devices.layout.originX")}
-                  type="number"
-                  min={-10000}
-                  max={10000}
-                  value={scrcpyLayout.originX}
-                  onChange={(event) => updateScrcpyLayout("originX", event.target.value)}
-                  disabled={busy === "batch"}
-                />
-              </label>
-              <label>
-                {t("devices.layout.originY")}
-                <input
-                  aria-label={t("devices.layout.originY")}
-                  type="number"
-                  min={-10000}
-                  max={10000}
-                  value={scrcpyLayout.originY}
-                  onChange={(event) => updateScrcpyLayout("originY", event.target.value)}
-                  disabled={busy === "batch"}
-                />
-              </label>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy === "batch"}
-                onClick={() => setScrcpyLayout(DEFAULT_SCRCPY_LAYOUT)}
-              >
-                {t("devices.layout.reset")}
-              </Button>
-            </div>
-            <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
-          </details>
-          </div>
           </div>
           <div className="device-list-bulk-actions">
-          <div className="devices-toolbar-batch devices-toolbar-batch-rail devices-action-deck">
-          <div className="devices-toolbar-batch-supporting">
-          <DeviceBroadcastInput
-            disabled={selectedDevices.length === 0}
-            busy={busy}
-            onText={(text) =>
-              batch(
-                t("devices.broadcast.textAction"),
-                async (d) => {
-                  const miss = await ensureOnline(d);
-                  if (miss) return miss;
-                  return DeviceService.text(d.serial, text);
-                },
-                "broadcast-text",
-              )
-            }
-            onKey={(code) =>
-              batch(
-                t("devices.broadcast.keyAction"),
-                async (d) => {
-                  const miss = await ensureOnline(d);
-                  if (miss) return miss;
-                  return DeviceService.keyevent(d.serial, code);
-                },
-                "broadcast-key",
-              )
-            }
-          />
-          </div>
-          <div className="devices-toolbar-batch-primary">
+          <div className="devices-toolbar-batch devices-batch-rail">
+          <div className="devices-batch-group is-primary">
           <Button
             size="sm"
             loading={busy === "batch"}
@@ -1401,8 +1284,6 @@ export function Devices() {
           >
             {t("devices.batch.mirrorShort")}
           </Button>
-          </div>
-          <div className="devices-toolbar-batch-supporting">
           <Button
             size="sm"
             icon={<LayoutGrid size={13} />}
@@ -1518,7 +1399,7 @@ export function Devices() {
             {t("devices.batch.installApk")}
           </Button>
           </div>
-          <div className="devices-toolbar-batch-utility">
+          <div className="devices-batch-group is-utility">
           <QuickAppLauncher devices={devices} selectedDevices={selectedDevices} setStatusText={setStatusText} />
           <Button
             size="sm"
@@ -1570,9 +1451,9 @@ export function Devices() {
             variant="secondary"
             icon={<Shield size={13} />}
             disabled={busy === "batch" || selectedDevices.length === 0}
-            aria-expanded={batchSpoofOpen}
+            aria-pressed={toolbarPanel === "spoof"}
             onClick={() => {
-              setBatchSpoofOpen((open) => !open);
+              setToolbarPanel((panel) => (panel === "spoof" ? null : "spoof"));
               setSpoofProfileId("");
             }}
           >
@@ -1582,7 +1463,7 @@ export function Devices() {
             aria-label={t("devices.moreActions")}
             disabled={busy === "batch" || selectedDevices.length === 0}
             defaultValue=""
-            style={{ height: 30, padding: "0 8px", borderRadius: 8 }}
+            style={{ height: 28, padding: "0 8px", borderRadius: 8 }}
             onChange={async (e) => {
               const v = e.target.value;
               e.target.value = "";
@@ -1636,70 +1517,213 @@ export function Devices() {
             <option value="back">{t("devices.batch.back")}</option>
             <option value="recent">{t("devices.batch.recent")}</option>
           </select>
-          {batchSpoofOpen && (
-            <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <select
-                aria-label={t("devices.batch.spoofSelect")}
-                value={spoofProfileId}
-                disabled={rotateSpoof}
-                onChange={(e) => setSpoofProfileId(e.target.value)}
-                style={{ height: 30, minWidth: 200, padding: "0 8px", borderRadius: 8 }}
-              >
-                <option value="">{t("devices.batch.spoofSelect")}</option>
-                {spoofBuiltinProfiles.length > 0 && (
-                  <optgroup label={t("devices.batch.spoofGroupBuiltin")}>
-                    {spoofBuiltinProfiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.marketName} · {p.model}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {spoofCapturedProfiles.length > 0 && (
-                  <optgroup label={t("devices.batch.spoofGroupCaptured")}>
-                    {spoofCapturedProfiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.marketName} · {p.model}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-              <label className="row" style={{ gap: 4 }}>
-                <input
-                  type="checkbox"
-                  checked={rotateSpoof}
-                  onChange={(e) => setRotateSpoof(e.target.checked)}
-                  aria-label={t("devices.batch.spoofRotate")}
+          </div>
+          <div className="devices-batch-panel-toggles">
+          <button
+            type="button"
+            className="devices-panel-toggle"
+            aria-expanded={toolbarPanel === "broadcast"}
+            onClick={() => setToolbarPanel((panel) => (panel === "broadcast" ? null : "broadcast"))}
+          >
+            <Keyboard size={13} />
+            {t("devices.broadcast.title")}
+          </button>
+          <button
+            type="button"
+            className="devices-panel-toggle"
+            aria-expanded={toolbarPanel === "layout"}
+            onClick={() => setToolbarPanel((panel) => (panel === "layout" ? null : "layout"))}
+          >
+            <SlidersHorizontal size={13} />
+            {t("devices.layout.title")}
+          </button>
+          </div>
+          </div>
+          </div>
+
+          {toolbarPanel !== null && (
+            <div className="devices-toolbar-panel" role="region">
+              {toolbarPanel === "broadcast" && (
+                <DeviceBroadcastInput
+                  variant="panel"
+                  disabled={selectedDevices.length === 0}
+                  busy={busy}
+                  onText={(text) =>
+                    batch(
+                      t("devices.broadcast.textAction"),
+                      async (d) => {
+                        const miss = await ensureOnline(d);
+                        if (miss) return miss;
+                        return DeviceService.text(d.serial, text);
+                      },
+                      "broadcast-text",
+                    )
+                  }
+                  onKey={(code) =>
+                    batch(
+                      t("devices.broadcast.keyAction"),
+                      async (d) => {
+                        const miss = await ensureOnline(d);
+                        if (miss) return miss;
+                        return DeviceService.keyevent(d.serial, code);
+                      },
+                      "broadcast-key",
+                    )
+                  }
                 />
-                {t("devices.batch.spoofRotate")}
-              </label>
-              {!rotateSpoof &&
-                spoofProfileId &&
-                (spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0) >=
-                  SPOOF_USAGE_WARN_THRESHOLD && (
-                  <span style={{ color: "var(--warning)", fontSize: 11 }}>
-                    {t("devices.batch.spoofUsageWarn", {
-                      n: spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0,
-                    })}
-                  </span>
-                )}
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={!rotateSpoof && !spoofProfileId}
-                onClick={() => void runBatchSpoof()}
-              >
-                {t("common.confirm")}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setBatchSpoofOpen(false)}>
-                {t("common.close")}
-              </Button>
+              )}
+              {toolbarPanel === "layout" && (
+                <div className="batch-layout-panel">
+                  <div className="batch-layout-fields">
+                    <label>
+                      {t("devices.layout.columns")}
+                      <input
+                        aria-label={t("devices.layout.columns")}
+                        type="number"
+                        min={1}
+                        max={8}
+                        value={scrcpyLayout.columns}
+                        onChange={(event) => updateScrcpyLayout("columns", event.target.value)}
+                        disabled={busy === "batch"}
+                      />
+                    </label>
+                    <label>
+                      {t("devices.layout.width")}
+                      <input
+                        aria-label={t("devices.layout.width")}
+                        type="number"
+                        min={240}
+                        max={1600}
+                        value={scrcpyLayout.width}
+                        onChange={(event) => updateScrcpyLayout("width", event.target.value)}
+                        disabled={busy === "batch"}
+                      />
+                    </label>
+                    <label>
+                      {t("devices.layout.height")}
+                      <input
+                        aria-label={t("devices.layout.height")}
+                        type="number"
+                        min={240}
+                        max={1600}
+                        value={scrcpyLayout.height}
+                        onChange={(event) => updateScrcpyLayout("height", event.target.value)}
+                        disabled={busy === "batch"}
+                      />
+                    </label>
+                    <label>
+                      {t("devices.layout.gap")}
+                      <input
+                        aria-label={t("devices.layout.gap")}
+                        type="number"
+                        min={0}
+                        max={120}
+                        value={scrcpyLayout.gap}
+                        onChange={(event) => updateScrcpyLayout("gap", event.target.value)}
+                        disabled={busy === "batch"}
+                      />
+                    </label>
+                    <label>
+                      {t("devices.layout.originX")}
+                      <input
+                        aria-label={t("devices.layout.originX")}
+                        type="number"
+                        min={-10000}
+                        max={10000}
+                        value={scrcpyLayout.originX}
+                        onChange={(event) => updateScrcpyLayout("originX", event.target.value)}
+                        disabled={busy === "batch"}
+                      />
+                    </label>
+                    <label>
+                      {t("devices.layout.originY")}
+                      <input
+                        aria-label={t("devices.layout.originY")}
+                        type="number"
+                        min={-10000}
+                        max={10000}
+                        value={scrcpyLayout.originY}
+                        onChange={(event) => updateScrcpyLayout("originY", event.target.value)}
+                        disabled={busy === "batch"}
+                      />
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy === "batch"}
+                      onClick={() => setScrcpyLayout(DEFAULT_SCRCPY_LAYOUT)}
+                    >
+                      {t("devices.layout.reset")}
+                    </Button>
+                  </div>
+                  <div className="muted batch-layout-hint">{t("devices.layout.hint")}</div>
+                </div>
+              )}
+              {toolbarPanel === "spoof" && (
+                <div className="batch-spoof-panel">
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <select
+                      aria-label={t("devices.batch.spoofSelect")}
+                      value={spoofProfileId}
+                      disabled={rotateSpoof}
+                      onChange={(e) => setSpoofProfileId(e.target.value)}
+                      style={{ height: 30, minWidth: 200, padding: "0 8px", borderRadius: 8 }}
+                    >
+                      <option value="">{t("devices.batch.spoofSelect")}</option>
+                      {spoofBuiltinProfiles.length > 0 && (
+                        <optgroup label={t("devices.batch.spoofGroupBuiltin")}>
+                          {spoofBuiltinProfiles.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.marketName} · {p.model}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {spoofCapturedProfiles.length > 0 && (
+                        <optgroup label={t("devices.batch.spoofGroupCaptured")}>
+                          {spoofCapturedProfiles.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.marketName} · {p.model}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <label className="row" style={{ gap: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={rotateSpoof}
+                        onChange={(e) => setRotateSpoof(e.target.checked)}
+                        aria-label={t("devices.batch.spoofRotate")}
+                      />
+                      {t("devices.batch.spoofRotate")}
+                    </label>
+                    {!rotateSpoof &&
+                      spoofProfileId &&
+                      (spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0) >=
+                        SPOOF_USAGE_WARN_THRESHOLD && (
+                        <span style={{ color: "var(--warning)", fontSize: 11 }}>
+                          {t("devices.batch.spoofUsageWarn", {
+                            n: spoofUsage.find((u) => u.profileId === spoofProfileId)?.count ?? 0,
+                          })}
+                        </span>
+                      )}
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={!rotateSpoof && !spoofProfileId}
+                      onClick={() => void runBatchSpoof()}
+                    >
+                      {t("common.confirm")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setToolbarPanel(null)}>
+                      {t("common.close")}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
-          </div>
-          </div>
-          </div>
         </div>
       )}
 
@@ -2640,24 +2664,17 @@ export function Devices() {
           </Card>
         </div>
       )}
-      {arrangementOpen && (
-        <ArrangementDialog
-          devices={devices}
-          setStatusText={setStatusText}
-          onClose={() => setArrangementOpen(false)}
-        />
-      )}
     </div>
   );
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
   return (
-    <div>
-      <div className="muted" style={{ fontSize: 11 }}>
-        {label}
+    <div className="device-meta">
+      <div className="muted device-meta-label">{label}</div>
+      <div className="device-meta-value" title={value}>
+        {value}
       </div>
-      <div style={{ fontSize: 12, fontWeight: 560, wordBreak: "break-all" }}>{value}</div>
     </div>
   );
 }

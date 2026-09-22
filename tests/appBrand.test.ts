@@ -7,8 +7,10 @@ const read = (relativePath: string) => readFileSync(resolve(process.cwd(), relat
 describe("Just Run application branding", () => {
   test("uses Just Run for user-visible application surfaces", () => {
     expect(read("index.html")).toContain("<title>Just Run</title>");
+    expect(read("index.html")).toContain('href="/just-run-logo.png"');
     expect(read("src-tauri/tauri.conf.json")).toContain('"productName": "Just Run"');
     expect(read("src-tauri/tauri.conf.json")).toContain('"title": "Just Run"');
+    expect(read("src/components/layout/Sidebar.tsx")).toContain('src="/just-run-logo.png"');
     expect(read("src/components/layout/Sidebar.tsx")).toContain('className="brand-title">Just Run');
     expect(read("src/i18n/pages/common.ts")).toContain('"common.appName": "Just Run"');
     expect(read("src/lib/dialogs.ts")).toContain('title: "Just Run"');

@@ -13,11 +13,17 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::{Parser, Subcommand};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde::Deserialize;
 
 use qemu_center::exec::{self, argv_to_display};
 use qemu_center::vm::{Accel, Detach, LaunchOptions, PortError, VmEntry};
 use qemu_center::{cloudinit, doctor, fat, guest, qmp, redroid, setup, verify, vm};
+
+const EXECUTION_GRANT_MAX_REQUEST_AGE_SECS: i64 = 5 * 60;
+const MAX_EXECUTION_GRANT_FIELD_BYTES: usize = 256;
 
 #[derive(Parser)]
 #[command(
@@ -137,8 +143,8 @@ enum VmCmd {
         /// How many ADB forwards to reserve (= max redroid instances).
         #[arg(long, default_value_t = vm::DEFAULT_ADB_PORT_COUNT)]
         adb_port_count: u16,
-        /// Docker install channel in the guest: get-docker | apt.
-        #[arg(long, default_value = "get-docker")]
+        /// Docker install channel retained for state compatibility; apt is always used.
+        #[arg(long, default_value = "apt")]
         docker_install: String,
         /// SSH public key to inject (default: generate a node-bound key).
         #[arg(long)]
@@ -152,6 +158,8 @@ enum VmCmd {
     Start { name: String },
     /// Change guest RAM for the next start; the VM must be stopped.
     SetMemory { name: String, mem: u32 },
+    /// Reclaim safe guest pages through the running VM's virtio balloon.
+    MemoryReclaim { name: String },
     /// Graceful ACPI shutdown via the VM's QMP endpoint.
     Stop { name: String },
     /// List registered nodes.
@@ -192,6 +200,13 @@ enum RedroidCmd {
         vm: String,
         /// Instance name: lowercase [a-z0-9-] (container becomes qc-<name>).
         name: String,
+        /// Short-lived server-signed capability file produced by the desktop
+        /// client. The CLI never accepts an inline token or a caller key.
+        #[arg(long, value_name = "PATH")]
+        execution_grant_file: PathBuf,
+        /// Guest marker written only after the runner consumed the grant online.
+        #[arg(long, value_name = "PATH")]
+        execution_authorization_file: PathBuf,
         /// Optional CPU override; omitted values come from `--profile`.
         #[arg(long)]
         cpus: Option<f64>,
@@ -210,7 +225,7 @@ enum RedroidCmd {
         /// guest (SwiftShader, default) or host (needs GPU in the VM).
         #[arg(long, default_value = "guest")]
         gpu_mode: String,
-        /// Override the redroid image tag.
+        /// Override the redroid image with an immutable @sha256 digest reference.
         #[arg(long)]
         image: Option<String>,
         /// Read-only guest bind mount, source:target:ro.
@@ -321,6 +336,7 @@ fn main() {
             ),
             VmCmd::Start { name } => cmd_vm_start(&state_dir, &name),
             VmCmd::SetMemory { name, mem } => cmd_vm_set_memory(&state_dir, &name, mem),
+            VmCmd::MemoryReclaim { name } => cmd_vm_memory_reclaim(&state_dir, &name),
             VmCmd::Stop { name } => cmd_vm_stop(&state_dir, &name),
             VmCmd::List { json } => cmd_vm_list(&state_dir, json),
             VmCmd::Delete { name, purge } => cmd_vm_delete(&state_dir, &name, purge),
@@ -336,6 +352,8 @@ fn main() {
             RedroidCmd::Create {
                 vm,
                 name,
+                execution_grant_file,
+                execution_authorization_file,
                 cpus,
                 memory,
                 profile,
@@ -350,6 +368,8 @@ fn main() {
                 &state_dir,
                 &vm,
                 &name,
+                &execution_grant_file,
+                &execution_authorization_file,
                 cpus,
                 memory,
                 &profile,
@@ -376,6 +396,314 @@ fn main() {
         },
     };
     std::process::exit(code);
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ExecutionGrantFile {
+    key_id: String,
+    payload: String,
+    signature: String,
+    #[serde(default)]
+    device_proof: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ExecutionGrantClaims {
+    iss: String,
+    aud: String,
+    client_id: String,
+    device_id: String,
+    session_id: String,
+    client_version: String,
+    artifact_id: String,
+    artifact_sha256: String,
+    action: String,
+    vm: String,
+    instance: String,
+    iat: i64,
+    exp: i64,
+    jti: String,
+    nonce: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ExecutionAuthorizationReceipt {
+    key_id: String,
+    payload: String,
+    signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ExecutionAuthorizationReceiptClaims {
+    iss: String,
+    aud: String,
+    client_id: String,
+    device_id: String,
+    session_id: String,
+    client_version: String,
+    artifact_id: String,
+    artifact_sha256: String,
+    action: String,
+    vm: String,
+    instance: String,
+    grant_jti: String,
+    iat: i64,
+    exp: i64,
+}
+
+fn decode_grant_base64(value: &str, label: &str) -> Result<Vec<u8>, String> {
+    if value.trim().is_empty() {
+        return Err(format!("execution grant {label} is empty"));
+    }
+    URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|error| format!("execution grant {label} is invalid: {error}"))
+}
+
+fn parse_execution_key_ring(encoded: &str) -> Result<BTreeMap<String, VerifyingKey>, String> {
+    let mut keys = BTreeMap::new();
+    for item in encoded.split(',') {
+        let item = item.trim();
+        let Some((key_id, encoded_key)) = item.split_once('=') else {
+            return Err("execution public-key ring entry must be key-id=base64url".into());
+        };
+        let key_id = key_id.trim();
+        if key_id.is_empty() || encoded_key.trim().is_empty() {
+            return Err("execution public-key ring contains an empty entry".into());
+        }
+        let bytes = decode_grant_base64(encoded_key.trim(), "public key")?;
+        let bytes: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| "execution public key must be 32 bytes".to_string())?;
+        let key = VerifyingKey::from_bytes(&bytes)
+            .map_err(|error| format!("execution public key is invalid: {error}"))?;
+        if keys.insert(key_id.to_string(), key).is_some() {
+            return Err(format!(
+                "execution public-key ring repeats key id {key_id:?}"
+            ));
+        }
+    }
+    if keys.is_empty() {
+        return Err("execution public-key ring is empty".into());
+    }
+    Ok(keys)
+}
+
+fn verify_execution_grant_file(
+    path: &Path,
+    expected_vm: &str,
+    expected_instance: &str,
+) -> Result<ExecutionGrantClaims, String> {
+    let key_ring = option_env!("RDC_AUTH_PUBLIC_KEYS").ok_or_else(|| {
+        "qemu-center was built without RDC_AUTH_PUBLIC_KEYS; protected redroid creation is disabled"
+            .to_string()
+    })?;
+    verify_execution_grant_file_with_keys(
+        path,
+        expected_vm,
+        expected_instance,
+        unix_now(),
+        key_ring,
+    )
+}
+
+fn verify_execution_grant_file_with_keys(
+    path: &Path,
+    expected_vm: &str,
+    expected_instance: &str,
+    now: i64,
+    encoded_key_ring: &str,
+) -> Result<ExecutionGrantClaims, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("execution grant file cannot be read: {error}"))?;
+    if !metadata.is_file() {
+        return Err("execution grant file is not a regular file".into());
+    }
+    if metadata.len() > 64 * 1024 {
+        return Err("execution grant file is too large".into());
+    }
+    let raw = std::fs::read(path)
+        .map_err(|error| format!("execution grant file cannot be read: {error}"))?;
+    let grant: ExecutionGrantFile = serde_json::from_slice(&raw)
+        .map_err(|error| format!("execution grant file is invalid JSON: {error}"))?;
+    if grant.device_proof.as_deref().is_none_or(str::is_empty) {
+        return Err("execution grant device proof is required".into());
+    }
+    let key = parse_execution_key_ring(encoded_key_ring)?
+        .remove(&grant.key_id)
+        .ok_or_else(|| "execution grant key is not trusted".to_string())?;
+    let payload = decode_grant_base64(&grant.payload, "payload")?;
+    let signature_bytes = decode_grant_base64(&grant.signature, "signature")?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|error| format!("execution grant signature is invalid: {error}"))?;
+    key.verify(&payload, &signature)
+        .map_err(|_| "execution grant signature is invalid".to_string())?;
+    let claims: ExecutionGrantClaims = serde_json::from_slice(&payload)
+        .map_err(|error| format!("execution grant payload is invalid: {error}"))?;
+    if claims.iss != "rdc-auth" || claims.aud != "rdc-guest-runner" {
+        return Err("execution grant issuer or audience is invalid".into());
+    }
+    if claims.client_id.is_empty()
+        || claims.device_id.is_empty()
+        || claims.session_id.is_empty()
+        || claims.client_version.is_empty()
+        || claims.artifact_id.is_empty()
+        || claims.action.is_empty()
+        || claims.vm.is_empty()
+        || claims.instance.is_empty()
+        || claims.jti.is_empty()
+        || claims.jti.len() > MAX_EXECUTION_GRANT_FIELD_BYTES
+        || claims.nonce.is_empty()
+        || claims.nonce.len() > MAX_EXECUTION_GRANT_FIELD_BYTES
+        || claims.artifact_sha256.len() != 64
+        || !claims
+            .artifact_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("execution grant payload is incomplete".into());
+    }
+    if claims.exp <= now
+        || claims.iat < now.saturating_sub(EXECUTION_GRANT_MAX_REQUEST_AGE_SECS)
+        || claims.iat > now.saturating_add(300)
+        || claims.exp <= claims.iat
+    {
+        return Err("execution grant is expired or not yet valid".into());
+    }
+    if claims.action != "preset_apply"
+        || claims.vm != expected_vm
+        || claims.instance != expected_instance
+    {
+        return Err("execution grant is bound to another VM or instance".into());
+    }
+    Ok(claims)
+}
+
+fn verify_execution_authorization_receipt_with_keys(
+    receipt_json: &str,
+    grant: &ExecutionGrantClaims,
+    now: i64,
+    encoded_key_ring: &str,
+) -> Result<(), String> {
+    if receipt_json.trim().is_empty() || receipt_json.len() > 64 * 1024 {
+        return Err("execution authorization receipt has an invalid size".into());
+    }
+    let receipt: ExecutionAuthorizationReceipt = serde_json::from_str(receipt_json)
+        .map_err(|error| format!("execution authorization receipt is invalid JSON: {error}"))?;
+    if receipt.key_id.is_empty() {
+        return Err("execution authorization receipt key is empty".into());
+    }
+    let key = parse_execution_key_ring(encoded_key_ring)?
+        .get(&receipt.key_id)
+        .copied()
+        .ok_or_else(|| "execution authorization receipt key is not trusted".to_string())?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(&receipt.payload)
+        .map_err(|error| format!("execution authorization receipt payload is invalid: {error}"))?;
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(&receipt.signature)
+        .map_err(|error| {
+            format!("execution authorization receipt signature is invalid: {error}")
+        })?;
+    let signature = Signature::from_slice(&signature_bytes).map_err(|error| {
+        format!("execution authorization receipt signature is invalid: {error}")
+    })?;
+    key.verify(&payload, &signature)
+        .map_err(|_| "execution authorization receipt signature is invalid".to_string())?;
+    let claims: ExecutionAuthorizationReceiptClaims = serde_json::from_slice(&payload)
+        .map_err(|error| format!("execution authorization receipt payload is invalid: {error}"))?;
+    if claims.iss != "rdc-auth" || claims.aud != "rdc-qemu-center" {
+        return Err("execution authorization receipt issuer or audience is invalid".into());
+    }
+    if claims.client_id.is_empty()
+        || claims.device_id.is_empty()
+        || claims.session_id.is_empty()
+        || claims.client_version.is_empty()
+        || claims.artifact_id.is_empty()
+        || claims.action.is_empty()
+        || claims.vm.is_empty()
+        || claims.instance.is_empty()
+        || claims.grant_jti.is_empty()
+        || claims.artifact_sha256.len() != 64
+        || !claims
+            .artifact_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("execution authorization receipt payload is incomplete".into());
+    }
+    if claims.exp <= now || claims.iat > now.saturating_add(300) || claims.exp <= claims.iat {
+        return Err("execution authorization receipt is expired or not yet valid".into());
+    }
+    if claims.client_id != grant.client_id
+        || claims.device_id != grant.device_id
+        || claims.session_id != grant.session_id
+        || claims.client_version != grant.client_version
+        || claims.artifact_id != grant.artifact_id
+        || !claims
+            .artifact_sha256
+            .eq_ignore_ascii_case(&grant.artifact_sha256)
+        || claims.action != grant.action
+        || claims.vm != grant.vm
+        || claims.instance != grant.instance
+        || claims.grant_jti != grant.jti
+    {
+        return Err("execution authorization receipt is bound to a different grant".into());
+    }
+    Ok(())
+}
+
+fn validate_execution_authorization_path(path: &Path) -> Result<(), String> {
+    let value = path.to_string_lossy();
+    if !value.starts_with("/run/rdc-presets/")
+        || value.contains("..")
+        || value.contains(['\n', '\r', '\0'])
+        || value.ends_with('/')
+    {
+        return Err(
+            "execution authorization file must be a concrete path below /run/rdc-presets".into(),
+        );
+    }
+    Ok(())
+}
+
+fn consume_execution_receipt_once(state_dir: &Path, grant_jti: &str) -> Result<(), String> {
+    if grant_jti.trim().is_empty()
+        || grant_jti.len() > 256
+        || grant_jti.contains(['\0', '\n', '\r'])
+    {
+        return Err("execution authorization receipt JTI is invalid".into());
+    }
+    let ledger_dir = state_dir.join("execution-receipts");
+    std::fs::create_dir_all(&ledger_dir).map_err(|error| {
+        format!("execution authorization receipt ledger cannot be created: {error}")
+    })?;
+    let file_name = format!("{}.receipt", URL_SAFE_NO_PAD.encode(grant_jti.as_bytes()));
+    let ledger_file = ledger_dir.join(file_name);
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&ledger_file)
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err("execution authorization receipt has already been consumed on this host".into())
+        }
+        Err(error) => Err(format!(
+            "execution authorization receipt ledger cannot be written: {error}"
+        )),
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 // ----------------------------------------------------------------- helpers ---
@@ -691,10 +1019,21 @@ fn cmd_setup_qemu_machine(state_dir: &Path) -> i32 {
 }
 
 /// Runtime half shared by both NSIS channels: fetch the Weilnetz w64 listing,
-/// parse the newest installer, download it into `<state-dir>/tmp/`. The pure
-/// halves (`download_command` / `parse_weilnetz_listing`) are unit-tested;
-/// this shell-out flow is runtime-unverified by construction.
+/// parse the newest installer, download it into `<state-dir>/tmp/`, and verify
+/// it against the operator-pinned digest before returning it for execution.
 fn download_latest_weilnetz_installer(state_dir: &Path) -> Result<PathBuf, String> {
+    let expected = std::env::var(setup::QEMU_INSTALLER_SHA256_ENV).map_err(|_| {
+        format!(
+            "{} must be set before direct QEMU installer download",
+            setup::QEMU_INSTALLER_SHA256_ENV
+        )
+    })?;
+    if !setup::validate_sha256_hex(expected.trim()) {
+        return Err(format!(
+            "{} must contain a 64-character hexadecimal SHA256 digest",
+            setup::QEMU_INSTALLER_SHA256_ENV
+        ));
+    }
     let tmp = state_dir.join(setup::TMP_DIR_NAME);
     std::fs::create_dir_all(&tmp).map_err(|e| format!("mkdir {}: {e}", tmp.display()))?;
     let listing_path = tmp.join("w64-listing.html");
@@ -729,6 +1068,16 @@ fn download_latest_weilnetz_installer(state_dir: &Path) -> Result<PathBuf, Strin
             out.stderr_last_line()
         ));
     }
+    let hash = exec::run_command(
+        &setup::get_file_hash_command(&installer),
+        Duration::from_secs(120),
+    );
+    if !hash.success || !setup::sha_matches(hash.stdout.trim(), expected.trim()) {
+        return Err(format!(
+            "downloaded QEMU installer digest does not match {}",
+            setup::QEMU_INSTALLER_SHA256_ENV
+        ));
+    }
     Ok(installer)
 }
 
@@ -756,21 +1105,30 @@ fn cmd_setup_image(state_dir: &Path, distro: &str) -> i32 {
 
     // Expected digest: fetch SHA256SUMS first (tiny), then compare.
     let sums_url = setup::sha256sums_url(distro);
-    let expected: Option<String> = sums_url.and_then(|surl| {
-        let argv = setup::download_command(surl, &sums_path);
-        println!("$ {}", argv_to_display(&argv));
-        let out = exec::run_command(&argv, Duration::from_secs(300));
-        if !out.success {
-            eprintln!(
-                "warn: could not fetch SHA256SUMS ({}); image will be kept unverifiable",
-                out.stderr_last_line()
-            );
-            return None;
+    let expected = match sums_url {
+        Some(surl) => {
+            let argv = setup::download_command(surl, &sums_path);
+            println!("$ {}", argv_to_display(&argv));
+            let out = exec::run_command(&argv, Duration::from_secs(300));
+            if !out.success {
+                return err_exit(&format!(
+                    "could not fetch SHA256SUMS: {}; refusing to use an unverifiable cloud image",
+                    out.stderr_last_line()
+                ));
+            }
+            let body = match std::fs::read_to_string(&sums_path) {
+                Ok(body) => body,
+                Err(error) => return err_exit(&format!("read {}: {error}", sums_path.display())),
+            };
+            match setup::expected_sha256_from_sums(&body, file_name) {
+                Some(digest) => digest,
+                None => return err_exit(
+                    "SHA256SUMS did not contain the selected cloud image; refusing to continue",
+                ),
+            }
         }
-        std::fs::read_to_string(&sums_path)
-            .ok()
-            .and_then(|body| setup::expected_sha256_from_sums(&body, file_name))
-    });
+        None => return err_exit("no trusted SHA256SUMS URL is configured for this distro"),
+    };
 
     let existing = dest.exists().then_some(dest.clone());
     let existing_sha = existing.as_ref().and_then(|p| {
@@ -781,17 +1139,10 @@ fn cmd_setup_image(state_dir: &Path, distro: &str) -> i32 {
     match setup::image_download_plan(
         existing.as_deref(),
         existing_sha.as_deref(),
-        expected.as_deref(),
+        Some(&expected),
     ) {
         setup::ImagePlan::SkipVerified(p) => {
             println!("image already present and SHA256-verified: {}", p.display());
-            return 0;
-        }
-        setup::ImagePlan::SkipUnverifiable(p) => {
-            println!(
-                "image already present (no upstream digest available to verify): {}",
-                p.display()
-            );
             return 0;
         }
         setup::ImagePlan::Download => {}
@@ -809,20 +1160,16 @@ fn cmd_setup_image(state_dir: &Path, distro: &str) -> i32 {
     if !out.success {
         return err_exit(&format!("download failed: {}", out.stderr_last_line()));
     }
-    // Verify after download when a digest is known; keep the file either way
-    // (idempotent re-run will flag mismatch — see image_download_plan).
-    if let Some(expected) = &expected {
-        let argv = setup::get_file_hash_command(&dest);
-        let out = exec::run_command(&argv, Duration::from_secs(120));
-        let actual = out.stdout.trim().to_string();
-        if !setup::sha_matches(&actual, expected) {
-            return err_exit(&format!(
-                "SHA256 mismatch for {}: expected {expected}, got {actual} — delete the file and rerun `setup image`",
-                dest.display()
-            ));
-        }
-        println!("SHA256 verified: {}", dest.display());
+    let argv = setup::get_file_hash_command(&dest);
+    let out = exec::run_command(&argv, Duration::from_secs(120));
+    let actual = out.stdout.trim().to_string();
+    if !out.success || !setup::sha_matches(&actual, &expected) {
+        return err_exit(&format!(
+            "SHA256 mismatch for {}: expected {expected}, got {actual} — delete the file and rerun `setup image`",
+            dest.display()
+        ));
     }
+    println!("SHA256 verified: {}", dest.display());
     println!(
         "next: qemu-center vm create node1 --image {}",
         dest.display()
@@ -1267,6 +1614,88 @@ fn cmd_vm_set_memory(state_dir: &Path, name: &str, memory_mib: u32) -> i32 {
     println!("VM {name} memory changed from {old_memory_mib} MiB to {memory_mib} MiB.");
     println!("The new value takes effect on the next graceful VM start.");
     0
+}
+
+fn memory_reclaim_liveness_error(liveness: vm::VmLiveness) -> Option<&'static str> {
+    match liveness {
+        vm::VmLiveness::Running => None,
+        vm::VmLiveness::Stopped => Some("VM is stopped; start it before reclaiming guest memory"),
+        vm::VmLiveness::Unknown => {
+            Some("VM liveness is unknown; refusing to send a balloon command")
+        }
+    }
+}
+
+fn format_memory_reclaim_summary(
+    node_mem_mib: u32,
+    plan: &redroid::ReclaimPlan,
+    actual_bytes: u64,
+) -> Result<String, String> {
+    match plan {
+        redroid::ReclaimPlan::Noop { reason } => Ok(format!("memory reclaim skipped: {reason}")),
+        redroid::ReclaimPlan::UnknownMetrics { instance } => Err(format!(
+            "memory reclaim refused: runtime metrics for active or unknown instance {instance:?} are incomplete"
+        )),
+        redroid::ReclaimPlan::Reclaim {
+            target_mib,
+            used_mib,
+            active_instances,
+        } => {
+            let max_bytes = u64::from(node_mem_mib) * 1_048_576;
+            if actual_bytes == 0 || actual_bytes > max_bytes {
+                return Err(format!(
+                    "memory reclaim verification returned an invalid actual value: {actual_bytes} bytes for a {node_mem_mib} MiB node"
+                ));
+            }
+            let actual_mib = actual_bytes
+                .saturating_add(1_048_575)
+                .checked_div(1_048_576)
+                .unwrap_or(u64::MAX);
+            let reclaimed_mib = u64::from(node_mem_mib).saturating_sub(actual_mib);
+            Ok(format!(
+                "memory reclaim verified: target={target_mib} MiB actual={actual_mib} MiB reclaimed={reclaimed_mib} MiB used={used_mib} MiB active={active_instances}"
+            ))
+        }
+    }
+}
+
+fn cmd_vm_memory_reclaim(state_dir: &Path, name: &str) -> i32 {
+    let registry = match vm::load_registry(state_dir) {
+        Ok(r) => r,
+        Err(e) => return err_exit(&e),
+    };
+    let Some(entry) = registry.get(name).cloned() else {
+        return err_exit(&format!("VM {name:?} not registered (run `vm create`)"));
+    };
+    if let Some(error) = memory_reclaim_liveness_error(probe_vm_liveness(entry.qmp_host_port)) {
+        return err_exit(error);
+    }
+    let rows = match load_guest_redroid_stats(state_dir, &entry, None) {
+        Ok(rows) => rows,
+        Err(error) => return err_exit(&format!("memory reclaim stats failed: {error}")),
+    };
+    let plan = redroid::plan_memory_reclaim(entry.mem_mib, &rows);
+    let redroid::ReclaimPlan::Reclaim { target_mib, .. } = &plan else {
+        return match format_memory_reclaim_summary(entry.mem_mib, &plan, 0) {
+            Ok(message) => {
+                println!("{message}");
+                0
+            }
+            Err(error) => err_exit(&error),
+        };
+    };
+    let actual_bytes =
+        match qmp::reclaim_memory(entry.qmp_host_port, *target_mib, Duration::from_secs(30)) {
+            Ok(actual) => actual,
+            Err(error) => return err_exit(&format!("memory reclaim failed: {error}")),
+        };
+    match format_memory_reclaim_summary(entry.mem_mib, &plan, actual_bytes) {
+        Ok(message) => {
+            println!("{message}");
+            0
+        }
+        Err(error) => err_exit(&error),
+    }
 }
 
 // ------------------------------------------------------------------ vm stop -
@@ -1942,6 +2371,8 @@ fn cmd_redroid_create(
     state_dir: &Path,
     vm_name: &str,
     inst: &str,
+    execution_grant_file: &Path,
+    execution_authorization_file: &Path,
     cpus_override: Option<f64>,
     memory_override: Option<u32>,
     profile: &str,
@@ -1953,6 +2384,13 @@ fn cmd_redroid_create(
     binds: Vec<String>,
     cgroup_parent: Option<String>,
 ) -> i32 {
+    let claims = match verify_execution_grant_file(execution_grant_file, vm_name, inst) {
+        Ok(claims) => claims,
+        Err(error) => return err_exit(&error),
+    };
+    if let Err(error) = validate_execution_authorization_path(execution_authorization_file) {
+        return err_exit(&error);
+    }
     for bind in &binds {
         let parts: Vec<_> = bind.split(':').collect();
         if parts.len() != 3
@@ -1983,6 +2421,38 @@ fn cmd_redroid_create(
     let Some(entry) = registry.get(vm_name) else {
         return err_exit(&format!("VM {vm_name:?} not registered"));
     };
+    let authorization_check = ssh_cmd_for(
+        entry,
+        state_dir,
+        &guest::cmd_execution_authorization_check(&execution_authorization_file.to_string_lossy()),
+    );
+    let authorization = exec::run_command(&authorization_check, Duration::from_secs(30));
+    if !authorization.success {
+        return err_exit(
+            "execution grant has not completed the online guest authorization preflight",
+        );
+    }
+    let key_ring = match option_env!("RDC_AUTH_PUBLIC_KEYS") {
+        Some(key_ring) => key_ring,
+        None => {
+            return err_exit(
+                "qemu-center was built without RDC_AUTH_PUBLIC_KEYS; protected redroid creation is disabled",
+            )
+        }
+    };
+    if let Err(error) = verify_execution_authorization_receipt_with_keys(
+        &authorization.stdout,
+        &claims,
+        unix_now(),
+        key_ring,
+    ) {
+        return err_exit(&format!(
+            "execution authorization receipt was rejected: {error}"
+        ));
+    }
+    if let Err(error) = consume_execution_receipt_once(state_dir, &claims.jti) {
+        return err_exit(&error);
+    }
     let (cpus, memory) = match redroid::resolve_instance_resources(
         profile,
         entry.vcpus,
@@ -2031,6 +2501,9 @@ fn cmd_redroid_create(
         ));
     };
     let image = image.unwrap_or_else(vm::default_redroid_image);
+    if let Err(error) = redroid::validate_image_ref(&image) {
+        return err_exit(&error);
+    }
     let spec = redroid::RedroidSpec {
         name: inst.to_string(),
         adb_port: port,
@@ -2293,27 +2766,19 @@ fn parse_guest_redroid_stats(raw: &str) -> Result<Vec<redroid::RedroidRuntimeSta
     Ok(rows.into_values().collect())
 }
 
-fn cmd_redroid_stats(state_dir: &Path, vm_name: &str, instance: Option<&str>, json: bool) -> i32 {
-    if let Some(instance) = instance {
-        if let Err(e) = redroid::validate_instance_name(instance) {
-            return err_exit(&e);
-        }
-    }
-    let entry = match get_vm(state_dir, vm_name) {
-        Ok(v) => v,
-        Err(c) => return c,
-    };
-    let argv = ssh_cmd_for(&entry, state_dir, &guest::cmd_redroid_stats(instance));
+fn load_guest_redroid_stats(
+    state_dir: &Path,
+    entry: &VmEntry,
+    instance: Option<&str>,
+) -> Result<Vec<redroid::RedroidRuntimeStats>, String> {
+    let argv = ssh_cmd_for(entry, state_dir, &guest::cmd_redroid_stats(instance));
     let out = exec::run_command(&argv, Duration::from_secs(90));
     if !out.success {
-        return err_exit(&format!("redroid stats failed: {}", out.stderr_last_line()));
+        return Err(format!("guest command failed: {}", out.stderr_last_line()));
     }
-    let mut rows = match parse_guest_redroid_stats(&out.stdout) {
-        Ok(rows) => rows,
-        Err(e) => return err_exit(&e),
-    };
-    // Keep registry assignments visible even if Docker was removed or the
-    // guest command could not inspect a particular container.
+    let mut rows = parse_guest_redroid_stats(&out.stdout)?;
+    // Keep registry assignments visible if Docker omitted a container or the
+    // guest could not inspect it. The reclaim planner then fails closed.
     for name in entry.adb_assignments.keys() {
         if instance.is_some_and(|wanted| wanted != name) {
             continue;
@@ -2334,6 +2799,23 @@ fn cmd_redroid_stats(state_dir: &Path, vm_name: &str, instance: Option<&str>, js
         });
     }
     rows.sort_by(|left, right| left.instance.cmp(&right.instance));
+    Ok(rows)
+}
+
+fn cmd_redroid_stats(state_dir: &Path, vm_name: &str, instance: Option<&str>, json: bool) -> i32 {
+    if let Some(instance) = instance {
+        if let Err(e) = redroid::validate_instance_name(instance) {
+            return err_exit(&e);
+        }
+    }
+    let entry = match get_vm(state_dir, vm_name) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
+    let rows = match load_guest_redroid_stats(state_dir, &entry, instance) {
+        Ok(rows) => rows,
+        Err(error) => return err_exit(&format!("redroid stats failed: {error}")),
+    };
     if json {
         match serde_json::to_string_pretty(&rows) {
             Ok(text) => println!("{text}"),
@@ -2426,11 +2908,53 @@ fn cmd_adb_list(state_dir: &Path, json: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        copy_clone_ssh_identity, ensure_parent_dir, exec, parse_guest_redroid_stats,
-        purge_vm_artifacts,
+        cmd_vm_memory_reclaim, consume_execution_receipt_once, copy_clone_ssh_identity,
+        ensure_parent_dir, exec, format_memory_reclaim_summary, memory_reclaim_liveness_error,
+        parse_guest_redroid_stats, purge_vm_artifacts, validate_execution_authorization_path,
+        verify_execution_authorization_receipt_with_keys, verify_execution_grant_file_with_keys,
     };
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use ed25519_dalek::{Signer, SigningKey};
+    use qemu_center::{redroid, vm};
+    use serde_json::json;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
+
+    #[test]
+    fn memory_reclaim_liveness_errors_are_fail_closed() {
+        assert_eq!(memory_reclaim_liveness_error(vm::VmLiveness::Running), None);
+        assert_eq!(
+            memory_reclaim_liveness_error(vm::VmLiveness::Stopped),
+            Some("VM is stopped; start it before reclaiming guest memory")
+        );
+        assert_eq!(
+            memory_reclaim_liveness_error(vm::VmLiveness::Unknown),
+            Some("VM liveness is unknown; refusing to send a balloon command")
+        );
+    }
+
+    #[test]
+    fn memory_reclaim_summary_verifies_actual_value_before_reporting_success() {
+        let plan = redroid::ReclaimPlan::Reclaim {
+            target_mib: 2560,
+            used_mib: 1750,
+            active_instances: 1,
+        };
+        let summary = format_memory_reclaim_summary(3072, &plan, 2048 * 1024 * 1024)
+            .expect("valid actual value");
+        assert!(summary.contains("target=2560 MiB"), "{summary}");
+        assert!(summary.contains("actual=2048 MiB"), "{summary}");
+        assert!(summary.contains("reclaimed=1024 MiB"), "{summary}");
+        assert!(format_memory_reclaim_summary(3072, &plan, 4096 * 1024 * 1024).is_err());
+    }
+
+    #[test]
+    fn memory_reclaim_rejects_an_unregistered_vm_before_qmp() {
+        let dir = scratch("memory-reclaim-unregistered");
+        let code = cmd_vm_memory_reclaim(&dir, "missing");
+        assert_eq!(code, 1);
+        assert!(!dir.exists(), "an unregistered check must not create state");
+    }
 
     /// Unique scratch dir per test (no external dev-deps — same pattern as the
     /// lib tests in vm.rs).
@@ -2444,6 +2968,326 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    fn write_signed_grant(tag: &str, key_id: &str, vm: &str, instance: &str) -> (PathBuf, String) {
+        let dir = scratch(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = json!({
+            "iss": "rdc-auth",
+            "aud": "rdc-guest-runner",
+            "client_id": "client-a",
+            "device_id": "device-a",
+            "session_id": "session-a",
+            "client_version": "0.1.0",
+            "artifact_id": "qemu-guest-script",
+            "artifact_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "action": "preset_apply",
+            "vm": vm,
+            "instance": instance,
+            "iat": now - 1,
+            "exp": now + 60,
+            "jti": format!("jti-{tag}"),
+            "nonce": format!("nonce-{tag}"),
+        });
+        let payload = serde_json::to_vec(&claims).unwrap();
+        let signature = signing_key.sign(&payload);
+        let grant = json!({
+            "key_id": key_id,
+            "payload": URL_SAFE_NO_PAD.encode(&payload),
+            "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+            "device_proof": "device-proof",
+        });
+        let path = dir.join("execution-grant.json");
+        std::fs::write(&path, serde_json::to_vec(&grant).unwrap()).unwrap();
+        (
+            path,
+            URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+        )
+    }
+
+    fn signed_authorization_receipt(
+        signing_key: &SigningKey,
+        claims: &super::ExecutionGrantClaims,
+        now: i64,
+    ) -> String {
+        let receipt_claims = json!({
+            "iss": "rdc-auth",
+            "aud": "rdc-qemu-center",
+            "client_id": claims.client_id,
+            "device_id": claims.device_id,
+            "session_id": claims.session_id,
+            "client_version": claims.client_version,
+            "artifact_id": claims.artifact_id,
+            "artifact_sha256": claims.artifact_sha256,
+            "action": claims.action,
+            "vm": claims.vm,
+            "instance": claims.instance,
+            "grant_jti": claims.jti,
+            "iat": now - 1,
+            "exp": now + 30,
+        });
+        let payload = serde_json::to_vec(&receipt_claims).unwrap();
+        let signature = signing_key.sign(&payload);
+        serde_json::to_string(&json!({
+            "key_id": "key-a",
+            "payload": URL_SAFE_NO_PAD.encode(&payload),
+            "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn execution_grant_file_is_required_before_cli_creation() {
+        let missing = scratch("grant-missing").join("no-grant.json");
+        let error = verify_execution_grant_file_with_keys(
+            &missing,
+            "node1",
+            "r13",
+            1_700_000_000,
+            "key-a=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .expect_err("missing grant must fail closed");
+        assert!(error.contains("grant file"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn execution_authorization_path_is_guest_runtime_scoped() {
+        assert!(validate_execution_authorization_path(Path::new(
+            "/run/rdc-presets/job-123/execution-authorized"
+        ))
+        .is_ok());
+        for invalid in [
+            "/tmp/execution-authorized",
+            "/run/rdc-presets/../home/rdc/core",
+            "/run/rdc-presets/job/",
+        ] {
+            assert!(
+                validate_execution_authorization_path(Path::new(invalid)).is_err(),
+                "path must be rejected: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_grant_accepts_a_valid_key_from_the_rotation_ring() {
+        let (path, public_key) = write_signed_grant("grant-rotation", "next", "node1", "r13");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = verify_execution_grant_file_with_keys(
+            &path,
+            "node1",
+            "r13",
+            now,
+            &format!("old=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,next={public_key}"),
+        )
+        .expect("rotated key should be accepted");
+        assert_eq!(claims.action, "preset_apply");
+        assert_eq!(claims.vm, "node1");
+        assert_eq!(claims.instance, "r13");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn execution_grant_rejects_a_different_vm_or_instance() {
+        let (path, public_key) = write_signed_grant("grant-target", "key-a", "node1", "r13");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let error = verify_execution_grant_file_with_keys(
+            &path,
+            "node2",
+            "r13",
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .expect_err("grant must be bound to the requested VM");
+        assert!(
+            error.contains("bound to another VM or instance"),
+            "unexpected error: {error}"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn execution_grant_rejects_a_tampered_signature_and_unknown_key() {
+        let (path, public_key) = write_signed_grant("grant-tamper", "key-a", "node1", "r13");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["signature"] = json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let bad_signature = verify_execution_grant_file_with_keys(
+            &path,
+            "node1",
+            "r13",
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .expect_err("tampering must fail");
+        assert!(
+            bad_signature.contains("signature"),
+            "unexpected error: {bad_signature}"
+        );
+
+        let (unknown_path, unknown_public_key) =
+            write_signed_grant("grant-unknown", "unknown", "node1", "r13");
+        let unknown = verify_execution_grant_file_with_keys(
+            &unknown_path,
+            "node1",
+            "r13",
+            now,
+            &format!("key-a={unknown_public_key}"),
+        )
+        .expect_err("unknown key id must fail");
+        assert!(
+            unknown.contains("key is not trusted"),
+            "unexpected error: {unknown}"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(unknown_path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn execution_authorization_receipt_is_signed_and_bound_to_the_grant() {
+        let (path, public_key) = write_signed_grant("receipt-valid", "key-a", "node1", "r13");
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = verify_execution_grant_file_with_keys(
+            &path,
+            "node1",
+            "r13",
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .unwrap();
+        let receipt = signed_authorization_receipt(&signing_key, &claims, now);
+        verify_execution_authorization_receipt_with_keys(
+            &receipt,
+            &claims,
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .expect("server receipt should be accepted");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn execution_authorization_receipt_rejects_a_plain_jti_marker_and_tampering() {
+        let (path, public_key) = write_signed_grant("receipt-tamper", "key-a", "node1", "r13");
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = verify_execution_grant_file_with_keys(
+            &path,
+            "node1",
+            "r13",
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .unwrap();
+        let plain = verify_execution_authorization_receipt_with_keys(
+            &claims.jti,
+            &claims,
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .expect_err("a copied JTI must not authorize Docker");
+        assert!(plain.contains("receipt"), "unexpected error: {plain}");
+
+        let receipt = signed_authorization_receipt(&signing_key, &claims, now);
+        let mut value: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+        value["signature"] = json!(URL_SAFE_NO_PAD.encode([0u8; 64]));
+        let tampered = verify_execution_authorization_receipt_with_keys(
+            &serde_json::to_string(&value).unwrap(),
+            &claims,
+            now,
+            &format!("key-a={public_key}"),
+        )
+        .expect_err("tampered receipt must fail closed");
+        assert!(
+            tampered.contains("signature"),
+            "unexpected error: {tampered}"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn execution_receipt_is_consumed_once_per_host_state_directory() {
+        let first = scratch("receipt-ledger-first");
+        let second = scratch("receipt-ledger-second");
+        consume_execution_receipt_once(&first, "jti-ledger").unwrap();
+        let first_error = consume_execution_receipt_once(&first, "jti-ledger").unwrap_err();
+        assert!(
+            first_error.contains("already") || first_error.contains("replay"),
+            "unexpected replay error: {first_error}"
+        );
+        consume_execution_receipt_once(&second, "jti-ledger").unwrap();
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
+    }
+
+    #[test]
+    fn execution_receipt_ledger_rejects_invalid_jti() {
+        let state_dir = scratch("receipt-ledger-invalid");
+        for invalid in ["", "bad\nvalue", "bad\rvalue", "bad\0value"] {
+            let error = consume_execution_receipt_once(&state_dir, invalid).unwrap_err();
+            assert!(
+                error.contains("JTI is invalid"),
+                "unexpected error: {error}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn execution_receipt_ledger_is_atomic_under_concurrent_consumers() {
+        let state_dir = scratch("receipt-ledger-concurrent");
+        let handles = (0..8)
+            .map(|_| {
+                let state_dir = state_dir.clone();
+                std::thread::spawn(move || {
+                    consume_execution_receipt_once(&state_dir, "jti-concurrent")
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("ledger worker must not panic"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "exactly one concurrent consumer must win: {results:?}"
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| error.contains("already")))
+                .count(),
+            7,
+            "all losing consumers must be reported as replay: {results:?}"
+        );
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 
     #[test]

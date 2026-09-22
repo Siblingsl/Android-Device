@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc,
-    Arc,
+    mpsc, Arc,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -411,9 +410,7 @@ pub fn run_command_cancellable(
     on_output: impl Fn(String) + Send + Sync + 'static,
 ) -> CancellableCommandResult {
     let mut cmd = command(program);
-    cmd.args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     apply_proxy(&mut cmd);
 
     let mut child = match cmd.spawn() {
@@ -490,7 +487,10 @@ pub fn run_command_cancellable(
             let _ = child.wait();
             record_remaining_output(&receiver, &mut stdout, &mut stderr, &callback);
             if stderr.trim().is_empty() {
-                stderr = format!("command timeout after {}s: {program} {args:?}", timeout.as_secs());
+                stderr = format!(
+                    "command timeout after {}s: {program} {args:?}",
+                    timeout.as_secs()
+                );
             }
             return CancellableCommandResult::TimedOut(ShellResult {
                 success: false,

@@ -22,6 +22,18 @@ pub(crate) fn validate_image(base: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn validate_immutable_image(base: &str) -> Result<(), String> {
+    if !base.contains("@sha256:")
+        || base
+            .split_once("@sha256:")
+            .map(|(_, digest)| digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()))
+            != Some(true)
+    {
+        return Err("受保护镜像必须使用完整 SHA-256 digest".into());
+    }
+    validate_image(base)
+}
+
 fn android_major(value: &str) -> Option<u32> {
     value.trim().split(['.', '-']).next()?.parse().ok()
 }
@@ -357,6 +369,19 @@ mod tests {
             assert!(prepare(&request(&zip), base, &fixture.0.join("context"))
                 .unwrap_err()
                 .contains("镜像引用"));
+        }
+    }
+
+    #[test]
+    fn accepts_only_immutable_image_references_for_protected_builds() {
+        assert!(validate_immutable_image("redroid/redroid@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").is_ok());
+        for image in [
+            "redroid/redroid:14.0.0-latest",
+            "redroid/redroid@sha256:short",
+            "redroid/redroid@sha256:GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+            "",
+        ] {
+            assert!(validate_immutable_image(image).is_err(), "{image:?} must be rejected");
         }
     }
 

@@ -14,10 +14,10 @@
 | 套件 | 现状 |
 |---|---|
 | `npx tsc --noEmit` | 0 错误 |
-| `npx vitest run` | **60 文件 / 460 用例全绿** |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | 296 通过 / 0 失败 / 2 忽略；Windows PTY 已隔离 Unix `TERM` 环境变量 |
-| `cargo test --manifest-path qemu-center/Cargo.toml` | 215 个库测试 + 8 个命令行测试通过 / 0 失败 |
-| `npm run build` | 成功（仅一条既有 chunk 体积警告，非错误） |
+| `npx vitest run` | **61 文件 / 464 用例全绿** |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | **301 通过 / 0 失败 / 2 忽略**；QEMU 桥接与 Windows PTY 聚焦测试均通过 |
+| `cargo test --manifest-path qemu-center/Cargo.toml` | **224 个库测试 + 21 个命令行测试通过 / 0 失败** |
+| `npm run build` | 成功；应用路由按需拆包后主入口 `485.19 kB`，低于 600 kB 警告阈值，详见 E-076 |
 
 ### 1.2 已完成的功能块
 
@@ -36,6 +36,19 @@
 - 已落地只读资源快照：主机可用内存、QEMU Private/Working Set、WSL、guest/container 当前/峰值/OOM；页面缺失值保持 `unknown/n/a`。
 - 已落地 `lean / standard / full` 运行档案、后端 FIFO 串行启动队列（重复请求抑制、超时、成功/失败自动提升）、内存压力阻止、显式空闲释放、应用级手动暂停（保留 VM/container）和 ART `verify-only / speed-profile / reset` 实验入口。
 - 新建 QEMU 节点默认 **3072 MiB**；已有 `node1` **4096 MiB 不自动改写**，后续必须用复制实例做 3072/4096 MiB 实测。
+- QEMU 启动参数已加入 `virtio-balloon-pci,id=balloon0`；新增显式 `vm memory-reclaim <name>` 与桌面端“回收 guest 内存”动作。后端只在节点运行且活跃实例内存指标完整时按保守目标请求回收，并用 `query-balloon` 校验 actual；不改 qcow2、不停止 VM、不改变下次启动上限。真实 WHPX 下的 target/actual、主机工作集变化和登录/连续浏览/30 分钟稳定性仍待人工。
+- 已完成隔离 WHPX balloon 实样本：node1 停止态 CoW 克隆 node2（2048 MiB）在 active `r13` 上返回 target=1792 / actual=1536 / reclaimed=512 MiB，OOM=0、boot_completed=1；回收期间 VM 持续运行。样本证明 QMP/guest 路径生效，但没有严格的主机工作集前后对照，也没有登录/连续浏览/30 分钟结论，详见 E-068。node2 已安全 purge，node1 未改动。
+- E-071 补充了同一安全边界下的工作集对照：2048 MiB node2 运行克隆 r13 时 guest current 约 1.45 GiB、QEMU working set 约 2.13 GiB，规划器因保留量不足拒绝继续回收；停止 r13 后 target=1536 但 QMP actual 仍为 2048、reclaimed=0。该结果确认 balloon 是协作式通道，不能承诺固定宿主节省量；node2 已安全 purge。
+- E-072 完成 guest 侧服务端核心下发：Tauri/QEMU 预设路径只传 signed grant 和通用 loader，核心由 guest 内 HTTPS release 获取并在执行后删除；release 预取不消费 JTI，runner 仍在线 consume。发布期 loader 配置由 `build.rs` 渲染，桌面主程序、DLL、qemu-center 三个 release 二进制通过 protected-runner 与未渲染占位符扫描。自动化与人工边界详见 `work/runtime-core-protection-20260917/evidence/E-072-guest-side-core-release-20260920.md`。
+- E-073 记录本轮现场边界：Computer Use 仍未发现可控 Windows 窗口；`doctor --json` 为 8 ok / 0 fail / 0 unknown；node1 仍为 4096 MiB 且未启动；宿主仅约 2.20 GiB 可用，因此本轮不强行启动 QEMU。该证据不勾选真实 Tauri/QEMU 走查，详见 `work/runtime-core-protection-20260917/evidence/E-073-current-live-validation-boundary-20260920.md`。
+- E-074 在同一真实主机执行一次安全启动尝试：4096 MiB node1 在可用内存不足时于 QEMU 创建前被拒绝，未留下 `qemu-system-x86_64` 进程，也未改动磁盘或节点配置；详见 `work/runtime-core-protection-20260917/evidence/E-074-vm-start-memory-guard-live-20260920.md`。
+- E-075 将应用级暂停与已有 guest balloon 回收链路接通：仅在 `force-stop` 成功后尝试一次，回收失败不覆盖暂停成功；TDD 与四套门禁通过，真实 WHPX 工作集变化仍待人工，详见 `work/runtime-core-protection-20260917/evidence/E-075-app-hibernate-balloon-reclaim-20260920.md`。
+- E-076 将顶层页面改为路由级按需加载：生产主入口由 `944.01 kB` 降至 `485.19 kB`，Dashboard、设备、设置、终端、Runtime 等页面均生成独立 chunk；路由跳转、旧 `/docker`/`/qemu` 重定向、Runtime 面板生命周期与可访问性测试通过，详见 `work/runtime-core-protection-20260917/evidence/E-076-app-route-code-splitting-20260920.md`。
+- E-077 修复受保护 QEMU 创建流程的授权阶段计数：创建现在申请并消费四张独立执行票据（build/seed/authorize/activate），升级继续申请两张（build/upgrade）；TDD、格式检查和四套门禁通过，详见 `work/runtime-core-protection-20260917/evidence/E-077-protected-create-grant-count-20260920.md`。
+- 修复两个影响现场验收的测量边界：`guest wait` 不再要求置备后已被禁用的 cloud-init 报告 done；`redroid stats` 对非 running 容器跳过 `docker exec`，退出实例不会再卡住统计。
+- QEMU runtime start 在 critical 主机压力且自动闲置释放开关开启时，会先复用
+  `vm memory-reclaim` 最多尝试一次 guest balloon；成功后重新探测，只有仍为 critical
+  才继续既有闲置实例释放。失败、unknown、并发启动或开关关闭时保持原 fail-closed 行为。
 - 最新只读采样：`qc-r13` 约 **2.88 / 3 GiB（约 96%）**，峰值约 3 GiB，`oom_kill=0`，`boot_completed=true`；QEMU 工作集约 0.58 GiB、专用提交约 4.66 GB，WSL 专用提交约 1.71 GB，主机可用约 3.69 GiB。不要把 full 档案继续盲目压到 1–2 GiB。
 - 后续只读抽样显示 `qc-r13` 已到 **约 3.00 / 3 GiB**，`oom_kill=0`、`boot_completed=true`；同一时刻 QEMU 工作集约 **1.19 GiB**、专用提交约 **4.66 GB**、主机可用约 **4.10 GiB**。2026-09-18 再次安全启动 node1 后，`qc-r13` current 为约 **3060 MiB / 3072 MiB（99.6%）**，QEMU 工作集约 **2.955 GiB**、专用内存约 **4.283 GiB**，主机可用约 **0.356 GiB**，证据见 E-033。这是瞬时采样，不替代人工稳定性矩阵，也不授权在线调低现有实例上限。
 - 基于 E-033，新的 `full` profile 在节点配置低于 **6144 MiB** 时由 qemu-center 后端拒绝，桌面表单同步禁用并提示选择 `lean/standard` 或更大节点；现有 4 GiB 节点和已有 full 实例不自动改写、不停止，证据见 E-034。
@@ -50,7 +63,10 @@
 - 新增一次“应用暂停 vs 停止实例”实测：启动 XHS 登录页时 `r13` 为 3071.7/3072 MiB；仅 force-stop XHS 后 guest current 降至 2119.0 MiB，但 QEMU working set 仍约 3.78 GiB，说明暂停应用能缓解 guest 压力、不能等比例释放宿主提交量；证据见 E-037。该轮 node1 已通过 QMP/ACPI 正常停止。
 - 修复闲置策略边界：设置 `runtimeIdleTimeoutMinutes=0` 时，调度器按 1 分钟而非立即可回收处理，避免误停刚刚空闲的实例；已用 59 秒/60 秒边界回归覆盖。
 - QEMU 预装/创建路径已接 Rust 授权闸门；release 不嵌入本地 `qemu_guest.py`，没有有效服务端核心文件不能执行。`scripts/verify-release-core.ps1` 已接入 Windows release workflow 作为阻断门禁；debug 回退仅供本地开发。
-- Windows release workflow 现在必须从 GitHub Actions repository variables 注入 `RDC_AUTH_BASE_URL` 与 `RDC_AUTH_PUBLIC_KEYS`，缺任一项会在编译前失败；服务端 signing secret 明确禁止进入桌面构建环境，避免产出“无内置核心但合法用户也无法取核心”的不可用 release。
+- 独立 `qemu-center redroid create` 也已接入 host 侧签名 grant 闸门：必须读取 Tauri 临时文件、用发布时嵌入的 `RDC_AUTH_PUBLIC_KEYS` 信任环校验 VM/实例/动作/时间绑定，并在任何 Docker 命令前校验同一 guest 作业目录内由 runner 写入的在线预授权 marker；grant 不进入 argv，guest 设备证明和服务端 JTI 一次性消费仍是最终边界，见 E-062、E-063。
+- E-063 的纯 JTI marker 已升级为服务端签名 authorization receipt：guest runner 在消费 grant 后写入完整回执，`qemu-center` 在 Docker 前验签并逐项比对设备/会话/版本/artifact/动作/VM/实例/JTI；纯 JTI、篡改、过期或错绑回执均拒绝，见 E-065。
+- E-065 之后又补上 host state directory 内的一次性 receipt 账本：`create_new` 原子创建防止同一 JTI 的重复/并发消费在任何 Docker 命令前重放，非法 JTI 也拒绝；整体复制/删除 host 状态目录仍是管理员边界，见 E-066。
+- Windows release workflow 现在必须从 GitHub Actions repository variables 注入 `RDC_AUTH_BASE_URL`、`RDC_AUTH_EXECUTION_RELEASE_URL`（或由 base URL 推导）与 `RDC_AUTH_PUBLIC_KEYS`，缺任一项会在编译前失败；`build.rs` 在编译期渲染 guest loader；服务端 signing secret 明确禁止进入桌面构建环境，避免产出“无内置核心但合法用户也无法取核心”的不可用 release。
 - 发布配置门禁与专项测试证据见 `work/runtime-core-protection-20260917/evidence/E-038-release-authorization-config-20260918.md`；远程 CI 变量实际配置和生产 TLS/密钥轮换仍待人工确认。
 - 新增隔离 3072 MiB / 2 vCPU 节点的 lean 基线：QEMU 工作集约 3.135 GiB，guest
   稳态约 1.207 GiB、峰值约 1.259 GiB，连续约 25 秒无增长且 `oom_kills=0`；实验节点
@@ -112,7 +128,11 @@
 - 已补齐“下载授权 ≠ 执行授权”边界：服务端 `/v1/execution-grants` 依据已发布核心哈希签发短时工作流票据；Rust 将票据绑定到设备、会话、版本、VM/实例并验签；guest runner 在 Docker 操作前使用发布时嵌入的公钥验签、校验自身文件哈希，并向服务端一次性消费 grant JTI。`rdc-auth-admin artifact publish-runner` 同时渲染公钥和 HTTPS consume URL，证据见 E-035。
 - 证据与验收：`docs/2026-09-17-runtime-memory-and-core-delivery-report.md`、`docs/2026-09-17-runtime-memory-authorization-acceptance.md`、`work/runtime-core-protection-20260917/evidence/`。
 - 实验矩阵模板与当前 full 基线：`docs/qa/2026-09-17-runtime-memory-optimization-matrix.md`；进程构成证据：`work/runtime-core-protection-20260917/evidence/E-005-app-process-breakdown.md`。
-- 自动化门槛记录：`tsc` 通过；Vitest 60 文件/460 用例全绿；qemu-center 215+8 通过；authorization-service 23 库测试+2 管理工具测试+2 启动配置测试+3 集成通过；guest runner 17 个 Python 测试；Release 构建与核心明文扫描通过；`git diff --check` 通过。Tauri 全量现为 296 通过、0 失败、2 忽略；Windows 本机 shell 仅对 local PTY 清除继承的 Unix `TERM` 环境变量，设备 ADB shell 不受影响，证据见 `E-056`。执行票据负向覆盖包含过期、签名篡改、动作/设备/核心绑定、设备私钥证明缺失/错误、服务端 artifact 哈希不匹配、artifact/workflow 错配、nonce 重放、grant JTI 一次性消费、runner 自身篡改、消费服务不可达以及消费失败时不构造 Docker；最终复验见 `E-017`、`E-018`、`E-020`、`E-023`、`E-025`、`E-026`、`E-027`、`E-028`、`E-029`、`E-030`、`E-031`、`E-032`、`E-033`、`E-034`、`E-035`、`E-036`、`E-037`、`E-040`、`E-041`、`E-045`、`E-046`、`E-048`、`E-049`、`E-050`、`E-052`、`E-053`、`E-054`、`E-055`、`E-056`、`E-058`、`E-059`、`E-060`；删除护栏/密钥清理复验见 `E-013`、`E-015`。
+- 自动化门槛记录：`tsc` 通过；Vitest 61 文件/464 用例全绿；qemu-center 224+21 通过；Tauri 302 通过、0 失败、2 忽略；authorization-service 24 库测试+2 管理工具测试+2 启动配置测试+4 集成通过；loader/guest runner 26 个 Python 测试；Release 构建与核心明文扫描通过；`git diff --check` 通过。Windows 本机 shell 仅对 local PTY 清除继承的 Unix `TERM` 环境变量，设备 ADB shell 不受影响，PTY 聚焦与全量测试均通过，证据见 `E-056`。本轮 guest 侧核心交付与发布扫描见 `E-072`；应用暂停后的 guest 回收接线见 `E-075`；应用路由按需拆包与 485.19 kB 主入口构建见 `E-076`；受保护创建授权阶段计数修复见 `E-077`；执行票据负向覆盖包含过期、签名篡改、动作/设备/核心绑定、设备私钥证明缺失/错误、服务端 artifact 哈希不匹配、artifact/workflow 错配、nonce 重放、grant JTI 一次性消费、runner 自身篡改、消费服务不可达以及消费失败时不构造 Docker；多阶段创建/升级现在按阶段申请独立 JTI，证据见 `E-061`；独立 qemu-center 创建入口的签名 grant 闸门、发布资源接线和不把 grant 放进 argv 的验证见 `E-062`；创建前 guest 在线预授权与 Docker 前签名 receipt 闸门见 `E-063`、`E-065`；主机余量不足时 CLI 在 QEMU 创建前拒绝启动且不产生 QEMU 进程，见 `E-064`；服务端签名轮换代码级演练、旧/新 execution grant 与 runner 代际隔离及四个 release 产物扫描见 `E-067`；QEMU balloon 与隔离 WHPX 实样本见 `E-068`、`E-071`；最终复验见 `E-017`、`E-018`、`E-020`、`E-023`、`E-025`、`E-026`、`E-027`、`E-028`、`E-029`、`E-030`、`E-031`、`E-032`、`E-033`、`E-034`、`E-035`、`E-036`、`E-037`、`E-040`、`E-041`、`E-045`、`E-046`、`E-048`、`E-049`、`E-050`、`E-052`、`E-053`、`E-054`、`E-055`、`E-056`、`E-058`、`E-059`、`E-060`、`E-061`、`E-062`、`E-063`、`E-064`、`E-065`、`E-067`、`E-068`、`E-071`、`E-072`、`E-075`、`E-076`、`E-077`；删除护栏/密钥清理复验见 `E-013`、`E-015`。
+- E-066 host 侧一次性 receipt 账本聚焦测试：同一状态目录的首次/重放、非法 JTI、8 路并发消费均通过；全量 qemu-center 为 216+18，格式检查通过。
+- E-067 无生产密钥轮换演练：跨重启旧/新 authority 的 execution grant/receipt 绑定、旧票据重放拒绝、runner 两代 key 渲染隔离和四个 release 产物扫描均通过；Windows release workflow 已接入演练；生产 TLS、secret manager、真实账号、跨设备和 live guest 仍待人工。
+- E-069 fresh 复验再次通过授权服务 31 项 Rust 测试、guest runner 21 项 Python 测试，以及桌面主程序/DLL、MCP、qemu-center 四个 release 产物的核心明文扫描；生产部署、跨设备复制和 live guest 明文边界仍按 E-069 标注为待人工。
+- E-070 完成 RuntimePage Docker/QEMU 面板首轮按需拆包：主入口由 `1,028.64 kB` 降至 `944.01 kB`，并生成独立 Docker/QEMU chunk；61 文件/464 个 Vitest、TypeScript 与构建门禁通过，但主入口仍超过 600 kB 警告阈值，见 `work/runtime-core-protection-20260917/evidence/E-070-frontend-code-splitting-20260920.md`。
 - 安全边界：无法承诺绝对反逆向；guest 运行时明文仍可能被管理员/root/调试器提取，最高价值算法必须继续服务端化。
 - 安全代码审查已完成第一轮：修复已有客户端注册在设备私钥 proof-of-possession
   前修改版本/撤销会话的拒绝服务缺陷；证据为 E-006。生产 TLS、账号、撤销、
@@ -122,7 +142,8 @@
 - 客户端签名验签已支持构建期 `RDC_AUTH_PUBLIC_KEYS` 旧/新公钥信任环；
   生产仍需按 [`docs/ops/authorization-key-rotation-runbook.md`](ops/authorization-key-rotation-runbook.md)
   完成一次服务端密钥轮换演练；切换后还必须重新发布内嵌执行公钥的 guest runner。
-  公钥信任环的代码级聚焦验证见 `E-057`。
+  公钥信任环的代码级聚焦验证见 `E-057`；execution grant/receipt 与 runner 代际隔离的代码级
+  轮换演练见 `E-067`。
 - 授权服务已补充真实 Axum 路由集成测试：撤销客户端后旧 transfer 返回 403，
   重启并切换签名私钥后 session 携带新 `keyId`；证据见 `E-008-protocol-integration.md`。
 - 又修复了实例列表增强路径未删除下载临时核心的明文残留；四条受保护入口
@@ -160,6 +181,12 @@
 - QEMU 页面现在独立显示实例 cgroup 饱和度：current/limit 达到 90% 标为接近上限，
   75%–90% 标为紧张，缺失数据保持 unknown；提示优先暂停应用或新建 lean/standard，
   不自动修改运行中实例。纯函数和前端全套复验见 `E-025-instance-saturation-indicator.md`。
+- QEMU 资源卡片现在明确区分 QEMU 私有提交/工作集（节点进程的宿主机占用）与实例
+  cgroup current/limit（容器实际使用量/上限），避免把 limit 或不同层级指标相加后误判为
+  每个实例固定占用 6–8 GiB；TypeScript、QEMU 页面与 i18n 定向测试以及完整 Vitest 已通过。
+- QEMU 实例卡片新增显式“释放全部闲置”：只枚举状态明确为 `running`/`Up` 的行，逐个复用
+  后端 `runtime_release_idle` 闸门；活跃、unknown、受保护实例仍由后端拒绝，只有实际释放
+  成功后才刷新资源快照。selector、QEMU 页面和全量 Vitest 已通过；这不是强停或定时策略。
 
 ---
 
@@ -181,11 +208,10 @@
 | 2 | WHPX 残留 `Unexpected VP exit code 4` | 缓解后启动阶段仍有 7 次、随后 3 分钟增量为 0；列为观察项 |
 | 3 | `resolveRuntimeLink` 前端兜底 | 后端 `readiness.rs` 仍产出 `/docker`、`/qemu`；将来应改为后端直接产出 `/containers?track=…`，然后删掉前端兜底 |
 | 4 | 侧边栏图标 `Boxes` 与 APK 的 `Package` 辨识度 | 16px 下偏接近，可换 `Layers` / `LayoutGrid`（两行改动） |
-| 5 | chunk 体积警告 | `index-*.js` 913 kB 超过 600 kB 阈值，可做代码分割 |
 | 6 | 仓库根残留临时文件 | `.tmp-tauri-dev.log`、`.tmp-tauri-dev2.log`、`_p1.txt`、`_p2.txt`（均已被 gitignore，属历史产物） |
 | 7 | `qemu-center/state/` 残留 | `disk.corrupt-backup-20260915.qcow2`（约 4 GB 历史备份）+ `presets/job-*` 空目录，可清理 |
 | 8 | 对比视图指标口径 | 健康度是**轨道级**（非实例级）；QEMU 侧快照仅覆盖**当前所选节点**的实例（UI 已用 scope note 声明） |
-| 9 | 运行时优化与授权生产验收 | 应用级暂停、临界压力闲置回收、未知压力并发护栏、共享节点闲置释放护栏、critical 压力温热节点保护、桌面/CLI 双层 VM 内存预检查、full profile 新建内存护栏、内存优先缺省回收、per-operation execution grant 和 entitlement 即时撤销已实现；已补充隔离 3072 MiB lean/standard XHS 样本（E-039、E-042、E-043）、新建 3072 MiB/2 vCPU lean 独立样本（E-051）、4096 MiB/full r13 最新前台与 force-stop 对照（E-047）、默认策略回归（E-048）、critical 覆盖回归（E-049）、真实授权服务进程冒烟（E-044）、共享节点停止安全证据（E-045）、entitlement 撤销证据（E-046）、QMP 超时主机进程安全兜底/隔离克隆证据（E-058）、2048 MiB QEMU 基座与克隆 SSH 身份修复证据（E-059）以及 2048 MiB 真实 Redroid lean 启动证据（E-060）；仍需按 `docs/2026-09-17-runtime-memory-authorization-acceptance.md` 完成人工登录/连续浏览/30 分钟内存矩阵、真实服务 TLS/账号部署、断网/篡改/复制/票据重放演练和生产密钥轮换；完成前不得宣称省下固定 GB 或“绝对反逆向” |
+| 9 | 运行时优化与授权生产验收 | 应用级暂停、临界压力闲置回收、未知压力并发护栏、共享节点闲置释放护栏、critical 压力温热节点保护、桌面/CLI 双层 VM 内存预检查、full profile 新建内存护栏、内存优先缺省回收、per-operation execution grant 和 entitlement 即时撤销、受保护创建四阶段独立授权已实现；已补充隔离 3072 MiB lean/standard XHS 样本（E-039、E-042、E-043）、新建 3072 MiB/2 vCPU lean 独立样本（E-051）、4096 MiB/full r13 最新前台与 force-stop 对照（E-047）、默认策略回归（E-048）、critical 覆盖回归（E-049）、真实授权服务进程冒烟（E-044）、共享节点停止安全证据（E-045）、entitlement 撤销证据（E-046）、QMP 超时主机进程安全兜底/隔离克隆证据（E-058）、2048 MiB QEMU 基座与克隆 SSH 身份修复证据（E-059）以及 2048 MiB 真实 Redroid lean 启动证据（E-060）；本轮补充了在宿主机余量不足时 CLI fail-closed 且不生成 QEMU 进程的证据（E-064），并把 guest 在线证明升级为服务端签名 receipt 验证（E-065）、host 侧一次性 receipt 账本防重放（E-066）以及无生产密钥的签名轮换代码演练（E-067）；仍需按 `docs/2026-09-17-runtime-memory-authorization-acceptance.md` 完成人工登录/连续浏览/30 分钟内存矩阵、真实服务 TLS/账号部署、断网/篡改/复制/票据重放演练和生产密钥轮换；完成前不得宣称省下固定 GB 或“绝对反逆向” |
 
 ---
 

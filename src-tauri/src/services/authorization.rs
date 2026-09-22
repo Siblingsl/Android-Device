@@ -19,6 +19,7 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 const EXPECTED_ISSUER: &str = "rdc-auth";
 const EXPECTED_AUDIENCE: &str = "rdc-client";
 const MAX_CLOCK_SKEW_SECS: i64 = 300;
+const REQUEST_MAX_AGE_SECS: i64 = 300;
 pub const ARTIFACT_CHUNK_SIZE: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -387,7 +388,9 @@ fn validate_execution_grant_claims(
             "execution grant contains an empty or invalid required field".into(),
         ));
     }
-    if claims.exp <= now {
+    if claims.exp <= now
+        || claims.iat < now.saturating_sub(REQUEST_MAX_AGE_SECS)
+    {
         return Err(AuthorizationError::LeaseExpired);
     }
     if claims.iat > now.saturating_add(MAX_CLOCK_SKEW_SECS) {
@@ -563,6 +566,7 @@ pub struct SessionProof<'a> {
     pub device_id: &'a str,
     pub client_version: &'a str,
     pub nonce: &'a str,
+    pub iat: i64,
     pub capabilities: &'a [ProtectedCapability],
 }
 
@@ -573,6 +577,19 @@ pub struct HeartbeatProof<'a> {
     pub client_id: &'a str,
     pub device_id: &'a str,
     pub nonce: &'a str,
+    pub iat: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ExecutionGrantProof<'a> {
+    pub artifact_id: &'a str,
+    pub artifact_sha256: &'a str,
+    pub action: &'a str,
+    pub vm: &'a str,
+    pub instance: &'a str,
+    pub nonce: &'a str,
+    pub iat: i64,
 }
 
 pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, AuthorizationError> {
