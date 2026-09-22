@@ -26,6 +26,10 @@ vendor/wsl-kernel/**
 !vendor/wsl-kernel/.gitkeep
 *.bzImage
 
+# Generated runtime seed and private matrix APK; keep large local artifacts out of GitHub.
+work/runtime-core-protection-20260917/matrix-assets/xhs-base.apk
+work/runtime-core-protection-20260917/temp-node2-partial-20260918/node2/seed.img
+
 # GApps zips contain Google proprietary bits — keep local only
 vendor/gapps/**
 !vendor/gapps/.gitkeep
